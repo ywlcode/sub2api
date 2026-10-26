@@ -158,7 +158,7 @@ func TestAPIKeyMultiGroupSelectionFallsThroughExhaustedSubscriptionsToBalance(t 
 	key := &APIKey{UserID: 7, GroupID: &primary, GroupIDs: []int64{1, 2, 3}, Group: groups[1], User: &User{ID: 7, Balance: 10}}
 	svc := &APIKeyService{groupRepo: multiGroupRepoStub{groups: groups}, userSubRepo: multiGroupSubscriptionStub{subscriptions: subs},
 		groupRouter: multiGroupRouterStub{1: {Available: true, Busy: true}, 2: {Available: true}, 3: {Available: true}}}
-	subService := &SubscriptionService{now: func() time.Time { return now }}
+	subService := &SubscriptionService{userSubRepo: svc.userSubRepo, now: func() time.Time { return now }}
 	accepts := func(candidate *APIKey) bool {
 		return candidate.Group.IsSubscriptionType() || candidate.User.Balance > 0
 	}
