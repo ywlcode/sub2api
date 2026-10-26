@@ -20,6 +20,7 @@ type ModerationUserState struct {
 	APIAuditExempt bool       `json:"api_audit_exempt"`
 	EmailExempt    bool       `json:"email_exempt"`
 	OwnedDisable   bool       `json:"owned_disable"`
+	OpenAIBlocked  bool       `json:"openai_blocked"`
 	Status         string     `json:"status"`
 	CurrentCount   int        `json:"current_count"`
 	Reason         string     `json:"reason"`
@@ -46,15 +47,45 @@ type ModerationHit struct {
 	Action       string
 	Since        time.Time
 	AutoBan      bool
+	BanScope     string
 	Threshold    int
 	ExcludeCyber bool
 }
 
 type ModerationHitResult struct {
-	Accepted     bool
-	Count        int
-	BanApplied   bool
-	OwnedDisable bool
+	Accepted      bool
+	Count         int
+	BanApplied    bool
+	OwnedDisable  bool
+	OpenAIBlocked bool
+}
+
+// Platform admission reads durable state directly so releasing a ban takes effect
+// on the next request, including the next turn of an established WebSocket.
+type ContentModerationPlatformBanRepository interface {
+	IsOpenAIBlocked(context.Context, int64) (bool, error)
+}
+
+func (s *ContentModerationService) CheckPlatformAccess(ctx context.Context, userID int64, platform string) error {
+	if s == nil || userID <= 0 || (platform != PlatformOpenAI && platform != PlatformComposite && platform != "") {
+		return nil
+	}
+	repo, ok := s.repo.(ContentModerationPlatformBanRepository)
+	if !ok {
+		// Legacy adapters that cannot persist platform bans cannot issue them.
+		return nil
+	}
+	blocked, err := repo.IsOpenAIBlocked(ctx, userID)
+	if err != nil {
+		return infraerrors.ServiceUnavailable("security_platform_check_unavailable", "平台权限检查暂时不可用")
+	}
+	if blocked {
+		if platform != PlatformOpenAI {
+			return infraerrors.Forbidden("security_platform_unresolved", "OpenAI 访问已受限，此请求尚未解析出目标平台，请使用明确的平台分组或模型路由")
+		}
+		return infraerrors.Forbidden("openai_access_restricted", "OpenAI 平台访问已被内容审查限制，请联系管理员；其他平台仍可使用")
+	}
+	return nil
 }
 
 type ModerationUserRepository interface {

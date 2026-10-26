@@ -6,6 +6,7 @@
     <button type="button" class="btn btn-secondary" @click="load">{{ t('common.refresh') }}</button>
     <template v-if="state">
       <p data-test="current-state" class="text-sm">{{ t('admin.moderationUsers.current', { count: state.current_count, status: state.status, generation: state.generation }) }}</p>
+      <p v-if="state.openai_blocked" data-test="openai-restricted" class="text-sm text-amber-600">{{ t('admin.riskControl.openaiRestricted') }}</p>
       <p class="break-words text-xs text-gray-500">{{ t('admin.moderationUsers.lastAction') }}: {{ state.reason || '—' }} · UID {{ state.actor_id ?? '—' }} · {{ state.updated_at ? new Date(state.updated_at).toLocaleString() : '—' }}</p>
       <label class="flex items-start gap-2 text-sm">
         <input v-model="exempt" type="checkbox" data-test="exempt" class="mt-1" />
@@ -33,7 +34,7 @@
       <div class="flex flex-wrap gap-2">
         <button type="button" class="btn btn-secondary" data-test="save-exemption" :disabled="!ready || !exemptionsChanged" @click="apply('exemption')">{{ t('admin.moderationUsers.saveExemption') }}</button>
         <button type="button" class="btn btn-secondary" data-test="reset" :disabled="!ready" @click="apply('reset')">{{ t('admin.moderationUsers.reset') }}</button>
-        <button type="button" class="btn btn-secondary" data-test="unban" :disabled="!ready || !state.owned_disable" @click="apply('unban')">{{ t('admin.moderationUsers.unban') }}</button>
+        <button type="button" class="btn btn-secondary" data-test="unban" :disabled="!ready || (!state.owned_disable && !state.openai_blocked)" @click="apply('unban')">{{ t('admin.moderationUsers.unban') }}</button>
       </div>
       <p v-if="state.status !== 'active' && !state.owned_disable" class="text-sm text-amber-600">{{ t('admin.moderationUsers.otherSource') }}</p>
       <p class="text-xs text-gray-500">{{ t('admin.moderationUsers.independent') }}</p>
