@@ -68,7 +68,7 @@ type PelicanShowcaseRepository interface {
 
 type pelicanShowcaseSettings interface {
 	GetPelicanShowcaseRuntime(ctx context.Context) (PelicanShowcaseRuntime, error)
-	UpdatePelicanShowcaseSettings(ctx context.Context, enabled bool, cfg PelicanShowcaseConfig, apiEnabled *bool) (PelicanShowcaseRuntime, error)
+	UpdatePelicanShowcaseSettings(ctx context.Context, enabled bool, cfg PelicanShowcaseConfig, apiEnabled, adminOnly *bool) (PelicanShowcaseRuntime, error)
 }
 
 // PelicanShowcaseService publishes Pelican group test HTML to the user gallery and
@@ -123,8 +123,8 @@ func (s *PelicanShowcaseService) Settings(ctx context.Context) (PelicanShowcaseR
 }
 
 // UpdateSettings saves the gallery switch and limits from the admin page.
-func (s *PelicanShowcaseService) UpdateSettings(ctx context.Context, enabled bool, cfg PelicanShowcaseConfig, apiEnabled *bool) (PelicanShowcaseRuntime, error) {
-	return s.settings.UpdatePelicanShowcaseSettings(ctx, enabled, cfg, apiEnabled)
+func (s *PelicanShowcaseService) UpdateSettings(ctx context.Context, enabled bool, cfg PelicanShowcaseConfig, apiEnabled, adminOnly *bool) (PelicanShowcaseRuntime, error) {
+	return s.settings.UpdatePelicanShowcaseSettings(ctx, enabled, cfg, apiEnabled, adminOnly)
 }
 
 // Cleanup enforces the gallery limits: groups whose plans were deleted, snapshots

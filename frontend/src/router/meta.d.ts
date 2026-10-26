@@ -62,6 +62,7 @@ declare module 'vue-router' {
      * @default false
      */
     requiresSupportTickets?: boolean
+    requiresPelicanShowcase?: boolean
 
     /**
      * 是否要求订阅功能开关（subscription_enabled，opt-out）未被显式关闭

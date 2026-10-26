@@ -29,6 +29,8 @@ const appStore = vi.hoisted(() => ({
     risk_control_enabled?: boolean
     subscription_enabled?: boolean
     support_ticket_enabled?: boolean
+    pelican_showcase_enabled?: boolean
+    pelican_showcase_admin_only?: boolean
     custom_menu_items?: []
   },
   fetchPublicSettings: vi.fn(),
@@ -123,6 +125,35 @@ describe('feature route guard', () => {
     appStore.publicSettingsLoaded = false
     appStore.cachedPublicSettings = null
     appStore.fetchPublicSettings.mockReset()
+  })
+
+  it('waits for gallery audience settings and rejects a regular user direct URL', async () => {
+    appStore.fetchPublicSettings.mockImplementation(async () => {
+      appStore.cachedPublicSettings = { pelican_showcase_enabled: true, pelican_showcase_admin_only: true }
+      appStore.publicSettingsLoaded = true
+    })
+    const { navigation, next } = runGuard({ requiresPelicanShowcase: true }, '/pelican-showcase')
+    await navigation
+    expect(appStore.fetchPublicSettings).toHaveBeenCalledOnce()
+    expect(next).toHaveBeenCalledWith('/dashboard')
+  })
+
+  it.each([false, true])('allows only administrators to enter a restricted showcase (admin=%s)', async (admin) => {
+    authStore.isAdmin = admin
+    appStore.cachedPublicSettings = { pelican_showcase_enabled: true, pelican_showcase_admin_only: true }
+    appStore.publicSettingsLoaded = true
+    const { navigation, next } = runGuard({ requiresPelicanShowcase: true }, '/pelican-showcase')
+    await navigation
+    if (admin) expect(next).toHaveBeenCalledWith()
+    else expect(next).toHaveBeenCalledWith('/dashboard')
+  })
+
+  it('preserves the disabled gallery page when administrator-only mode is off', async () => {
+    appStore.cachedPublicSettings = { pelican_showcase_enabled: false, pelican_showcase_admin_only: false }
+    appStore.publicSettingsLoaded = true
+    const { navigation, next } = runGuard({ requiresPelicanShowcase: true }, '/pelican-showcase')
+    await navigation
+    expect(next).toHaveBeenCalledWith()
   })
 
   it('allows observers own usage in backend mode without opening other user or admin pages', async () => {
