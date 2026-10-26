@@ -15,6 +15,7 @@ import (
 const (
 	SettingKeyPelicanShowcaseConfig     = "pelican_showcase_config"
 	SettingKeyPelicanShowcaseAPIEnabled = "pelican_showcase_api_enabled"
+	SettingKeyPelicanShowcaseAdminOnly  = "pelican_showcase_admin_only"
 )
 
 const (
@@ -85,6 +86,7 @@ func (cfg PelicanShowcaseConfig) retentionCutoff(now time.Time) time.Time {
 type PelicanShowcaseRuntime struct {
 	Enabled    bool
 	APIEnabled bool
+	AdminOnly  bool
 	Config     PelicanShowcaseConfig
 }
 
@@ -97,7 +99,7 @@ func (s *SettingService) GetPelicanShowcaseRuntime(ctx context.Context) (Pelican
 	if s == nil || s.settingRepo == nil {
 		return PelicanShowcaseRuntime{}, errPelicanShowcaseSettingsUnavailable
 	}
-	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyPelicanShowcaseEnabled, SettingKeyPelicanShowcaseConfig, SettingKeyPelicanShowcaseAPIEnabled})
+	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyPelicanShowcaseEnabled, SettingKeyPelicanShowcaseConfig, SettingKeyPelicanShowcaseAPIEnabled, SettingKeyPelicanShowcaseAdminOnly})
 	if err != nil {
 		return PelicanShowcaseRuntime{}, err
 	}
@@ -106,7 +108,8 @@ func (s *SettingService) GetPelicanShowcaseRuntime(ctx context.Context) (Pelican
 		return PelicanShowcaseRuntime{}, err
 	}
 	return PelicanShowcaseRuntime{
-		Enabled: vals[SettingKeyPelicanShowcaseEnabled] == "true", APIEnabled: pelicanShowcaseAPIEnabled(vals), Config: cfg,
+		Enabled: vals[SettingKeyPelicanShowcaseEnabled] == "true", APIEnabled: pelicanShowcaseAPIEnabled(vals),
+		AdminOnly: pelicanShowcaseAdminOnly(vals), Config: cfg,
 	}, nil
 }
 
@@ -117,9 +120,16 @@ func pelicanShowcaseAPIEnabled(vals map[string]string) bool {
 	return !exists || raw == "true"
 }
 
+// Existing installations remain open to users. A configured but invalid value
+// restricts access rather than silently making an administrator-only gallery public.
+func pelicanShowcaseAdminOnly(vals map[string]string) bool {
+	raw, exists := vals[SettingKeyPelicanShowcaseAdminOnly]
+	return exists && raw != "false"
+}
+
 // UpdatePelicanShowcaseSettings saves the gallery switches and limits from the Smart Ops
-// page. An omitted API switch preserves its stored value for older clients.
-func (s *SettingService) UpdatePelicanShowcaseSettings(ctx context.Context, enabled bool, cfg PelicanShowcaseConfig, apiEnabled *bool) (PelicanShowcaseRuntime, error) {
+// page. Omitted API/audience switches preserve stored values for older clients.
+func (s *SettingService) UpdatePelicanShowcaseSettings(ctx context.Context, enabled bool, cfg PelicanShowcaseConfig, apiEnabled, adminOnly *bool) (PelicanShowcaseRuntime, error) {
 	if s == nil || s.settingRepo == nil {
 		return PelicanShowcaseRuntime{}, errPelicanShowcaseSettingsUnavailable
 	}
@@ -135,19 +145,25 @@ func (s *SettingService) UpdatePelicanShowcaseSettings(ctx context.Context, enab
 		SettingKeyPelicanShowcaseEnabled: strconv.FormatBool(enabled),
 		SettingKeyPelicanShowcaseConfig:  string(raw),
 	}
-	var currentAPIEnabled bool
-	if apiEnabled != nil {
-		currentAPIEnabled = *apiEnabled
-		updates[SettingKeyPelicanShowcaseAPIEnabled] = strconv.FormatBool(*apiEnabled)
-	} else {
-		vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyPelicanShowcaseAPIEnabled})
+	var vals map[string]string
+	if apiEnabled == nil || adminOnly == nil {
+		vals, err = s.settingRepo.GetMultiple(ctx, []string{SettingKeyPelicanShowcaseAPIEnabled, SettingKeyPelicanShowcaseAdminOnly})
 		if err != nil {
 			return PelicanShowcaseRuntime{}, err
 		}
-		currentAPIEnabled = pelicanShowcaseAPIEnabled(vals)
+	}
+	currentAPIEnabled := pelicanShowcaseAPIEnabled(vals)
+	currentAdminOnly := pelicanShowcaseAdminOnly(vals)
+	if apiEnabled != nil {
+		currentAPIEnabled = *apiEnabled
+		updates[SettingKeyPelicanShowcaseAPIEnabled] = strconv.FormatBool(*apiEnabled)
+	}
+	if adminOnly != nil {
+		currentAdminOnly = *adminOnly
+		updates[SettingKeyPelicanShowcaseAdminOnly] = strconv.FormatBool(*adminOnly)
 	}
 	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
 		return PelicanShowcaseRuntime{}, err
 	}
-	return PelicanShowcaseRuntime{Enabled: enabled, APIEnabled: currentAPIEnabled, Config: normalized}, nil
+	return PelicanShowcaseRuntime{Enabled: enabled, APIEnabled: currentAPIEnabled, AdminOnly: currentAdminOnly, Config: normalized}, nil
 }
