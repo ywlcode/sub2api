@@ -17,14 +17,20 @@ func TestAPIKeyGroupsPersistenceMembershipAndAtomicRollback(t *testing.T) {
 	require.NoError(t, err)
 	second, err := client.Group.Create().SetName("second").Save(ctx)
 	require.NoError(t, err)
-	key := &service.APIKey{UserID: user.ID, Key: "sk-multi-group-test", Name: "original", Status: service.StatusActive, GroupID: &first.ID, GroupIDs: []int64{first.ID, second.ID}}
+	third, err := client.Group.Create().SetName("third").Save(ctx)
+	require.NoError(t, err)
+	key := &service.APIKey{UserID: user.ID, Key: "sk-multi-group-test", Name: "original", Status: service.StatusActive, GroupID: &first.ID, GroupIDs: []int64{first.ID, third.ID, second.ID}}
 	require.NoError(t, repo.Create(ctx, key))
 	got, err := repo.GetByID(ctx, key.ID)
 	require.NoError(t, err)
-	require.Equal(t, []int64{first.ID, second.ID}, got.GroupIDs)
+	require.Equal(t, []int64{first.ID, third.ID, second.ID}, got.GroupIDs)
 	page, _, err := repo.ListByUserID(ctx, user.ID, pagination.PaginationParams{Page: 1, PageSize: 10}, service.APIKeyListFilters{GroupID: &second.ID})
 	require.NoError(t, err)
 	require.Len(t, page, 1)
+	require.Equal(t, key.GroupIDs, page[0].GroupIDs)
+	auth, err := repo.GetByKeyForAuth(ctx, key.Key)
+	require.NoError(t, err)
+	require.Equal(t, key.GroupIDs, auth.GroupIDs)
 	keys, err := repo.ListKeysByGroupID(ctx, second.ID)
 	require.NoError(t, err)
 	require.Equal(t, []string{key.Key}, keys)
@@ -36,7 +42,13 @@ func TestAPIKeyGroupsPersistenceMembershipAndAtomicRollback(t *testing.T) {
 	unchanged, err := repo.GetByID(ctx, key.ID)
 	require.NoError(t, err)
 	require.Equal(t, "original", unchanged.Name)
-	require.Equal(t, []int64{first.ID, second.ID}, unchanged.GroupIDs)
+	require.Equal(t, []int64{first.ID, third.ID, second.ID}, unchanged.GroupIDs)
+
+	unchanged.GroupID, unchanged.GroupIDs = &third.ID, []int64{third.ID, second.ID, first.ID}
+	require.NoError(t, repo.Update(ctx, unchanged, service.APIKeyUpdateFields{GroupID: true}))
+	got, err = repo.GetByID(ctx, key.ID)
+	require.NoError(t, err)
+	require.Equal(t, []int64{third.ID, second.ID, first.ID}, got.GroupIDs)
 
 	unchanged.GroupID, unchanged.GroupIDs = &second.ID, []int64{second.ID}
 	require.NoError(t, repo.Update(ctx, unchanged, service.APIKeyUpdateFields{GroupID: true}))
