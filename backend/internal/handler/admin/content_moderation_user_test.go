@@ -129,7 +129,7 @@ func TestModerationUserHandlerListFilterPrivacy(t *testing.T) {
 	w := moderationUserRequest(t, h, "GET", "/users?state=exempt&page=1&page_size=20", "admin", "")
 	require.Equal(t, 200, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), `"user_id":306`)
-	// email_exempt is a boolean control, not a mailbox. Check the complete
+	// Exemption and platform-ban flags are boolean controls. Check the complete
 	// response shape so actual email/body/credential fields remain forbidden.
 	keys := func(object map[string]json.RawMessage) []string {
 		result := make([]string, 0, len(object))
@@ -149,10 +149,11 @@ func TestModerationUserHandlerListFilterPrivacy(t *testing.T) {
 	require.Len(t, items, 1)
 	require.ElementsMatch(t, []string{
 		"user_id", "version", "generation", "auto_ban_exempt", "keyword_exempt",
-		"api_audit_exempt", "email_exempt", "owned_disable", "status",
+		"api_audit_exempt", "email_exempt", "owned_disable", "openai_blocked", "status",
 		"current_count", "reason", "actor_id", "updated_at",
 	}, keys(items[0]))
 	require.JSONEq(t, "false", string(items[0]["email_exempt"]))
+	require.JSONEq(t, "false", string(items[0]["openai_blocked"]))
 	require.NotContains(t, w.Body.String(), "prompt")
 	require.NotContains(t, w.Body.String(), "api_key")
 }

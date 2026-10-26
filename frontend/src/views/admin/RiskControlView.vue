@@ -349,7 +349,7 @@
                       <div>{{ violationCountText(row) }}</div>
                       <div class="text-xs text-gray-400">
                         {{ row.email_sent ? t('admin.riskControl.emailSent') : t('admin.riskControl.emailNotSent') }}
-                        <span v-if="row.auto_banned"> / {{ t('admin.riskControl.autoBanned') }}</span>
+                        <span v-if="row.auto_banned"> / {{ t(row.ban_scope === 'openai' ? 'admin.riskControl.openaiRestricted' : 'admin.riskControl.autoBanned') }}</span>
                       </div>
                       <button
                         v-if="canUnbanRow(row)"
@@ -949,6 +949,14 @@
                 <Toggle v-model="configForm.cyber_policy_exclude_from_ban_count" />
               </div>
               <div>
+                <label for="moderation-ban-scope" class="input-label">{{ t('admin.riskControl.banScope') }}</label>
+                <select id="moderation-ban-scope" v-model="configForm.ban_scope" class="input" data-test="moderation-ban-scope">
+                  <option value="all">{{ t('admin.riskControl.banScopeAll') }}</option>
+                  <option value="openai">{{ t('admin.riskControl.banScopeOpenAI') }}</option>
+                </select>
+                <p class="mt-1 text-xs text-gray-500">{{ t('admin.riskControl.banScopeHint') }}</p>
+              </div>
+              <div>
                 <label class="input-label">{{ t('admin.riskControl.banThreshold') }}</label>
                 <input v-model.number="configForm.ban_threshold" type="number" min="1" max="1000" class="input" />
               </div>
@@ -1332,6 +1340,7 @@ const configForm = reactive({
   block_message: defaultBlockMessage(),
   email_on_hit: true,
   auto_ban_enabled: true,
+  ban_scope: 'all' as 'all' | 'openai',
   cyber_policy_exclude_from_ban_count: false,
   ban_threshold: 10,
   violation_window_hours: 720,
@@ -1859,6 +1868,7 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.block_message = config.block_message || defaultBlockMessage()
   configForm.email_on_hit = config.email_on_hit ?? true
   configForm.auto_ban_enabled = config.auto_ban_enabled ?? true
+  configForm.ban_scope = config.ban_scope ?? 'all'
   configForm.cyber_policy_exclude_from_ban_count = config.cyber_policy_exclude_from_ban_count ?? false
   configForm.ban_threshold = config.ban_threshold || 10
   configForm.violation_window_hours = config.violation_window_hours || 720
@@ -1969,6 +1979,7 @@ async function saveConfig() {
       block_message: configForm.block_message || defaultBlockMessage(),
       email_on_hit: configForm.email_on_hit,
       auto_ban_enabled: configForm.auto_ban_enabled,
+      ban_scope: configForm.ban_scope,
       cyber_policy_exclude_from_ban_count: configForm.cyber_policy_exclude_from_ban_count,
       ban_threshold: Number(configForm.ban_threshold) || 10,
       violation_window_hours: Number(configForm.violation_window_hours) || 720,

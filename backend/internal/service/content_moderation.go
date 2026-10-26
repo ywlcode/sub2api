@@ -177,6 +177,7 @@ type ContentModerationConfig struct {
 	BlockStatus          int                                         `json:"block_status"`
 	BlockMessage         string                                      `json:"block_message"`
 	EmailOnHit           bool                                        `json:"email_on_hit"`
+	BanScope             string                                      `json:"ban_scope"`
 	AutoBanEnabled       bool                                        `json:"auto_ban_enabled"`
 	BanThreshold         int                                         `json:"ban_threshold"`
 	ViolationWindowHours int                                         `json:"violation_window_hours"`
@@ -218,6 +219,7 @@ type ContentModerationConfigView struct {
 	BlockStatus                    int                                         `json:"block_status"`
 	BlockMessage                   string                                      `json:"block_message"`
 	EmailOnHit                     bool                                        `json:"email_on_hit"`
+	BanScope                       string                                      `json:"ban_scope"`
 	AutoBanEnabled                 bool                                        `json:"auto_ban_enabled"`
 	BanThreshold                   int                                         `json:"ban_threshold"`
 	ViolationWindowHours           int                                         `json:"violation_window_hours"`
@@ -320,6 +322,7 @@ type UpdateContentModerationConfigInput struct {
 	BlockStatus                    *int                                         `json:"block_status"`
 	BlockMessage                   *string                                      `json:"block_message"`
 	EmailOnHit                     *bool                                        `json:"email_on_hit"`
+	BanScope                       *string                                      `json:"ban_scope"`
 	AutoBanEnabled                 *bool                                        `json:"auto_ban_enabled"`
 	BanThreshold                   *int                                         `json:"ban_threshold"`
 	ViolationWindowHours           *int                                         `json:"violation_window_hours"`
@@ -447,6 +450,7 @@ type ContentModerationLog struct {
 	UpstreamLatencyMS    *int                         `json:"upstream_latency_ms,omitempty"`
 	Error                string                       `json:"error"`
 	ViolationCount       int                          `json:"violation_count"`
+	BanScope             string                       `json:"ban_scope"`
 	AutoBanned           bool                         `json:"auto_banned"`
 	EmailSent            bool                         `json:"email_sent"`
 	UserStatus           string                       `json:"user_status"`
@@ -693,6 +697,12 @@ func (s *ContentModerationService) UpdateConfig(ctx context.Context, input Updat
 	}
 	if input.EmailOnHit != nil {
 		cfg.EmailOnHit = *input.EmailOnHit
+	}
+	if input.BanScope != nil {
+		if !ValidContentModerationBanScope(*input.BanScope) {
+			return nil, infraerrors.BadRequest("INVALID_BAN_SCOPE", "封禁范围无效")
+		}
+		cfg.BanScope = NormalizeContentModerationBanScope(*input.BanScope)
 	}
 	if input.AutoBanEnabled != nil {
 		cfg.AutoBanEnabled = *input.AutoBanEnabled
@@ -2085,7 +2095,7 @@ func (s *ContentModerationService) applyFlaggedAccountSideEffects(ctx context.Co
 		if requestID == "" {
 			requestID = uuid.NewString()
 		}
-		result, err := repo.ApplyModerationHit(ctx, ModerationHit{UserID: *log.UserID, Version: *log.moderationVersion, RequestID: requestID, Action: log.Action, Since: time.Now().Add(-time.Duration(cfg.ViolationWindowHours) * time.Hour), AutoBan: cfg.AutoBanEnabled && !securityPenaltyOwnsEnforcement(ctx), Threshold: cfg.BanThreshold, ExcludeCyber: cfg.CyberPolicyExcludeFromBanCount})
+		result, err := repo.ApplyModerationHit(ctx, ModerationHit{UserID: *log.UserID, Version: *log.moderationVersion, RequestID: requestID, Action: log.Action, Since: time.Now().Add(-time.Duration(cfg.ViolationWindowHours) * time.Hour), AutoBan: cfg.AutoBanEnabled && !securityPenaltyOwnsEnforcement(ctx), BanScope: cfg.BanScope, Threshold: cfg.BanThreshold, ExcludeCyber: cfg.CyberPolicyExcludeFromBanCount})
 		if err != nil {
 			log.suppressNotification = true
 			slog.Error("content_moderation.apply_hit_failed", "user_id", *log.UserID, "error", err)
@@ -2093,7 +2103,11 @@ func (s *ContentModerationService) applyFlaggedAccountSideEffects(ctx context.Co
 		}
 		log.suppressNotification = !result.Accepted
 		log.ViolationCount = result.Count
-		log.AutoBanned = result.OwnedDisable
+		log.AutoBanned = result.OwnedDisable || result.OpenAIBlocked
+		log.BanScope = ContentModerationBanScopeAll
+		if result.OpenAIBlocked && !result.OwnedDisable {
+			log.BanScope = ContentModerationBanScopeOpenAI
+		}
 		if result.BanApplied && s.authCacheInvalidator != nil {
 			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, *log.UserID)
 		}
@@ -2181,6 +2195,10 @@ func (s *ContentModerationService) sendAccountDisabledEmail(ctx context.Context,
 		return err
 	}
 	siteName := s.siteName(ctx)
+	if log.BanScope == ContentModerationBanScopeOpenAI {
+		subject := fmt.Sprintf("[%s] OpenAI 访问受限 / OpenAI Access Restricted", sanitizeEmailHeader(siteName))
+		return s.sendModerationEmail(ctx, log, subject, buildContentModerationAccountDisabledEmailBody(siteName, log, cfg))
+	}
 	if s.emailService.notificationEmailService != nil {
 		if err := s.emailService.notificationEmailService.Send(ctx, NotificationEmailSendInput{
 			beforeSend:     func(ctx context.Context) error { return s.checkModerationEmailExemption(ctx, log) },
@@ -2275,6 +2293,7 @@ func defaultContentModerationConfig() *ContentModerationConfig {
 		BlockStatus:          defaultContentModerationBlockHTTPStatus,
 		BlockMessage:         defaultContentModerationBlockMessage,
 		EmailOnHit:           true,
+		BanScope:             ContentModerationBanScopeAll,
 		AutoBanEnabled:       true,
 		BanThreshold:         defaultContentModerationBanThreshold,
 		ViolationWindowHours: defaultContentModerationViolationWindowHours,
@@ -2315,6 +2334,7 @@ func cloneContentModerationConfig(cfg *ContentModerationConfig) *ContentModerati
 }
 
 func (cfg *ContentModerationConfig) normalize(engine ...string) {
+	cfg.BanScope = NormalizeContentModerationBanScope(cfg.BanScope)
 	cfg.Engine = moderationEngine(cfg.Engine)
 	if cfg.APIKey != "" {
 		cfg.APIKeys = normalizeModerationAPIKeys(append(cfg.APIKeys, cfg.APIKey))
@@ -2628,6 +2648,7 @@ func (s *ContentModerationService) configView(cfg *ContentModerationConfig) *Con
 		BlockStatus:                    cfg.BlockStatus,
 		BlockMessage:                   cfg.BlockMessage,
 		EmailOnHit:                     cfg.EmailOnHit,
+		BanScope:                       cfg.BanScope,
 		AutoBanEnabled:                 cfg.AutoBanEnabled,
 		BanThreshold:                   cfg.BanThreshold,
 		ViolationWindowHours:           cfg.ViolationWindowHours,
