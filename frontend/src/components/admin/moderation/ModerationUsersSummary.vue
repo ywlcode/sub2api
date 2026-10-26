@@ -17,7 +17,7 @@
         <thead><tr><th>UID</th><th>{{ t('admin.moderationUsers.exemptionTypes') }}</th><th>{{ t('admin.moderationUsers.state') }}</th><th>{{ t('admin.moderationUsers.reason') }}</th><th>{{ t('admin.moderationUsers.actor') }}</th><th>{{ t('admin.moderationUsers.time') }}</th><th></th></tr></thead>
         <tbody><tr v-for="item in items" :key="item.user_id">
           <td>{{ item.user_id }}</td><td>{{ exemptionLabels(item).join(' · ') || t('common.no') }}</td>
-          <td>{{ item.status }} · {{ item.current_count }}</td><td class="max-w-xs break-words">{{ item.reason || '—' }}</td><td>{{ item.actor_id ?? '—' }}</td><td>{{ item.updated_at ? new Date(item.updated_at).toLocaleString() : '—' }}</td>
+          <td>{{ item.status }}<span v-if="item.openai_blocked"> · {{ t('admin.riskControl.openaiRestricted') }}</span> · {{ item.current_count }}</td><td class="max-w-xs break-words">{{ item.reason || '—' }}</td><td>{{ item.actor_id ?? '—' }}</td><td>{{ item.updated_at ? new Date(item.updated_at).toLocaleString() : '—' }}</td>
           <td><button type="button" class="btn btn-secondary" @click="selected = item.user_id">{{ t('common.edit') }}</button></td>
         </tr></tbody>
       </table>
