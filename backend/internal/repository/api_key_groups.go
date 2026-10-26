@@ -42,7 +42,7 @@ func (r *apiKeyRepository) attachGroupIDs(ctx context.Context, keys []service.AP
 	rows, err := clientFromContext(ctx, r.client).QueryContext(ctx,
 		`SELECT b.api_key_id, b.group_id FROM api_key_groups b
 		JOIN groups g ON g.id = b.group_id AND g.deleted_at IS NULL
-		WHERE b.api_key_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY b.group_id`, ids...)
+		WHERE b.api_key_id IN (`+strings.Join(placeholders, ",")+`) ORDER BY b.priority, b.group_id`, ids...)
 	if err != nil {
 		return err
 	}
@@ -104,11 +104,11 @@ func (r *apiKeyRepository) replaceExtraGroups(ctx context.Context, key *service.
 	if key.GroupID == nil {
 		return nil
 	}
-	for _, id := range key.GroupIDs {
+	for priority, id := range key.GroupIDs {
 		if key.GroupID != nil && *key.GroupID == id {
 			continue
 		}
-		if _, err := client.ExecContext(ctx, `INSERT INTO api_key_groups (api_key_id, group_id) VALUES ($1, $2)`, key.ID, id); err != nil {
+		if _, err := client.ExecContext(ctx, `INSERT INTO api_key_groups (api_key_id, group_id, priority) VALUES ($1, $2, $3)`, key.ID, id, priority); err != nil {
 			return fmt.Errorf("save API key groups: %w", err)
 		}
 	}
