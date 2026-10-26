@@ -4,6 +4,8 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 
 网页注册额度、登录失败封禁及可信代理升级要求见 [网页认证 IP 防护](AUTH_IP_GUARD.md)。
 
+自用分支同步上游、构建镜像和更新服务器的流程见 [dev-ywlcode 分支维护与 Docker 发布](DEV_YWLCODE.md)。
+
 ## Deployment Methods
 
 | Method | Best For | Setup Wizard |
