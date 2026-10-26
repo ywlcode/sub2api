@@ -21,10 +21,11 @@ import (
 
 type publicPelicanSettingsRepo struct {
 	service.SettingRepository
+	adminOnly bool
 }
 
-func (publicPelicanSettingsRepo) GetMultiple(context.Context, []string) (map[string]string, error) {
-	return map[string]string{service.SettingKeyPelicanShowcaseEnabled: "false"}, nil
+func (r publicPelicanSettingsRepo) GetMultiple(context.Context, []string) (map[string]string, error) {
+	return map[string]string{service.SettingKeyPelicanShowcaseEnabled: "false", service.SettingKeyPelicanShowcaseAdminOnly: strconv.FormatBool(r.adminOnly)}, nil
 }
 
 func (publicPelicanSettingsRepo) GetValue(context.Context, string) (string, error) {
@@ -81,6 +82,33 @@ func TestPublicPelicanRoutesRequireAPIKeyAndKeepUserAuth(t *testing.T) {
 		request.Header.Set("Authorization", "Bearer "+repo.key.Key)
 		router.ServeHTTP(w, request)
 		require.Equal(t, tc.status, w.Code, "%s %s", tc.method, tc.path)
+	}
+}
+
+func TestPublicPelicanRoutesAdminOnlyUsesAuthenticatedAPIKeyRole(t *testing.T) {
+	for _, mode := range []string{config.RunModeStandard, config.RunModeSimple} {
+		for _, role := range []string{service.RoleUser, service.RoleObserver, service.RoleAdmin} {
+			t.Run(mode+role, func(t *testing.T) {
+				gin.SetMode(gin.TestMode)
+				settings := service.NewSettingService(publicPelicanSettingsRepo{adminOnly: true}, &config.Config{})
+				h := &handler.Handlers{PelicanShowcase: handler.NewPelicanShowcaseHandler(service.NewPelicanShowcaseService(nil, settings))}
+				router := gin.New()
+				auth, repo, _ := newPelicanRouteAuth(mode)
+				repo.key.User.Role = role
+				RegisterPublicPelicanShowcaseRoutes(router.Group("/api/v1"), h, auth, nil)
+				for _, method := range []string{http.MethodGet, http.MethodHead} {
+					request := httptest.NewRequest(method, "/api/v1/public/pelican-showcase", nil)
+					request.Header.Set("Authorization", "Bearer "+repo.key.Key)
+					w := httptest.NewRecorder()
+					router.ServeHTTP(w, request)
+					want := http.StatusForbidden
+					if role == service.RoleAdmin {
+						want = http.StatusOK
+					}
+					require.Equal(t, want, w.Code, w.Body.String())
+				}
+			})
+		}
 	}
 }
 

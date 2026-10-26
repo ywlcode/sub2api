@@ -40,7 +40,7 @@ const plan = (overrides: Partial<PelicanGroupTestPlan> = {}): PelicanGroupTestPl
   last_run_at: '2026-09-28T04:00:00Z', next_run_at: '2026-09-28T04:30:00Z', last_result: result(), created_at: '', updated_at: '',
   ...overrides,
 })
-const settings = { enabled: false, api_enabled: true, max_items: 20, auto_cleanup: true, retention_days: 7 }
+const settings = { enabled: false, api_enabled: true, admin_only: false, max_items: 20, auto_cleanup: true, retention_days: 7 }
 
 const SelectStub = {
   props: ['modelValue', 'options', 'disabled'],
@@ -97,6 +97,20 @@ afterEach(() => {
 })
 
 describe('PelicanTestsView', () => {
+  it('round trips administrator-only visibility without changing the API switch', async () => {
+    api.getShowcaseSettings.mockResolvedValue({ ...settings, enabled: true })
+    api.updateShowcaseSettings.mockImplementation(async (value) => value)
+    wrapper = mountView()
+    await flushPromises()
+    const toggle = wrapper.get('[data-testid="pelican-showcase-admin-only"]')
+    expect(toggle.element).toHaveProperty('checked', false)
+    await toggle.setValue(true)
+    await wrapper.get('[data-testid="pelican-showcase-settings"] form').trigger('submit')
+    await flushPromises()
+    expect(api.updateShowcaseSettings).toHaveBeenCalledWith({ ...settings, enabled: true, admin_only: true })
+    expect(wrapper.get('[data-testid="pelican-showcase-admin-only"]').element).toHaveProperty('checked', true)
+    expect(fetchPublicSettings).toHaveBeenCalledWith(true)
+  })
   it('shows USD totals beside group names and preserves unknown, zero and partial costs', async () => {
     api.listPlans.mockResolvedValue([plan(), plan({ id: 8, today_cost_usd: 0, total_cost_usd: 0.4, total_cost_incomplete: true })])
     api.listResults.mockResolvedValue({ items: [result(), result({ id: 89, cost_usd: null }), result({ id: 88, cost_usd: 0 }), result({ id: 87, cost_usd: 0.0000001 }), result({ id: 86, cost_usd: 0.2, cost_incomplete: true })], total: 5 })
@@ -152,7 +166,7 @@ describe('PelicanTestsView', () => {
     expect(wrapper.find('[data-testid="pelican-showcase-retention-days"]').exists()).toBe(false)
     await wrapper.get('[data-testid="pelican-showcase-settings"] form').trigger('submit')
     await flushPromises()
-    expect(api.updateShowcaseSettings).toHaveBeenCalledWith({ enabled: true, api_enabled: false, max_items: 40, auto_cleanup: false, retention_days: 7 })
+    expect(api.updateShowcaseSettings).toHaveBeenCalledWith({ enabled: true, api_enabled: false, admin_only: false, max_items: 40, auto_cleanup: false, retention_days: 7 })
     expect(fetchPublicSettings).toHaveBeenCalledWith(true)
     expect(wrapper.text()).toContain('pelicanTests.showcase.saved')
   })

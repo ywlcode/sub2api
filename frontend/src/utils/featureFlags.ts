@@ -176,6 +176,15 @@ export function resolveFeatureFlag(
   return flag.mode === 'opt-out'
 }
 
+/** An enabled gallery appears in the sidebar only for its allowed audience. */
+export function canViewPelicanShowcase(
+  settings: Partial<PublicSettings> | null | undefined,
+  isAdmin: boolean,
+): boolean {
+  return resolveFeatureFlag(settings, FeatureFlags.pelicanShowcase)
+    && (settings?.pelican_showcase_admin_only !== true || isAdmin)
+}
+
 /**
  * Sidebar NavItem.featureFlag accepts a getter that returns
  * `false` to hide. Keeping the same contract lets callers swap in

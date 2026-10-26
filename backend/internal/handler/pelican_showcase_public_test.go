@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,7 @@ type publicPelicanSourceStub struct {
 	viewErr       error
 	itemErr       error
 	apiDisabled   bool
+	adminOnly     bool
 	settingsErr   error
 	settingsReads atomic.Int64
 	viewReads     atomic.Int64
@@ -40,7 +42,7 @@ type publicPelicanSourceStub struct {
 
 func (s *publicPelicanSourceStub) Settings(context.Context) (service.PelicanShowcaseRuntime, error) {
 	s.settingsReads.Add(1)
-	return service.PelicanShowcaseRuntime{Enabled: s.view.Enabled, APIEnabled: !s.apiDisabled}, s.settingsErr
+	return service.PelicanShowcaseRuntime{Enabled: s.view.Enabled, APIEnabled: !s.apiDisabled, AdminOnly: s.adminOnly}, s.settingsErr
 }
 
 func (s *publicPelicanSourceStub) View(ctx context.Context, _ time.Time) (*service.PelicanShowcaseView, error) {
@@ -163,6 +165,46 @@ func TestPelicanPublicConditionalReadsAndCompression(t *testing.T) {
 	for header, expected := range map[string]bool{"": false, "br": false, "gzip": true, "gzip;q=0": false, "gzip;q=0, *;q=1": false, "*;q=1, gzip;q=0": false, "gzip; q=0.5": true, "gzip;q=bad": false, "gzip;q=NaN": false, "gzip;q=2": false} {
 		require.Equal(t, expected, pelicanAcceptsGzip(header), header)
 	}
+}
+
+func TestPelicanPublicAdminOnlyRejectsCachedReadsAndKeepsAdmins(t *testing.T) {
+	h, source := newPublicPelicanFixture()
+	first := publicPelicanRequest(h, http.MethodGet, "", nil)
+	item := publicPelicanRequest(h, http.MethodGet, "7", nil)
+	require.Equal(t, http.StatusOK, first.Code)
+	require.Equal(t, http.StatusOK, item.Code)
+	source.adminOnly = true
+	for _, role := range []string{"", service.RoleUser, service.RoleObserver, service.RoleAdmin} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			for _, id := range []string{"", "7"} {
+				t.Run(role+method+id, func(t *testing.T) {
+					w := httptest.NewRecorder()
+					c, _ := gin.CreateTestContext(w)
+					c.Set(string(middleware.ContextKeyUserRole), role)
+					c.Request = httptest.NewRequest(method, pelicanPublicPath, nil)
+					c.Request.Header.Set("If-None-Match", "*")
+					if id == "" {
+						h.PublicList(c)
+					} else {
+						c.Params = gin.Params{{Key: "id", Value: id}}
+						h.PublicItem(c)
+					}
+					c.Writer.WriteHeaderNow()
+					if role == service.RoleAdmin {
+						require.Equal(t, http.StatusNotModified, w.Code)
+					} else {
+						require.Equal(t, http.StatusForbidden, w.Code)
+						require.Empty(t, w.Header().Get("ETag"))
+						require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+						require.NotContains(t, w.Body.String(), "Public group")
+						require.NotContains(t, w.Body.String(), "<svg>")
+					}
+				})
+			}
+		}
+	}
+	require.EqualValues(t, 1, source.viewReads.Load(), "audience changes are checked before the cached manifest")
+	require.EqualValues(t, 1, source.itemReads.Load(), "denied requests never fetch HTML")
 }
 
 func TestPelicanPublicVisibilityAndRefresh(t *testing.T) {

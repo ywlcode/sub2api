@@ -218,7 +218,7 @@ import FeatureSearch from './FeatureSearch.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { sanitizeSvg } from '@/utils/sanitize'
 import { sanitizeUrl } from '@/utils/url'
-import { FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
+import { canViewPelicanShowcase, FeatureFlags, makeSidebarFlag } from '@/utils/featureFlags'
 import { resolveSiteBillingMode } from '@/utils/siteBillingMode'
 import { useBatchImageAccess } from '@/composables/useBatchImageAccess'
 
@@ -749,7 +749,7 @@ const ChevronDownIcon = {
 const flagChannelMonitor = makeSidebarFlag(FeatureFlags.channelMonitor)
 const flagPayment = makeSidebarFlag(FeatureFlags.payment)
 const flagAvailableChannels = makeSidebarFlag(FeatureFlags.availableChannels)
-const flagPelicanShowcase = makeSidebarFlag(FeatureFlags.pelicanShowcase)
+const flagPelicanShowcase = () => canViewPelicanShowcase(appStore.cachedPublicSettings, authStore.isAdmin)
 const flagSubscription = makeSidebarFlag(FeatureFlags.subscription)
 
 // 购买入口文案随站点计费模式切换：仅充值 → 「充值」，仅订阅 → 「订阅」，否则「充值/订阅」。

@@ -226,7 +226,8 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyAvailableChannelsEnabled: "false",
 
 		// Pelican showcase (default disabled; opt-in). A missing config means the defaults.
-		SettingKeyPelicanShowcaseEnabled: "false",
+		SettingKeyPelicanShowcaseEnabled:   "false",
+		SettingKeyPelicanShowcaseAdminOnly: "false",
 
 		// Subscription feature (default enabled; opt-out)
 		SettingKeySubscriptionEnabled: "true",

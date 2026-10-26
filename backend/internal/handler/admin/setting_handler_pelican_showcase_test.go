@@ -80,3 +80,23 @@ func TestSettingsPelicanShowcaseRejectsOutOfRangeLimits(t *testing.T) {
 		require.Equal(t, saved, repo.values[service.SettingKeyPelicanShowcaseConfig])
 	}
 }
+
+func TestSettingsPelicanShowcaseUpdatesPreserveIndependentAudience(t *testing.T) {
+	h, repo := newStepUpSwitchTestHandler(t, map[string]string{})
+	for _, restricted := range []bool{true, false} {
+		_, err := h.settingService.UpdatePelicanShowcaseSettings(context.Background(), true, service.DefaultPelicanShowcaseConfig(), nil, &restricted)
+		require.NoError(t, err)
+		rec := doUpdateSettings(t, h, map[string]any{
+			"pelican_showcase_enabled": true,
+		}, nil)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		public, err := h.settingService.GetPublicSettings(context.Background())
+		require.NoError(t, err)
+		require.True(t, public.PelicanShowcaseEnabled)
+		require.Equal(t, restricted, public.PelicanShowcaseAdminOnly)
+		before := repo.values[service.SettingKeyPelicanShowcaseAdminOnly]
+		rec = doUpdateSettings(t, h, map[string]any{"site_name": "unrelated"}, nil)
+		require.Equal(t, http.StatusOK, rec.Code, rec.Body.String())
+		require.Equal(t, before, repo.values[service.SettingKeyPelicanShowcaseAdminOnly])
+	}
+}

@@ -540,6 +540,7 @@ const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       requiresAdmin: false,
+      requiresPelicanShowcase: true,
       title: 'Pelican Showcase',
       titleKey: 'pelicanShowcase.title',
       descriptionKey: 'pelicanShowcase.description'
@@ -1061,7 +1062,7 @@ router.beforeEach(async (to, _from, next) => {
   // 公共设置可能尚未加载（App.vue 的 onMounted 异步拉取晚于首次导航，且纯静态部署
   // 无 __APP_CONFIG__ 注入）。此时 cachedPublicSettings 为空会把 payment/risk_control
   // 误判为“未启用”而错误拦截，故这里先确保设置加载完成。
-  if ((to.meta.requiresPayment || to.meta.requiresRiskControl || to.meta.requiresSubscription || to.meta.requiresSupportTickets) && !appStore.publicSettingsLoaded) {
+  if ((to.meta.requiresPayment || to.meta.requiresRiskControl || to.meta.requiresSubscription || to.meta.requiresSupportTickets || to.meta.requiresPelicanShowcase) && !appStore.publicSettingsLoaded) {
     try {
       await appStore.fetchPublicSettings()
     } catch (error) {
@@ -1071,6 +1072,16 @@ router.beforeEach(async (to, _from, next) => {
 
   // Only an explicit value from successfully loaded settings can disable a route.
   // A transient settings failure is unknown state, not a confirmed feature toggle.
+  if (
+    to.meta.requiresPelicanShowcase &&
+    appStore.publicSettingsLoaded &&
+    appStore.cachedPublicSettings?.pelican_showcase_admin_only === true &&
+    !authStore.isAdmin
+  ) {
+    next('/dashboard')
+    return
+  }
+
   if (
     to.meta.requiresPayment &&
     appStore.publicSettingsLoaded &&

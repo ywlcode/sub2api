@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useAppStore } from '@/stores/app'
-import { FeatureFlags, isFeatureFlagEnabled, makeSidebarFlag, resolveFeatureFlag } from '@/utils/featureFlags'
+import { canViewPelicanShowcase, FeatureFlags, isFeatureFlagEnabled, makeSidebarFlag, resolveFeatureFlag } from '@/utils/featureFlags'
 import type { PublicSettings } from '@/types'
 
 vi.mock('@/api/admin/system', () => ({
@@ -37,6 +37,24 @@ describe('FeatureFlags.subscription', () => {
 
     store.cachedPublicSettings = {} as PublicSettings
     expect(sidebarFlag()).toBe(true)
+  })
+})
+
+describe('Pelican showcase audience', () => {
+  it('keeps the gallery hidden until explicitly enabled, including for administrators', () => {
+    expect(canViewPelicanShowcase(null, false)).toBe(false)
+    expect(canViewPelicanShowcase({ pelican_showcase_enabled: false, pelican_showcase_admin_only: true }, true)).toBe(false)
+  })
+
+  it('preserves public access when the new audience setting is absent or off', () => {
+    expect(canViewPelicanShowcase({ pelican_showcase_enabled: true }, false)).toBe(true)
+    expect(canViewPelicanShowcase({ pelican_showcase_enabled: true, pelican_showcase_admin_only: false }, false)).toBe(true)
+  })
+
+  it('hides the same enabled gallery from regular users while retaining administrators', () => {
+    const settings = { pelican_showcase_enabled: true, pelican_showcase_admin_only: true }
+    expect(canViewPelicanShowcase(settings, false)).toBe(false)
+    expect(canViewPelicanShowcase(settings, true)).toBe(true)
   })
 })
 

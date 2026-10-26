@@ -40,6 +40,10 @@
                 <Toggle v-model="draft.enabled" data-testid="pelican-showcase-enabled" />
               </div>
               <div class="enable-row mt-5">
+                <span><strong>{{ t('pelicanTests.showcase.adminOnly') }}</strong><small>{{ t('pelicanTests.showcase.adminOnlyHint') }}</small></span>
+                <Toggle v-model="draft.admin_only" :aria-label="t('pelicanTests.showcase.adminOnly')" data-testid="pelican-showcase-admin-only" />
+              </div>
+              <div class="enable-row mt-5">
                 <span><strong>{{ t('pelicanTests.showcase.apiEnabled') }}</strong><small>{{ t('pelicanTests.showcase.apiEnabledHint') }}</small></span>
                 <Toggle v-model="draft.api_enabled" :aria-label="t('pelicanTests.showcase.apiEnabled')" data-testid="pelican-showcase-api-enabled" />
               </div>
