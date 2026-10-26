@@ -634,18 +634,39 @@
               />
             </template>
           </Select>
-          <fieldset class="mt-3 space-y-2" data-testid="key-additional-groups">
-            <legend class="input-label">{{ t('keys.additionalGroups') }}</legend>
+          <fieldset class="mt-3 space-y-2" data-testid="key-group-priority">
+            <legend class="input-label">{{ t('keys.groupPriority') }}</legend>
             <p class="input-hint">{{ t('keys.multiGroupHint') }}</p>
-            <div class="max-h-48 space-y-2 overflow-y-auto">
-              <label v-for="option in groupOptions.filter(item => item.value !== null && item.value !== formData.group_id)"
-                :key="String(option.value)" class="flex items-center gap-2 text-sm">
-                <input v-model="formData.group_ids" type="checkbox" :value="option.value" :disabled="!formData.group_ids.includes(Number(option.value)) && selectedFormGroupIDs().length >= 20" />
-                <GroupBadge :name="option.label" :platform="option.platform"
-                  :subscription-type="option.subscriptionType" :rate-multiplier="option.rate"
-                  :user-rate-multiplier="option.userRate" />
-              </label>
-            </div>
+            <ol class="space-y-2">
+              <li v-for="(id, index) in selectedFormGroupIDs()" :key="id"
+                :data-group-id="id" class="flex items-center gap-2 rounded-lg border border-gray-200 p-2 dark:border-dark-600">
+                <span class="w-5 shrink-0 text-center text-sm text-gray-500">{{ index + 1 }}</span>
+                <GroupBadge v-if="groupOptions.find(option => option.value === id)"
+                  class="min-w-0 flex-1" v-bind="priorityGroupBadgeProps(id)" />
+                <span v-else class="min-w-0 flex-1 text-sm">{{ t('keys.unavailableGroup', { id }) }}</span>
+                <button type="button" class="btn btn-ghost p-1 disabled:opacity-30"
+                  :aria-label="t('keys.moveGroupUp')" :title="t('keys.moveGroupUp')"
+                  :disabled="index === 0" data-testid="group-move-up" @click="moveFormGroup(index, -1)">
+                  <Icon name="arrowUp" size="sm" />
+                </button>
+                <button type="button" class="btn btn-ghost p-1 disabled:opacity-30"
+                  :aria-label="t('keys.moveGroupDown')" :title="t('keys.moveGroupDown')"
+                  :disabled="index === selectedFormGroupIDs().length - 1" data-testid="group-move-down" @click="moveFormGroup(index, 1)">
+                  <Icon name="arrowDown" size="sm" />
+                </button>
+                <button type="button" class="btn btn-ghost p-1"
+                  :aria-label="t('common.remove')" :title="t('common.remove')"
+                  data-testid="group-remove" @click="removeFormGroup(id)">
+                  <Icon name="x" size="sm" />
+                </button>
+              </li>
+            </ol>
+            <Select :model-value="null" :options="availablePriorityGroupOptions"
+              :placeholder="t('keys.addGroup')" :aria-label="t('keys.addGroup')"
+              :searchable="true" :search-placeholder="t('keys.searchGroup')"
+              :disabled="formData.group_id === null || selectedFormGroupIDs().length >= 5"
+              data-testid="key-add-group" @update:model-value="addFormGroup" />
+            <p v-if="selectedFormGroupIDs().length > 5" class="text-sm text-red-500" role="alert">{{ t('keys.groupLimitExceeded') }}</p>
           </fieldset>
         </div>
 
@@ -1749,10 +1770,52 @@ const formGroupOptions = computed(() => showEditModal.value
   : groupOptions.value.filter((group) => getKeyGroupProvider(group.platform) === createProvider.value)
 )
 
+const selectedFormGroupIDs = (): number[] => [...new Set([
+  ...(formData.value.group_id === null ? [] : [formData.value.group_id]),
+  ...formData.value.group_ids.filter(id => id !== formData.value.group_id)
+])]
+
+const availablePriorityGroupOptions = computed(() =>
+  groupOptions.value.filter(option => !selectedFormGroupIDs().includes(option.value))
+)
+
+const priorityGroupBadgeProps = (id: number) => {
+  const option = groupOptions.value.find(option => option.value === id)!
+  return {
+    name: option.label, platform: option.platform, subscriptionType: option.subscriptionType,
+    rateMultiplier: option.rate, userRateMultiplier: option.userRate,
+    peakRateEnabled: option.peakRateEnabled, peakStart: option.peakStart,
+    peakEnd: option.peakEnd, peakRateMultiplier: option.peakRateMultiplier,
+  }
+}
+
+const setFormGroupIDs = (ids: number[]) => {
+  formData.value.group_id = ids[0] ?? null
+  formData.value.group_ids = ids.slice(1)
+  const primary = groupOptions.value.find(option => option.value === ids[0])
+  if (primary && !showEditModal.value) createProvider.value = getKeyGroupProvider(primary.platform)
+}
+
+const addFormGroup = (id: number | string | boolean | null) => {
+  if (typeof id !== 'number' || formData.value.group_id === null || selectedFormGroupIDs().length >= 5) return
+  if (!availablePriorityGroupOptions.value.some(option => option.value === id)) return
+  setFormGroupIDs([...selectedFormGroupIDs(), id])
+}
+
+const moveFormGroup = (index: number, offset: number) => {
+  const ids = selectedFormGroupIDs()
+  const target = index + offset
+  if (target < 0 || target >= ids.length) return
+  ;[ids[index], ids[target]] = [ids[target], ids[index]]
+  setFormGroupIDs(ids)
+}
+
+const removeFormGroup = (id: number) => setFormGroupIDs(selectedFormGroupIDs().filter(value => value !== id))
+
 const selectCreateProvider = (provider: KeyGroupProvider) => {
   if (createProvider.value === provider) return
   createProvider.value = provider
-  formData.value.group_id = null
+  setFormGroupIDs([])
 }
 
 // Also handles groups arriving after the create dialog has already opened.
@@ -1933,11 +1996,6 @@ const handleSort = (key: string, order: 'asc' | 'desc') => {
   loadApiKeys()
 }
 
-const selectedFormGroupIDs = (): number[] => [...new Set([
-  ...(formData.value.group_id === null ? [] : [formData.value.group_id]),
-  ...formData.value.group_ids.filter(id => id !== formData.value.group_id)
-])]
-
 const editKey = (key: ApiKey) => {
   selectedKey.value = key
   const hasIPRestriction = (key.ip_whitelist?.length > 0) || (key.ip_blacklist?.length > 0)
@@ -2056,6 +2114,11 @@ const handleSubmit = async () => {
   // Validate group_id is required
   if (formData.value.group_id === null) {
     appStore.showError(t('keys.groupRequired'))
+    return
+  }
+
+  if (selectedFormGroupIDs().length > 5) {
+    appStore.showError(t('keys.groupLimitExceeded'))
     return
   }
 

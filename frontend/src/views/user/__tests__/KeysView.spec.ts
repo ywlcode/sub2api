@@ -1079,6 +1079,85 @@ describe('user KeysView column settings', () => {
     })
   })
 
+  describe('group billing priority', () => {
+    const availableGroups = [42, 7, 15, 3, 9, 11].map((id, index) => ({
+      id, name: `Priority group ${id}`, platform: index === 1 ? 'anthropic' : 'openai',
+      rate_multiplier: 1, subscription_type: 'standard',
+    }))
+    const selectedIds = (wrapper: VueWrapper) => wrapper
+      .findAll('[data-testid="key-group-priority"] li').map(row => Number(row.attributes('data-group-id')))
+    const addGroup = async (wrapper: VueWrapper, id: number) => {
+      wrapper.getComponent('[data-testid="key-add-group"]').vm.$emit('update:modelValue', id)
+      await nextTick()
+    }
+
+    beforeEach(() => getAvailableGroups.mockResolvedValue(availableGroups))
+
+    it('starts with no extra groups, enforces five unique groups and submits the reordered priority', async () => {
+      const wrapper = await mountView()
+      await wrapper.get('[data-tour="keys-create-btn"]').trigger('click')
+      expect(wrapper.find('[data-testid="key-additional-groups"]').exists()).toBe(false)
+      expect(selectedIds(wrapper)).toEqual([])
+      await wrapper.get('[data-tour="key-form-name"]').setValue('Ordered key')
+      await wrapper.getComponent('[data-tour="key-form-group"]').vm.$emit('update:modelValue', 42)
+      await nextTick()
+      expect(selectedIds(wrapper)).toEqual([42])
+      for (const id of [7, 15, 3, 9]) await addGroup(wrapper, id)
+      const addSelect = wrapper.getComponent('[data-testid="key-add-group"]')
+      expect(addSelect.attributes('disabled')).toBeDefined()
+      expect(addSelect.props('options').map((option: { value: number }) => option.value)).toEqual([11])
+      await addGroup(wrapper, 11)
+      await addGroup(wrapper, 7)
+      expect(selectedIds(wrapper)).toEqual([42, 7, 15, 3, 9])
+      expect(wrapper.get('[data-group-id="42"] [data-testid="group-move-up"]').attributes('disabled')).toBeDefined()
+      expect(wrapper.get('[data-group-id="9"] [data-testid="group-move-down"]').attributes('disabled')).toBeDefined()
+      await wrapper.get('[data-group-id="7"] [data-testid="group-move-up"]').trigger('click')
+      expect(selectedIds(wrapper)).toEqual([7, 42, 15, 3, 9])
+      expect(wrapper.getComponent('[data-tour="key-form-group"]').props('modelValue')).toBe(7)
+      expect(wrapper.get<HTMLInputElement>('input[name="key-provider"][value="anthropic"]').element.checked).toBe(true)
+      await wrapper.get('[data-group-id="42"] [data-testid="group-remove"]').trigger('click')
+      await addGroup(wrapper, 11)
+      await wrapper.get('#key-form').trigger('submit')
+      await flushPromises()
+      expect(createKey).toHaveBeenCalledOnce()
+      expect(createKey.mock.calls[0][1]).toBe(7)
+      expect(createKey.mock.calls[0][9]).toEqual([7, 15, 3, 9, 11])
+      await wrapper.get('[data-tour="keys-create-btn"]').trigger('click')
+      expect(selectedIds(wrapper)).toEqual([])
+    })
+
+    it('loads the saved order, promotes the next group on removal and updates billing priority', async () => {
+      setKeys({ ...createApiKey(), group_id: 3, group_ids: [3, 42, 7] })
+      const wrapper = await mountView()
+      await getButtonByText(wrapper, 'common.edit').trigger('click')
+      await flushPromises()
+      expect(selectedIds(wrapper)).toEqual([3, 42, 7])
+      await wrapper.get('[data-group-id="3"] [data-testid="group-remove"]').trigger('click')
+      expect(wrapper.getComponent('[data-tour="key-form-group"]').props('modelValue')).toBe(42)
+      await wrapper.get('[data-group-id="42"] [data-testid="group-move-down"]').trigger('click')
+      await wrapper.get('#key-form').trigger('submit')
+      await flushPromises()
+      expect(updateKey).toHaveBeenCalledWith(1, expect.objectContaining({ group_id: 7, group_ids: [7, 42] }))
+    })
+
+    it('preserves old keys with more than five groups until the user removes the extras', async () => {
+      const ids = [42, 11, 9, 3, 15, 7]
+      setKeys({ ...createApiKey(), group_id: 42, group_ids: ids })
+      const wrapper = await mountView()
+      await getButtonByText(wrapper, 'common.edit').trigger('click')
+      await flushPromises()
+      expect(selectedIds(wrapper)).toEqual(ids)
+      expect(wrapper.get('[data-testid="key-group-priority"] [role="alert"]').text()).toBe('keys.groupLimitExceeded')
+      await wrapper.get('#key-form').trigger('submit')
+      expect(updateKey).not.toHaveBeenCalled()
+      expect(showError).toHaveBeenCalledWith('keys.groupLimitExceeded')
+      await wrapper.get('[data-group-id="7"] [data-testid="group-remove"]').trigger('click')
+      await wrapper.get('#key-form').trigger('submit')
+      await flushPromises()
+      expect(updateKey).toHaveBeenCalledWith(1, expect.objectContaining({ group_id: 42, group_ids: ids.slice(0, 5) }))
+    })
+  })
+
   describe('create provider selection', () => {
     const platforms = ['anthropic', 'openai', 'kimi', 'zhipu', 'deepseek', 'minimax', 'gemini', 'grok', 'antigravity', 'composite', 'opencode_go', 'typesafe']
     const availableGroups = platforms.map((platform, index) => ({

@@ -757,7 +757,8 @@ func (r *apiKeyRepository) ClearGroupIDByGroupID(ctx context.Context, groupID in
 			DELETE FROM api_key_groups WHERE group_id = $1
 		)
 		UPDATE api_keys k SET group_id = (
-			SELECT MIN(g.group_id) FROM api_key_groups g WHERE g.api_key_id = k.id AND g.group_id <> $1
+			SELECT g.group_id FROM api_key_groups g WHERE g.api_key_id = k.id AND g.group_id <> $1
+			ORDER BY g.priority, g.group_id LIMIT 1
 		), updated_at = NOW()
 		WHERE k.group_id = $1 AND k.deleted_at IS NULL`, groupID)
 	if err != nil {
@@ -772,16 +773,19 @@ func (r *apiKeyRepository) UpdateGroupIDByUserAndGroup(ctx context.Context, user
 	client := clientFromContext(ctx, r.client)
 	res, err := client.ExecContext(ctx, `
 		WITH candidates AS MATERIALIZED (
-			SELECT k.id, k.group_id FROM api_keys k
+			SELECT k.id, k.group_id,
+				(SELECT g.priority FROM api_key_groups g WHERE g.api_key_id = k.id AND g.group_id = $2) AS priority
+			FROM api_keys k
 			WHERE k.user_id = $1 AND k.deleted_at IS NULL AND
 			(k.group_id = $2 OR EXISTS (SELECT 1 FROM api_key_groups g WHERE g.api_key_id = k.id AND g.group_id = $2))
 			FOR UPDATE
 		), removed AS (
 			DELETE FROM api_key_groups g USING candidates c WHERE g.api_key_id = c.id AND g.group_id = $2
 		), inserted AS (
-			INSERT INTO api_key_groups (api_key_id, group_id)
-			SELECT id, $3 FROM candidates WHERE group_id IS DISTINCT FROM $2 AND group_id IS DISTINCT FROM $3
-			ON CONFLICT DO NOTHING
+			INSERT INTO api_key_groups (api_key_id, group_id, priority)
+			SELECT id, $3, priority FROM candidates WHERE group_id IS DISTINCT FROM $2 AND group_id IS DISTINCT FROM $3
+			ON CONFLICT (api_key_id, group_id) DO UPDATE
+			SET priority = LEAST(api_key_groups.priority, EXCLUDED.priority)
 		)
 		UPDATE api_keys k SET group_id = CASE WHEN k.group_id = $2 THEN $3 ELSE k.group_id END, updated_at = NOW()
 		WHERE k.id IN (SELECT id FROM candidates)`, userID, oldGroupID, newGroupID)
