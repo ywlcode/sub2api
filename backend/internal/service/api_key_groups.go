@@ -161,34 +161,30 @@ func (s *APIKeyService) SelectRequestGroup(ctx context.Context, key *APIKey, mod
 			continue
 		}
 		if group.IsSubscriptionType() {
-			if s.userSubRepo == nil {
+			if subscriptions == nil && s.userSubRepo == nil {
 				continue
 			}
-			sub, subErr := s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, key.UserID, id)
+			var sub *UserSubscription
+			var subErr error
+			if subscriptions != nil {
+				sub, subErr = subscriptions.GetActiveSubscription(ctx, key.UserID, id)
+			} else {
+				sub, subErr = s.userSubRepo.GetActiveByUserIDAndGroupID(ctx, key.UserID, id)
+			}
 			if subErr != nil {
 				if !errors.Is(subErr, ErrSubscriptionNotFound) && !errors.Is(subErr, ErrSubscriptionExpired) {
 					return nil, subErr
 				}
 				continue
 			}
+			if !sub.IsActive() {
+				continue
+			}
 			if checkBilling && subscriptions != nil {
-				// Validation adjusts expired windows in memory; normal auth performs
-				// authoritative maintenance after the group is selected.
-				copySub := *sub
-				_, subErr := subscriptions.ValidateAndCheckLimits(&copySub, group)
-				if subErr == nil {
-					// The shared zero-cost check permits usage equal to the limit.
-					// Routing a new paid request requires quota remaining.
-					switch {
-					case group.HasDailyLimit() && copySub.DailyUsageUSD >= *group.DailyLimitUSD:
-						subErr = ErrDailyLimitExceeded
-					case group.HasWeeklyLimit() && copySub.WeeklyUsageUSD >= *group.WeeklyLimitUSD:
-						subErr = ErrWeeklyLimitExceeded
-					case group.HasMonthlyLimit() && copySub.MonthlyUsageUSD >= *group.MonthlyLimitUSD:
-						subErr = ErrMonthlyLimitExceeded
+				if subErr := subscriptions.checkRequestGroupSubscription(ctx, sub, group); subErr != nil {
+					if errors.Is(subErr, ErrBillingServiceUnavailable) {
+						return nil, subErr
 					}
-				}
-				if subErr != nil {
 					lastErr = subErr
 					continue
 				}
@@ -234,4 +230,37 @@ func (s *APIKeyService) SelectRequestGroup(ctx context.Context, key *APIKey, mod
 		return nil, infraerrors.Forbidden("NO_ELIGIBLE_API_KEY_GROUP", "No selected group permits this request or has usable billing entitlement")
 	}
 	return nil, infraerrors.ServiceUnavailable("NO_AVAILABLE_API_KEY_GROUP", "No selected group currently has accounts available for this model")
+}
+
+// checkRequestGroupSubscription reuses the normal auth metadata cache and live
+// billing usage cache. L1 usage alone may lag behind completed requests.
+func (s *SubscriptionService) checkRequestGroupSubscription(ctx context.Context, sub *UserSubscription, group *Group) error {
+	copySub := *sub
+	needsMaintenance, err := s.ValidateAndCheckLimits(&copySub, group)
+	if errors.Is(err, ErrSubscriptionExpired) || errors.Is(err, ErrSubscriptionSuspended) {
+		return err
+	}
+	if s.billingCacheService != nil {
+		if needsMaintenance {
+			// Redis usage has no window anchors. Advance expired windows before
+			// consulting it so an exhausted old window cannot hide renewed quota.
+			if _, err := s.EnsureWindowMaintenance(ctx, sub); err != nil {
+				return ErrBillingServiceUnavailable.WithCause(err)
+			}
+		}
+		return s.billingCacheService.checkSubscriptionEligibility(ctx, sub.UserID, group, sub)
+	}
+	if err != nil {
+		return err
+	}
+	// Without a billing cache, retain the existing in-memory quota checks.
+	switch {
+	case group.HasDailyLimit() && copySub.DailyUsageUSD >= *group.DailyLimitUSD:
+		return ErrDailyLimitExceeded
+	case group.HasWeeklyLimit() && copySub.WeeklyUsageUSD >= *group.WeeklyLimitUSD:
+		return ErrWeeklyLimitExceeded
+	case group.HasMonthlyLimit() && copySub.MonthlyUsageUSD >= *group.MonthlyLimitUSD:
+		return ErrMonthlyLimitExceeded
+	}
+	return nil
 }
