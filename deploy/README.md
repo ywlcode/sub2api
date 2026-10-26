@@ -4,6 +4,8 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 
 网页注册额度、登录失败封禁及可信代理升级要求见 [网页认证 IP 防护](AUTH_IP_GUARD.md)。
 
+自用分支同步上游、构建镜像和更新服务器的流程见 [dev-ywlcode 分支维护与 Docker 发布](DEV_YWLCODE.md)。
+
 ## API Key 并发槽位 TTL 与升级切换
 
 `gateway.api_key_slot_ttl_seconds` 只调整共享 Redis 实现的普通 API Key active slots。默认 `0` 继承 `gateway.concurrency_slot_ttl_minutes`；保持默认值升级不会缩短原租约。显式值至少为 30 秒，120 秒可作为运维评估起点；30 秒下限是配置策略，未经过负载测量，不构成安全 SLA。account/user 槽位、Live 自身租约、WS ingress 租约及 regional concurrency authority 继续沿用各自期限。
