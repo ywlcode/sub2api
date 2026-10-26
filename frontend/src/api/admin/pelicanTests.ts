@@ -85,6 +85,7 @@ export interface PelicanGroupTestPlanInput {
 export interface PelicanShowcaseSettings {
   enabled: boolean
   api_enabled: boolean
+  admin_only: boolean
   max_items: number
   auto_cleanup: boolean
   retention_days: number

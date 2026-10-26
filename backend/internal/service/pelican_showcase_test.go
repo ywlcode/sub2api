@@ -19,12 +19,15 @@ func (s *showcaseSettingsStub) GetPelicanShowcaseRuntime(context.Context) (Pelic
 	return s.runtime, s.err
 }
 
-func (s *showcaseSettingsStub) UpdatePelicanShowcaseSettings(_ context.Context, enabled bool, cfg PelicanShowcaseConfig, apiEnabled *bool) (PelicanShowcaseRuntime, error) {
+func (s *showcaseSettingsStub) UpdatePelicanShowcaseSettings(_ context.Context, enabled bool, cfg PelicanShowcaseConfig, apiEnabled, adminOnly *bool) (PelicanShowcaseRuntime, error) {
 	if s.err != nil {
 		return PelicanShowcaseRuntime{}, s.err
 	}
 	if apiEnabled != nil {
 		s.runtime.APIEnabled = *apiEnabled
+	}
+	if adminOnly != nil {
+		s.runtime.AdminOnly = *adminOnly
 	}
 	s.runtime.Enabled, s.runtime.Config = enabled, cfg
 	s.saved = append(s.saved, s.runtime)
@@ -154,7 +157,7 @@ func TestPelicanShowcaseSettingsGoThroughSettingService(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, runtime.Enabled)
 
-	runtime, err = svc.UpdateSettings(ctx, false, PelicanShowcaseConfig{MaxItems: 30, RetentionDays: 9}, nil)
+	runtime, err = svc.UpdateSettings(ctx, false, PelicanShowcaseConfig{MaxItems: 30, RetentionDays: 9}, nil, nil)
 	require.NoError(t, err)
 	require.Equal(t, PelicanShowcaseRuntime{APIEnabled: true, Config: PelicanShowcaseConfig{MaxItems: 30, RetentionDays: 9}}, runtime)
 	require.Len(t, settings.saved, 1)
