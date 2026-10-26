@@ -350,7 +350,7 @@ func (h *PelicanShowcaseHandler) allowPublicRead(c *gin.Context) bool {
 			"PELICAN_SHOWCASE_API_DISABLED", nil)
 		return false
 	}
-	return true
+	return allowPelicanShowcaseViewer(c, runtime)
 }
 
 func writePelicanPublicBody(c *gin.Context, body *pelicanPublicBody) {

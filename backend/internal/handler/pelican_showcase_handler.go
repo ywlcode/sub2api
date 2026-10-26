@@ -2,6 +2,7 @@ package handler
 
 import (
 	"log/slog"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -26,6 +27,9 @@ func NewPelicanShowcaseHandler(showcase *service.PelicanShowcaseService) *Pelica
 // List GET /api/v1/pelican-showcase
 // A disabled gallery answers enabled=false with no groups rather than an error.
 func (h *PelicanShowcaseHandler) List(c *gin.Context) {
+	if !h.allowGalleryRead(c) {
+		return
+	}
 	view, err := h.showcase.View(c.Request.Context(), time.Now())
 	if err != nil {
 		response.InternalError(c, "Failed to load pelican showcase")
@@ -37,6 +41,9 @@ func (h *PelicanShowcaseHandler) List(c *gin.Context) {
 // GetItem GET /api/v1/pelican-showcase/items/:id
 // Returns the raw model output; the frontend renders it in a sandboxed iframe.
 func (h *PelicanShowcaseHandler) GetItem(c *gin.Context) {
+	if !h.allowGalleryRead(c) {
+		return
+	}
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {
 		response.BadRequest(c, "invalid item id")
@@ -69,6 +76,7 @@ func (h *PelicanShowcaseHandler) DeleteItem(c *gin.Context) {
 type pelicanShowcaseSettings struct {
 	Enabled       bool `json:"enabled"`
 	APIEnabled    bool `json:"api_enabled"`
+	AdminOnly     bool `json:"admin_only"`
 	MaxItems      int  `json:"max_items"`
 	AutoCleanup   bool `json:"auto_cleanup"`
 	RetentionDays int  `json:"retention_days"`
@@ -78,6 +86,7 @@ func pelicanShowcaseSettingsFrom(runtime service.PelicanShowcaseRuntime) pelican
 	return pelicanShowcaseSettings{
 		Enabled:       runtime.Enabled,
 		APIEnabled:    runtime.APIEnabled,
+		AdminOnly:     runtime.AdminOnly,
 		MaxItems:      runtime.Config.MaxItems,
 		AutoCleanup:   runtime.Config.AutoCleanup,
 		RetentionDays: runtime.Config.RetentionDays,
@@ -99,6 +108,7 @@ func (h *PelicanShowcaseHandler) UpdateSettings(c *gin.Context) {
 	var req struct {
 		pelicanShowcaseSettings
 		APIEnabled *bool `json:"api_enabled"`
+		AdminOnly  *bool `json:"admin_only"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "invalid request body")
@@ -108,7 +118,7 @@ func (h *PelicanShowcaseHandler) UpdateSettings(c *gin.Context) {
 		MaxItems:      req.MaxItems,
 		AutoCleanup:   req.AutoCleanup,
 		RetentionDays: req.RetentionDays,
-	}, req.APIEnabled)
+	}, req.APIEnabled, req.AdminOnly)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -120,6 +130,30 @@ func (h *PelicanShowcaseHandler) UpdateSettings(c *gin.Context) {
 	if req.APIEnabled != nil {
 		changed = append(changed, service.SettingKeyPelicanShowcaseAPIEnabled)
 	}
+	if req.AdminOnly != nil {
+		changed = append(changed, service.SettingKeyPelicanShowcaseAdminOnly)
+	}
 	slog.Info("settings updated", "audit", true, "user_id", subject.UserID, "role", role, "changed", changed)
 	response.Success(c, pelicanShowcaseSettingsFrom(runtime))
+}
+
+func (h *PelicanShowcaseHandler) allowGalleryRead(c *gin.Context) bool {
+	c.Header("Cache-Control", "no-store")
+	runtime, err := h.showcase.Settings(c.Request.Context())
+	if err != nil {
+		response.InternalError(c, "Failed to load pelican showcase settings")
+		return false
+	}
+	return allowPelicanShowcaseViewer(c, runtime)
+}
+
+// Both JWT and API-key authentication set this role from the authenticated user.
+// Check before reading gallery data or serving cached bodies, including 304/HEAD.
+func allowPelicanShowcaseViewer(c *gin.Context, runtime service.PelicanShowcaseRuntime) bool {
+	role, _ := middleware.GetUserRoleFromContext(c)
+	if runtime.AdminOnly && role != service.RoleAdmin {
+		response.ErrorWithDetails(c, http.StatusForbidden, "Pelican showcase is restricted to administrators", "PELICAN_SHOWCASE_ADMIN_ONLY", nil)
+		return false
+	}
+	return true
 }

@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -19,6 +21,37 @@ import (
 
 type showcaseSettingRepo struct {
 	toggleSettingRepo
+}
+
+func TestPelicanShowcaseHandler_AdminOnlyProtectsListAndHTML(t *testing.T) {
+	for _, role := range []string{"", service.RoleUser, service.RoleObserver, service.RoleAdmin} {
+		for _, item := range []bool{false, true} {
+			t.Run(role+strconv.FormatBool(item), func(t *testing.T) {
+				repo := &showcaseHandlerRepo{groups: []*service.PelicanShowcaseGroup{{ID: 3, Name: "admin-gallery"}},
+					item: &service.PelicanShowcaseItem{ID: 7, GroupID: 3, ResponseText: "<svg>admin-only-artwork</svg>"}}
+				h := newShowcaseHandler(map[string]string{service.SettingKeyPelicanShowcaseEnabled: "true", service.SettingKeyPelicanShowcaseAdminOnly: "true"}, repo)
+				w := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(w)
+				c.Set(string(middleware.ContextKeyUserRole), role)
+				c.Params = gin.Params{{Key: "id", Value: "7"}}
+				c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/pelican-showcase", nil)
+				if item {
+					h.GetItem(c)
+				} else {
+					h.List(c)
+				}
+				if role == service.RoleAdmin {
+					require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+				} else {
+					require.Equal(t, http.StatusForbidden, w.Code)
+					require.Contains(t, w.Body.String(), "PELICAN_SHOWCASE_ADMIN_ONLY")
+					require.NotContains(t, w.Body.String(), "admin-gallery")
+					require.NotContains(t, w.Body.String(), "admin-only-artwork")
+				}
+				require.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+			})
+		}
+	}
 }
 
 func (r *showcaseSettingRepo) GetMultiple(_ context.Context, keys []string) (map[string]string, error) {
@@ -150,7 +183,7 @@ func TestPelicanShowcaseHandler_AdminSettingsRoundTrip(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/admin/pelican-showcase/settings", nil)
 	h.GetSettings(c)
 	require.Equal(t, http.StatusOK, w.Code)
-	require.JSONEq(t, `{"code":0,"message":"success","data":{"enabled":false,"api_enabled":true,"max_items":10,"auto_cleanup":false,"retention_days":7}}`, w.Body.String())
+	require.JSONEq(t, `{"code":0,"message":"success","data":{"enabled":false,"api_enabled":true,"admin_only":false,"max_items":10,"auto_cleanup":false,"retention_days":7}}`, w.Body.String())
 
 	put := func(body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
@@ -162,7 +195,7 @@ func TestPelicanShowcaseHandler_AdminSettingsRoundTrip(t *testing.T) {
 	}
 	w = put(`{"enabled":true,"max_items":30,"auto_cleanup":true,"retention_days":14}`)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	require.JSONEq(t, `{"code":0,"message":"success","data":{"enabled":true,"api_enabled":true,"max_items":30,"auto_cleanup":true,"retention_days":14}}`, w.Body.String())
+	require.JSONEq(t, `{"code":0,"message":"success","data":{"enabled":true,"api_enabled":true,"admin_only":false,"max_items":30,"auto_cleanup":true,"retention_days":14}}`, w.Body.String())
 	require.Equal(t, "true", values[service.SettingKeyPelicanShowcaseEnabled])
 	require.JSONEq(t, `{"max_items":30,"auto_cleanup":true,"retention_days":14}`, values[service.SettingKeyPelicanShowcaseConfig],
 		"the legacy group list is dropped on save")
@@ -176,9 +209,16 @@ func TestPelicanShowcaseHandler_AdminSettingsRoundTrip(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
 	require.Contains(t, w.Body.String(), `"api_enabled":false`)
 	require.Equal(t, "false", values[service.SettingKeyPelicanShowcaseAPIEnabled], "an omitted API switch preserves its saved value")
+	w = put(`{"enabled":true,"admin_only":true,"max_items":30,"auto_cleanup":true,"retention_days":14}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"admin_only":true`)
+	require.Equal(t, "true", values[service.SettingKeyPelicanShowcaseAdminOnly])
+	w = put(`{"enabled":true,"max_items":30,"auto_cleanup":true,"retention_days":14}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	require.Contains(t, w.Body.String(), `"admin_only":true`, "older clients preserve the saved audience")
 
 	saved := values[service.SettingKeyPelicanShowcaseConfig]
-	for _, bad := range []string{`{"max_items":101}`, `{"retention_days":91}`, `{"api_enabled":"false"}`, `not json`} {
+	for _, bad := range []string{`{"max_items":101}`, `{"retention_days":91}`, `{"api_enabled":"false"}`, `{"admin_only":"false"}`, `not json`} {
 		w = put(bad)
 		require.Equal(t, http.StatusBadRequest, w.Code, bad)
 		require.Equal(t, saved, values[service.SettingKeyPelicanShowcaseConfig], bad)

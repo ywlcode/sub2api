@@ -78,12 +78,12 @@ func TestUpdatePelicanShowcaseAPISwitchPreservesOmittedSetting(t *testing.T) {
 		repo := &showcaseRuntimeSettingRepo{values: initial}
 		svc := &SettingService{settingRepo: repo}
 		before := pelicanShowcaseAPIEnabled(initial)
-		runtime, err := svc.UpdatePelicanShowcaseSettings(context.Background(), true, PelicanShowcaseConfig{}, nil)
+		runtime, err := svc.UpdatePelicanShowcaseSettings(context.Background(), true, PelicanShowcaseConfig{}, nil, nil)
 		require.NoError(t, err)
 		require.Equal(t, before, runtime.APIEnabled)
 		require.NotContains(t, repo.saved, SettingKeyPelicanShowcaseAPIEnabled)
 		for _, enabled := range []bool{false, true} {
-			runtime, err = svc.UpdatePelicanShowcaseSettings(context.Background(), true, PelicanShowcaseConfig{}, &enabled)
+			runtime, err = svc.UpdatePelicanShowcaseSettings(context.Background(), true, PelicanShowcaseConfig{}, &enabled, nil)
 			require.NoError(t, err)
 			require.Equal(t, enabled, runtime.APIEnabled)
 			require.Equal(t, enabled, pelicanShowcaseAPIEnabled(repo.values))
@@ -93,7 +93,43 @@ func TestUpdatePelicanShowcaseAPISwitchPreservesOmittedSetting(t *testing.T) {
 
 func TestUpdatePelicanShowcaseOmittedAPISwitchReadFailureDoesNotWrite(t *testing.T) {
 	repo := &showcaseRuntimeSettingRepo{readErr: errors.New("settings unavailable")}
-	_, err := (&SettingService{settingRepo: repo}).UpdatePelicanShowcaseSettings(context.Background(), true, PelicanShowcaseConfig{}, nil)
+	_, err := (&SettingService{settingRepo: repo}).UpdatePelicanShowcaseSettings(context.Background(), true, PelicanShowcaseConfig{}, nil, nil)
 	require.ErrorIs(t, err, repo.readErr)
 	require.Nil(t, repo.saved)
+}
+
+func TestPelicanShowcaseAdminOnlyDefaultsAndFailsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		values map[string]string
+		want   bool
+	}{
+		{"unset", map[string]string{}, false},
+		{"public", map[string]string{SettingKeyPelicanShowcaseAdminOnly: "false"}, false},
+		{"restricted", map[string]string{SettingKeyPelicanShowcaseAdminOnly: "true"}, true},
+		{"invalid", map[string]string{SettingKeyPelicanShowcaseAdminOnly: "invalid"}, true},
+		{"empty", map[string]string{SettingKeyPelicanShowcaseAdminOnly: ""}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &SettingService{settingRepo: &showcaseRuntimeSettingRepo{values: tc.values}}
+			runtime, err := svc.GetPelicanShowcaseRuntime(context.Background())
+			require.NoError(t, err)
+			require.Equal(t, tc.want, runtime.AdminOnly)
+		})
+	}
+}
+
+func TestUpdatePelicanShowcaseAdminOnlyPreservesOmissionAndAPISwitch(t *testing.T) {
+	repo := &showcaseRuntimeSettingRepo{values: map[string]string{SettingKeyPelicanShowcaseAPIEnabled: "false"}}
+	svc := &SettingService{settingRepo: repo}
+	for _, restricted := range []bool{true, false} {
+		runtime, err := svc.UpdatePelicanShowcaseSettings(context.Background(), true, PelicanShowcaseConfig{}, nil, &restricted)
+		require.NoError(t, err)
+		require.Equal(t, restricted, runtime.AdminOnly)
+		require.False(t, runtime.APIEnabled)
+		runtime, err = svc.UpdatePelicanShowcaseSettings(context.Background(), true, PelicanShowcaseConfig{}, nil, nil)
+		require.NoError(t, err)
+		require.Equal(t, restricted, runtime.AdminOnly)
+		require.NotContains(t, repo.saved, SettingKeyPelicanShowcaseAdminOnly)
+	}
 }

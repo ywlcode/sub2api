@@ -238,6 +238,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyChannelMonitorHideUserRanking,
 		SettingKeyAvailableChannelsEnabled,
 		SettingKeyPelicanShowcaseEnabled,
+		SettingKeyPelicanShowcaseAdminOnly,
 		SettingKeySubscriptionEnabled,
 		SettingKeyModelPlazaEnabled,
 		SettingKeyModelPlazaRequireAuth,
@@ -376,6 +377,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 
 		AvailableChannelsEnabled: settings[SettingKeyAvailableChannelsEnabled] == "true",
 		PelicanShowcaseEnabled:   settings[SettingKeyPelicanShowcaseEnabled] == "true",
+		PelicanShowcaseAdminOnly: pelicanShowcaseAdminOnly(settings),
 
 		SubscriptionEnabled: !isFalseSettingValue(settings[SettingKeySubscriptionEnabled]),
 
@@ -704,6 +706,7 @@ type PublicSettingsInjectionPayload struct {
 	ChannelMonitorShowQuota               bool `json:"channel_monitor_show_quota"`
 	AvailableChannelsEnabled              bool `json:"available_channels_enabled"`
 	PelicanShowcaseEnabled                bool `json:"pelican_showcase_enabled"`
+	PelicanShowcaseAdminOnly              bool `json:"pelican_showcase_admin_only"`
 	SubscriptionEnabled                   bool `json:"subscription_enabled"`
 	ModelPlazaEnabled                     bool `json:"model_plaza_enabled"`
 	ModelPlazaRequireAuth                 bool `json:"model_plaza_require_auth"`
@@ -796,6 +799,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		ChannelMonitorHideUserRanking:         settings.ChannelMonitorHideUserRanking,
 		AvailableChannelsEnabled:              settings.AvailableChannelsEnabled,
 		PelicanShowcaseEnabled:                settings.PelicanShowcaseEnabled,
+		PelicanShowcaseAdminOnly:              settings.PelicanShowcaseAdminOnly,
 		SubscriptionEnabled:                   settings.SubscriptionEnabled,
 		ModelPlazaEnabled:                     settings.ModelPlazaEnabled,
 		ModelPlazaRequireAuth:                 settings.ModelPlazaRequireAuth,
