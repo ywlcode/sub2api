@@ -60,6 +60,9 @@ func buildContentModerationViolationEmailBody(siteName string, log *ContentModer
 	statusBlock := ""
 	if log.AutoBanned {
 		statusBlock = `<div style="margin-top:24px;padding:18px 20px;border-radius:10px;background:#ff3b30;color:#fff;font-size:18px;font-weight:700;text-align:center;line-height:1.6;">账户当前处于封禁状态，所有 API 请求将被拒绝</div>`
+		if log.BanScope == ContentModerationBanScopeOpenAI {
+			statusBlock = `<p>OpenAI 平台访问已受限；仍可登录账号并使用其他平台的服务。</p>`
+		}
 	}
 	return fmt.Sprintf(`<!doctype html>
 <html>
@@ -101,6 +104,9 @@ func buildContentModerationViolationEmailBody(siteName string, log *ContentModer
 func buildContentModerationAccountDisabledEmailBody(siteName string, log *ContentModerationLog, cfg *ContentModerationConfig) string {
 	if log == nil {
 		return ""
+	}
+	if log.BanScope == ContentModerationBanScopeOpenAI {
+		return buildContentModerationViolationEmailBody(siteName, log, cfg)
 	}
 	userName := strings.TrimSpace(log.UserEmail)
 	if userName == "" && log.UserID != nil {

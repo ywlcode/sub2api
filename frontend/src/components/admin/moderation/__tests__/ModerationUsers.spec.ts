@@ -9,6 +9,21 @@ const initial = { user_id: 306, version: 2, generation: 1, current_count: 10, au
 const options = { global: { stubs: { BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /></div>' } } } }
 beforeEach(() => { vi.resetAllMocks(); get.mockResolvedValue({ ...initial }); manage.mockResolvedValue({ ...initial, version: 3, current_count: 0, generation: 2 }); list.mockResolvedValue({ items: [], total: 0 }) })
 describe('moderation user controls', () => {
+  it('releases an OpenAI ban while the account is active', async () => {
+    get.mockResolvedValue({ ...initial, status: 'active', owned_disable: false, openai_blocked: true })
+    manage.mockResolvedValue({ ...initial, status: 'active', owned_disable: false, openai_blocked: false, version: 3 })
+    const wrapper = mount(Panel, { props: { userId: 306 } })
+    await flushPromises()
+    expect(wrapper.get('[data-test="openai-restricted"]').text()).toContain('admin.riskControl.openaiRestricted')
+    await wrapper.get('[data-test="reason"]').setValue('reviewed platform restriction')
+    await wrapper.get('[data-test="confirm"]').setValue(true)
+    expect(wrapper.get('[data-test="unban"]').attributes('disabled')).toBeUndefined()
+    await wrapper.get('[data-test="unban"]').trigger('click')
+    await flushPromises()
+    expect(manage).toHaveBeenCalledWith(306, { action: 'unban', version: 2, reason: 'reviewed platform restriction', confirm: true })
+    expect(wrapper.find('[data-test="openai-restricted"]').exists()).toBe(false)
+    expect(wrapper.get('[data-test="current-state"]').exists()).toBe(true)
+  })
   it('requires confirmation and reason; resetting retains disable and does not send an exemption', async () => {
     const wrapper = mount(Panel, { props: { userId: 306 } })
     await flushPromises()

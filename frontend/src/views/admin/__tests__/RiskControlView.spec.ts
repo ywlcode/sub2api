@@ -497,6 +497,21 @@ describe('admin RiskControlView', () => {
     wrapper.unmount()
   })
 
+  it('loads and saves the OpenAI-only ban scope without changing audit scope', async () => {
+    getConfig.mockResolvedValue({ ...baseConfig(), ban_scope: 'openai' })
+    const wrapper = mount(RiskControlView, { global: { stubs: { AppLayout: AppLayoutStub, BaseDialog: BaseDialogStub, Icon: true, Select: true, Toggle: true, Pagination: true, ProxySelector: true } } })
+    await flushPromises()
+    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
+    await findButtonByText(wrapper, 'admin.riskControl.tabs.response').trigger('click')
+    expect(wrapper.get<HTMLSelectElement>('[data-test="moderation-ban-scope"]').element.value).toBe('openai')
+    await wrapper.get('[data-test="moderation-ban-scope"]').setValue('all')
+    await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
+    await flushPromises()
+    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({ ban_scope: 'all', all_groups: baseConfig().all_groups }))
+    expect(showError).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
   it('saves the selected model filter mode and models', async () => {
     const wrapper = mount(RiskControlView, {
       global: {

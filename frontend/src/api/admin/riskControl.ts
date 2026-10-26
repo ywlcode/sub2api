@@ -45,6 +45,7 @@ export interface ContentModerationConfig {
   block_message: string
   email_on_hit: boolean
   auto_ban_enabled: boolean
+  ban_scope?: 'all' | 'openai'
   ban_threshold: number
   violation_window_hours: number
   retry_count: number
@@ -135,6 +136,7 @@ export interface UpdateContentModerationConfig {
   block_message?: string
   email_on_hit?: boolean
   auto_ban_enabled?: boolean
+  ban_scope?: 'all' | 'openai'
   ban_threshold?: number
   violation_window_hours?: number
   retry_count?: number
@@ -221,6 +223,7 @@ export interface ContentModerationLog {
   error: string
   violation_count: number
   auto_banned: boolean
+  ban_scope?: 'all' | 'openai'
   email_sent: boolean
   user_status: string
   queue_delay_ms: number | null
@@ -306,6 +309,7 @@ export interface ModerationUserState {
   api_audit_exempt: boolean
   email_exempt: boolean
   owned_disable: boolean
+  openai_blocked?: boolean
   status: string
   current_count: number
   reason: string

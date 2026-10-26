@@ -71,6 +71,10 @@ func runSecurityAudit(c *gin.Context, reqLog *zap.Logger, coordinator *securitya
 	if c == nil || c.Request == nil {
 		return nil
 	}
+	input := buildContentModerationInput(c, apiKey, subject, protocol, model, body)
+	if decision := checkModerationPlatformAccess(c, legacy, subject.UserID, input.Provider, cachesSecurityAuditCompletion(stage)); decision != nil {
+		return decision
+	}
 	if legacy != nil {
 		c.Set("content_moderation.user_version", legacy.CaptureModerationUserVersion(c.Request.Context(), subject.UserID))
 	}
