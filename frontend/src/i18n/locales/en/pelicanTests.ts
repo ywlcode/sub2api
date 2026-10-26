@@ -20,7 +20,7 @@ export default {
     enabled: 'Enable artwork showcase',
     enabledHint: 'Show the Pelican Showcase in the sidebar. When off, tests and artwork collection continue, but the showcase page is unavailable.',
     adminOnly: 'Administrators only',
-    adminOnlyHint: 'Only administrators can view artwork. Regular users lose the sidebar entry, page access, and API access.',
+    adminOnlyHint: 'Also enables the artwork showcase. Click Save to apply. Only administrators can view artwork; regular users lose the sidebar entry, page access, and API access.',
     apiEnabled: 'Allow API Key access to artwork',
     apiEnabledHint: 'Sync published artwork with a site API Key, without model calls or balance charges. Disable to keep web access only.',
     apiRequiresGallery: 'The artwork showcase must also be enabled before the API can return published artwork.',

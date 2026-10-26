@@ -41,7 +41,7 @@
               </div>
               <div class="enable-row mt-5">
                 <span><strong>{{ t('pelicanTests.showcase.adminOnly') }}</strong><small>{{ t('pelicanTests.showcase.adminOnlyHint') }}</small></span>
-                <Toggle v-model="draft.admin_only" :aria-label="t('pelicanTests.showcase.adminOnly')" data-testid="pelican-showcase-admin-only" />
+                <Toggle :model-value="draft.admin_only" :aria-label="t('pelicanTests.showcase.adminOnly')" data-testid="pelican-showcase-admin-only" @update:model-value="setAdminOnly" />
               </div>
               <div class="enable-row mt-5">
                 <span><strong>{{ t('pelicanTests.showcase.apiEnabled') }}</strong><small>{{ t('pelicanTests.showcase.apiEnabledHint') }}</small></span>
@@ -552,6 +552,12 @@ function changeResultsPageSize(pageSize: number) {
   resultsPageSize.value = pageSize
   resultsPage.value = 1
   void loadResults()
+}
+
+function setAdminOnly(enabled: boolean) {
+  if (!draft.value) return
+  draft.value.admin_only = enabled
+  if (enabled) draft.value.enabled = true
 }
 
 async function saveSettings() {

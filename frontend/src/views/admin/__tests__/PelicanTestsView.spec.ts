@@ -97,14 +97,16 @@ afterEach(() => {
 })
 
 describe('PelicanTestsView', () => {
-  it('round trips administrator-only visibility without changing the API switch', async () => {
-    api.getShowcaseSettings.mockResolvedValue({ ...settings, enabled: true })
+  it.each([false, true])('enables administrator-only visibility when the showcase was enabled=%s', async (enabled) => {
+    api.getShowcaseSettings.mockResolvedValue({ ...settings, enabled })
     api.updateShowcaseSettings.mockImplementation(async (value) => value)
     wrapper = mountView()
     await flushPromises()
     const toggle = wrapper.get('[data-testid="pelican-showcase-admin-only"]')
     expect(toggle.element).toHaveProperty('checked', false)
     await toggle.setValue(true)
+    expect(wrapper.get('[data-testid="pelican-showcase-enabled"]').element).toHaveProperty('checked', true)
+    expect(api.updateShowcaseSettings).not.toHaveBeenCalled()
     await wrapper.get('[data-testid="pelican-showcase-settings"] form').trigger('submit')
     await flushPromises()
     expect(api.updateShowcaseSettings).toHaveBeenCalledWith({ ...settings, enabled: true, admin_only: true })

@@ -20,7 +20,7 @@ export default {
     enabled: '启用作品展示',
     enabledHint: '开启后可从侧边栏查看「鹈鹕测智」作品；关闭时照常测试、收录作品，但展示页面不可用。',
     adminOnly: '仅管理员可见',
-    adminOnlyHint: '开启后只有管理员可以查看作品，普通用户的侧栏入口、页面和 API 访问同时关闭。',
+    adminOnlyHint: '开启时同时启用作品展示，点击「保存」后生效。只有管理员可查看，普通用户的侧栏入口、页面和 API 访问同时关闭。',
     apiEnabled: '允许 API Key 读取作品',
     apiEnabledHint: '使用本站 API Key 同步已发布作品，读取不调用模型、不扣余额。关闭后只保留网页展示。',
     apiRequiresGallery: '需同时开启「启用作品展示」后，API 才能读取已发布作品。',
