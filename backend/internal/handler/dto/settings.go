@@ -495,6 +495,7 @@ type PublicSettings struct {
 
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 	PelicanShowcaseEnabled   bool `json:"pelican_showcase_enabled"`
+	PelicanShowcaseAdminOnly bool `json:"pelican_showcase_admin_only"`
 
 	SubscriptionEnabled bool `json:"subscription_enabled"`
 
