@@ -133,3 +133,25 @@ func TestUpdatePelicanShowcaseAdminOnlyPreservesOmissionAndAPISwitch(t *testing.
 		require.NotContains(t, repo.saved, SettingKeyPelicanShowcaseAdminOnly)
 	}
 }
+
+func TestUpdatePelicanShowcaseInvalidatesPublicSettingsAfterSuccessfulSave(t *testing.T) {
+	for _, writeErr := range []error{nil, errors.New("save failed")} {
+		repo := &showcaseRuntimeSettingRepo{values: map[string]string{}, writeErr: writeErr}
+		svc := &SettingService{settingRepo: repo}
+		calls := 0
+		svc.SetOnUpdateCallback(func() {
+			calls++
+			require.Equal(t, "true", repo.values[SettingKeyPelicanShowcaseEnabled])
+			require.Equal(t, "true", repo.values[SettingKeyPelicanShowcaseAdminOnly])
+		})
+		adminOnly := true
+		_, err := svc.UpdatePelicanShowcaseSettings(context.Background(), true, DefaultPelicanShowcaseConfig(), nil, &adminOnly)
+		if writeErr != nil {
+			require.ErrorIs(t, err, writeErr)
+			require.Zero(t, calls)
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, 1, calls)
+		}
+	}
+}
