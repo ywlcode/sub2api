@@ -164,6 +164,10 @@ WHERE registration_ip_quotas.account_count < 2`, key)
 		}
 	}
 
+	platformLimits := userIn.PlatformConcurrencyLimits
+	if platformLimits == nil {
+		platformLimits = map[string]int{}
+	}
 	created, err := txClient.User.Create().
 		SetEmail(userIn.Email).
 		SetUsername(userIn.Username).
@@ -171,6 +175,7 @@ WHERE registration_ip_quotas.account_count < 2`, key)
 		SetPasswordHash(userIn.PasswordHash).
 		SetRole(userIn.Role).
 		SetBalance(userIn.Balance).
+		SetPlatformConcurrencyLimits(platformLimits).
 		SetConcurrency(userIn.Concurrency).
 		SetStatus(userIn.Status).
 		SetSignupSource(userSignupSourceOrDefault(userIn.SignupSource)).
@@ -332,6 +337,13 @@ func (r *userRepository) Update(ctx context.Context, userIn *service.User, field
 	}
 	if fields.Role {
 		updateOp = updateOp.SetRole(userIn.Role)
+	}
+	if fields.PlatformConcurrencyLimits {
+		limits := userIn.PlatformConcurrencyLimits
+		if limits == nil {
+			limits = map[string]int{}
+		}
+		updateOp = updateOp.SetPlatformConcurrencyLimits(limits)
 	}
 	if fields.Concurrency {
 		updateOp = updateOp.SetConcurrency(userIn.Concurrency)
