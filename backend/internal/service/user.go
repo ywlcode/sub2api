@@ -7,6 +7,8 @@ import (
 )
 
 type User struct {
+	PlatformConcurrencyLimits map[string]int
+
 	ID               int64
 	Email            string
 	Username         string

@@ -258,9 +258,11 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	}
 	// 在请求结束或 Context 取消时确保释放槽位，避免客户端断开造成泄漏
 	userReleaseFunc = wrapReleaseOnDone(c.Request.Context(), userReleaseFunc)
-	if userReleaseFunc != nil {
-		defer userReleaseFunc()
-	}
+	defer func() {
+		if userReleaseFunc != nil {
+			userReleaseFunc()
+		}
+	}()
 
 	// 2. 【新增】Wait后二次检查余额/订阅
 	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
@@ -1039,6 +1041,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						// 兜底重试按"直接请求兜底分组"处理：清除强制平台，允许按分组平台调度
 						ctx := context.WithValue(c.Request.Context(), ctxkey.ForcePlatform, "")
 						c.Request = c.Request.WithContext(ctx)
+						// The failed Antigravity attempt has finished and released its account.
+						// Re-admit the Anthropic fallback against that platform's capacity.
+						userReleaseFunc, err = h.concurrencyHelper.reacquireUserSlotForPlatform(c, apiKey, fallbackGroup.Platform, userReleaseFunc, reqStream, &streamStarted)
+						if err != nil {
+							h.handleConcurrencyError(c, err, "user", streamStarted)
+							return
+						}
 						currentAPIKey = fallbackAPIKey
 						currentSubscription = nil
 						fallbackUsed = true

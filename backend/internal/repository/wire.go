@@ -27,6 +27,9 @@ func ProvideConcurrencyCache(rdb *redis.Client, cfg *config.Config, db *sql.DB) 
 	if cfg.Runtime.RegionalConcurrencyFile == "" {
 		return base, nil
 	}
+	if err := checkRegionalPlatformConcurrency(db); err != nil {
+		return nil, err
+	}
 	return provideRegionalConcurrencyCache(base, rdb, db, cfg)
 }
 

@@ -584,6 +584,8 @@ export default {
         rpmLimit: 'Requests Per Minute (RPM)',
         concurrencyPlaceholder: '0 = unlimited',
         concurrencyHint: 'Max concurrent requests for this user; 0 = unlimited.',
+        platformConcurrency: 'Platform concurrency limits',
+        platformConcurrencyHint: 'Shared across this user’s keys and groups. Blank or 0 adds no platform limit; the total limit still applies.',
         rpmLimitPlaceholder: '0 = unlimited',
         rpmLimitHint: 'Max requests per minute for this user; 0 = unlimited. Acts as a fallback only when the group has no rpm_limit set.'
       },

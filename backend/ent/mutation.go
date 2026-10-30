@@ -56962,6 +56962,7 @@ type UserMutation struct {
 	addbalance                    *float64
 	frozen_balance                *float64
 	addfrozen_balance             *float64
+	platform_concurrency_limits   *map[string]int
 	concurrency                   *int
 	addconcurrency                *int
 	status                        *string
@@ -57516,6 +57517,42 @@ func (m *UserMutation) AddedFrozenBalance() (r float64, exists bool) {
 func (m *UserMutation) ResetFrozenBalance() {
 	m.frozen_balance = nil
 	m.addfrozen_balance = nil
+}
+
+// SetPlatformConcurrencyLimits sets the "platform_concurrency_limits" field.
+func (m *UserMutation) SetPlatformConcurrencyLimits(value map[string]int) {
+	m.platform_concurrency_limits = &value
+}
+
+// PlatformConcurrencyLimits returns the value of the "platform_concurrency_limits" field in the mutation.
+func (m *UserMutation) PlatformConcurrencyLimits() (r map[string]int, exists bool) {
+	v := m.platform_concurrency_limits
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldPlatformConcurrencyLimits returns the old "platform_concurrency_limits" field's value of the User entity.
+// If the User object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserMutation) OldPlatformConcurrencyLimits(ctx context.Context) (v map[string]int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldPlatformConcurrencyLimits is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldPlatformConcurrencyLimits requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldPlatformConcurrencyLimits: %w", err)
+	}
+	return oldValue.PlatformConcurrencyLimits, nil
+}
+
+// ResetPlatformConcurrencyLimits resets all changes to the "platform_concurrency_limits" field.
+func (m *UserMutation) ResetPlatformConcurrencyLimits() {
+	m.platform_concurrency_limits = nil
 }
 
 // SetConcurrency sets the "concurrency" field.
@@ -59012,7 +59049,7 @@ func (m *UserMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserMutation) Fields() []string {
-	fields := make([]string, 0, 26)
+	fields := make([]string, 0, 27)
 	if m.created_at != nil {
 		fields = append(fields, user.FieldCreatedAt)
 	}
@@ -59039,6 +59076,9 @@ func (m *UserMutation) Fields() []string {
 	}
 	if m.frozen_balance != nil {
 		fields = append(fields, user.FieldFrozenBalance)
+	}
+	if m.platform_concurrency_limits != nil {
+		fields = append(fields, user.FieldPlatformConcurrencyLimits)
 	}
 	if m.concurrency != nil {
 		fields = append(fields, user.FieldConcurrency)
@@ -59117,6 +59157,8 @@ func (m *UserMutation) Field(name string) (ent.Value, bool) {
 		return m.Balance()
 	case user.FieldFrozenBalance:
 		return m.FrozenBalance()
+	case user.FieldPlatformConcurrencyLimits:
+		return m.PlatformConcurrencyLimits()
 	case user.FieldConcurrency:
 		return m.Concurrency()
 	case user.FieldStatus:
@@ -59178,6 +59220,8 @@ func (m *UserMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldBalance(ctx)
 	case user.FieldFrozenBalance:
 		return m.OldFrozenBalance(ctx)
+	case user.FieldPlatformConcurrencyLimits:
+		return m.OldPlatformConcurrencyLimits(ctx)
 	case user.FieldConcurrency:
 		return m.OldConcurrency(ctx)
 	case user.FieldStatus:
@@ -59283,6 +59327,13 @@ func (m *UserMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetFrozenBalance(v)
+		return nil
+	case user.FieldPlatformConcurrencyLimits:
+		v, ok := value.(map[string]int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetPlatformConcurrencyLimits(v)
 		return nil
 	case user.FieldConcurrency:
 		v, ok := value.(int)
@@ -59592,6 +59643,9 @@ func (m *UserMutation) ResetField(name string) error {
 		return nil
 	case user.FieldFrozenBalance:
 		m.ResetFrozenBalance()
+		return nil
+	case user.FieldPlatformConcurrencyLimits:
+		m.ResetPlatformConcurrencyLimits()
 		return nil
 	case user.FieldConcurrency:
 		m.ResetConcurrency()
