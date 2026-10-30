@@ -169,6 +169,8 @@ func ValidateSimpleModeGroupOperation(cfg *config.Config, operation AdminGroupOp
 
 // CreateUserInput represents input for creating a new user via admin operations.
 type CreateUserInput struct {
+	PlatformConcurrencyLimits map[string]int
+
 	Email                string
 	Password             string
 	Username             string
@@ -185,6 +187,8 @@ type CreateUserInput struct {
 }
 
 type UpdateUserInput struct {
+	PlatformConcurrencyLimits map[string]int // nil = unchanged; empty = clear
+
 	Email            string
 	Password         string
 	Username         *string

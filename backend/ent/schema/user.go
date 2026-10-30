@@ -53,6 +53,7 @@ func (User) Fields() []ent.Field {
 		field.Float("frozen_balance").
 			SchemaType(map[string]string{dialect.Postgres: "decimal(20,8)"}).
 			Default(0),
+		field.JSON("platform_concurrency_limits", map[string]int{}).Default(map[string]int{}),
 		field.Int("concurrency").
 			Default(5),
 		field.String("status").

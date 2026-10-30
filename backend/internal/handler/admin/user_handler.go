@@ -62,6 +62,8 @@ func NewUserHandler(
 
 // CreateUserRequest represents admin create user request
 type CreateUserRequest struct {
+	PlatformConcurrencyLimits map[string]int `json:"platform_concurrency_limits"`
+
 	Email                string   `json:"email" binding:"required,email"`
 	Password             string   `json:"password" binding:"required,min=6"`
 	Username             string   `json:"username"`
@@ -78,6 +80,8 @@ type CreateUserRequest struct {
 // UpdateUserRequest represents admin update user request
 // 使用指针类型来区分"未提供"和"设置为0"
 type UpdateUserRequest struct {
+	PlatformConcurrencyLimits map[string]int `json:"platform_concurrency_limits"`
+
 	// Reason is audit-only metadata; the existing middleware records the request body.
 	Reason               string                        `json:"reason" binding:"omitempty,max=500"`
 	Email                string                        `json:"email" binding:"omitempty,email"`
@@ -321,6 +325,8 @@ func (h *UserHandler) Create(c *gin.Context) {
 	}
 
 	user, err := h.adminService.CreateUser(c.Request.Context(), &service.CreateUserInput{
+		PlatformConcurrencyLimits: req.PlatformConcurrencyLimits,
+
 		Email:                req.Email,
 		Password:             req.Password,
 		Username:             req.Username,
@@ -381,6 +387,8 @@ func (h *UserHandler) Update(c *gin.Context) {
 
 	// 使用指针类型直接传递，nil 表示未提供该字段
 	user, err := h.adminService.UpdateUser(c.Request.Context(), userID, &service.UpdateUserInput{
+		PlatformConcurrencyLimits: req.PlatformConcurrencyLimits,
+
 		Email:                req.Email,
 		Password:             req.Password,
 		Username:             req.Username,
