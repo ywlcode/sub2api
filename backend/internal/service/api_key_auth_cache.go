@@ -35,6 +35,8 @@ type APIKeyAuthSnapshot struct {
 
 // APIKeyAuthUserSnapshot 用户快照
 type APIKeyAuthUserSnapshot struct {
+	PlatformConcurrencyLimits map[string]int `json:"platform_concurrency_limits,omitempty"`
+
 	ID            int64   `json:"id"`
 	Status        string  `json:"status"`
 	Role          string  `json:"role"`

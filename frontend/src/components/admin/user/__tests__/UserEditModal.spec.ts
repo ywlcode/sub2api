@@ -97,6 +97,37 @@ describe('UserEditModal concurrency', () => {
     expect(update).not.toHaveBeenCalled()
   })
 
+  it('edits platform limits and clears an existing limit without changing other platforms', async () => {
+    const wrapper = mountModal(10, { platform_concurrency_limits: { openai: 2, anthropic: 3 } })
+    expect((wrapper.get('#platform-concurrency-openai').element as HTMLInputElement).value).toBe('2')
+    await wrapper.get('#platform-concurrency-openai').setValue('')
+    await wrapper.get('#platform-concurrency-gemini').setValue('1')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(update).toHaveBeenCalledWith(7, expect.objectContaining({
+      concurrency: 10, platform_concurrency_limits: { anthropic: 3, gemini: 1 }
+    }))
+  })
+
+  it('accepts a platform limit when total concurrency is unlimited', async () => {
+    const wrapper = mountModal(0)
+    await wrapper.get('#platform-concurrency-openai').setValue('2')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(update).toHaveBeenCalledWith(7, expect.objectContaining({
+      concurrency: 0, platform_concurrency_limits: { openai: 2 }
+    }))
+  })
+
+  it.each(['-1', '1.5'])('rejects invalid platform concurrency %s', async value => {
+    const wrapper = mountModal(10)
+    await wrapper.get('#platform-concurrency-openai').setValue(value)
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+    expect(showError).toHaveBeenCalledWith('admin.users.concurrencyNonNegative')
+    expect(update).not.toHaveBeenCalled()
+  })
+
   it('shows three unchecked options only for a new observer promotion', async () => {
     const wrapper = mountModal(5)
     expect(wrapper.find('[data-test="observer-setup"]').exists()).toBe(false)

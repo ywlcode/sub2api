@@ -382,12 +382,17 @@ func acquireLiveLeaseForIdentity(
 			}
 			return false, ErrAPIKeyReservationLost
 		}
+		_, currentTotal, platformMax, err := userConcurrencyLimits(ctx, userID, userMax)
+		if err != nil {
+			return false, err
+		}
 		request := LiveLeaseTransferRequest{
+			UserPlatformMax:  platformMax,
 			AccountID:        accountID,
 			AccountMax:       accountMax,
 			AccountRequestID: accountRequestID,
 			UserID:           userID,
-			UserMax:          userMax,
+			UserMax:          currentTotal,
 			UserRequestID:    userRequestID,
 			APIKeyID:         apiKeyID,
 			APIKeyMax:        apiKeyMax,

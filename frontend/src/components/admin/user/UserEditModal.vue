@@ -83,6 +83,19 @@
         />
         <p class="input-hint">{{ t('admin.users.form.rpmLimitHint') }}</p>
       </div>
+      <details class="space-y-3" data-test="platform-concurrency">
+        <summary class="cursor-pointer text-sm font-medium">{{ t('admin.users.form.platformConcurrency') }}</summary>
+        <p class="input-hint">{{ t('admin.users.form.platformConcurrencyHint') }}</p>
+        <div v-for="platform in platforms" :key="platform.id" class="flex items-center justify-between gap-3">
+          <label :for="'platform-concurrency-' + platform.id" class="text-sm">{{ platform.display_name }}</label>
+          <input
+            :id="'platform-concurrency-' + platform.id"
+            v-model.number="form.platform_concurrency_limits[platform.id]"
+            type="number" min="0" max="2147483647" step="1"
+            class="input w-28" placeholder="0"
+          />
+        </div>
+      </details>
       <ModerationUserPanel v-if="show && user && authStore.isAdmin" :key="user.id" :user-id="user.id" />
       <UserAttributeForm v-model="form.customAttributes" :user-id="user?.id" />
     </form>
@@ -107,6 +120,7 @@ import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useClipboard } from '@/composables/useClipboard'
 import { adminAPI } from '@/api/admin'
+import { listPlatforms } from '@/constants/platformCatalog'
 import type { AdminUser, ObserverSetupOptions, UpdateUserRequest, UserAttributeValuesMap } from '@/types'
 import ObserverGroupSelector from './ObserverGroupSelector.vue'
 import ModerationUserPanel from '@/components/admin/moderation/ModerationUserPanel.vue'
@@ -122,6 +136,7 @@ const emit = defineEmits(['close', 'success'])
 const { t } = useI18n(); const appStore = useAppStore(); const { copyToClipboard } = useClipboard()
 const authStore = useAuthStore()
 
+const platforms = computed(() => listPlatforms())
 const submitting = ref(false); const passwordCopied = ref(false)
 const observerSetup = reactive<ObserverSetupOptions>({ create_dedicated_group: false, revoke_public_groups: false, grant_resources: false })
 const observerPromotionSaved = ref(false)
@@ -140,6 +155,7 @@ const form = reactive({
   role: 'user' as AdminUser['role'],
   observer_group_ids: [] as number[],
   concurrency: 1,
+  platform_concurrency_limits: {} as Record<string, number | ''>,
   rpm_limit: 0,
   customAttributes: {} as UserAttributeValuesMap
 })
@@ -148,7 +164,7 @@ watch(() => props.user, (u) => {
   resetObserverSetup()
   observerPromotionSaved.value = false
   if (u) {
-    Object.assign(form, { email: u.email, password: '', username: u.username || '', notes: u.notes || '', role: u.role || 'user', observer_group_ids: [...(u.observer_group_ids || [])], concurrency: u.concurrency, rpm_limit: u.rpm_limit ?? 0, customAttributes: {} })
+    Object.assign(form, { email: u.email, password: '', username: u.username || '', notes: u.notes || '', role: u.role || 'user', observer_group_ids: [...(u.observer_group_ids || [])], concurrency: u.concurrency, platform_concurrency_limits: { ...(u.platform_concurrency_limits ?? {}) }, rpm_limit: u.rpm_limit ?? 0, customAttributes: {} })
     passwordCopied.value = false
   }
 }, { immediate: true })
@@ -178,6 +194,13 @@ const handleUpdateUser = async () => {
     appStore.showError(t('admin.users.concurrencyNonNegative'))
     return
   }
+  const platformLimits = Object.fromEntries(
+    Object.entries(form.platform_concurrency_limits).filter(([, value]) => value !== '')
+  ) as Record<string, number>
+  if (Object.values(platformLimits).some(value => !Number.isInteger(value) || value < 0 || value > 2147483647)) {
+    appStore.showError(t('admin.users.concurrencyNonNegative'))
+    return
+  }
   if (promotingObserver.value && observerSetup.create_dedicated_group && !form.username.trim()) {
     appStore.showError(t('admin.users.observerSetup.usernameRequired'))
     return
@@ -185,7 +208,7 @@ const handleUpdateUser = async () => {
   const userId = props.user.id
   submitting.value = true
   try {
-    const data: UpdateUserRequest = { email: form.email, username: form.username, notes: form.notes, role: form.role, observer_group_ids: form.observer_group_ids, concurrency: form.concurrency, rpm_limit: form.rpm_limit }
+    const data: UpdateUserRequest = { email: form.email, username: form.username, notes: form.notes, role: form.role, observer_group_ids: form.observer_group_ids, concurrency: form.concurrency, platform_concurrency_limits: platformLimits, rpm_limit: form.rpm_limit }
     if (promotingObserver.value && Object.values(observerSetup).some(Boolean)) data.observer_setup = { ...observerSetup }
     if (form.password.trim()) data.password = form.password.trim()
     // 提升为管理员属敏感操作：后端返回 STEP_UP_REQUIRED 时弹 TOTP 验证并重试

@@ -88,6 +88,7 @@ export interface User {
   balance: number // User balance for API usage
   frozen_balance?: number // Balance currently held by async batch jobs
   concurrency: number // Allowed concurrent requests
+  platform_concurrency_limits?: Record<string, number>
   rpm_limit?: number // User-level RPM cap (0 = unlimited); effective as fallback when group has no rpm_limit
   status: 'active' | 'disabled' // Account status
   observer_group_ids?: number[] | null
@@ -2344,6 +2345,7 @@ export interface ObserverSetupOptions {
 }
 
 export interface UpdateUserRequest {
+  platform_concurrency_limits?: Record<string, number>
   /** Optional operation reason recorded by the admin audit middleware, not user notes. */
   reason?: string
   email?: string

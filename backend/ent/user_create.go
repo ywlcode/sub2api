@@ -136,6 +136,12 @@ func (_c *UserCreate) SetNillableFrozenBalance(v *float64) *UserCreate {
 	return _c
 }
 
+// SetPlatformConcurrencyLimits sets the "platform_concurrency_limits" field.
+func (_c *UserCreate) SetPlatformConcurrencyLimits(v map[string]int) *UserCreate {
+	_c.mutation.SetPlatformConcurrencyLimits(v)
+	return _c
+}
+
 // SetConcurrency sets the "concurrency" field.
 func (_c *UserCreate) SetConcurrency(v int) *UserCreate {
 	_c.mutation.SetConcurrency(v)
@@ -636,6 +642,10 @@ func (_c *UserCreate) defaults() error {
 		v := user.DefaultFrozenBalance
 		_c.mutation.SetFrozenBalance(v)
 	}
+	if _, ok := _c.mutation.PlatformConcurrencyLimits(); !ok {
+		v := user.DefaultPlatformConcurrencyLimits
+		_c.mutation.SetPlatformConcurrencyLimits(v)
+	}
 	if _, ok := _c.mutation.Concurrency(); !ok {
 		v := user.DefaultConcurrency
 		_c.mutation.SetConcurrency(v)
@@ -727,6 +737,9 @@ func (_c *UserCreate) check() error {
 	}
 	if _, ok := _c.mutation.FrozenBalance(); !ok {
 		return &ValidationError{Name: "frozen_balance", err: errors.New(`ent: missing required field "User.frozen_balance"`)}
+	}
+	if _, ok := _c.mutation.PlatformConcurrencyLimits(); !ok {
+		return &ValidationError{Name: "platform_concurrency_limits", err: errors.New(`ent: missing required field "User.platform_concurrency_limits"`)}
 	}
 	if _, ok := _c.mutation.Concurrency(); !ok {
 		return &ValidationError{Name: "concurrency", err: errors.New(`ent: missing required field "User.concurrency"`)}
@@ -841,6 +854,10 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.FrozenBalance(); ok {
 		_spec.SetField(user.FieldFrozenBalance, field.TypeFloat64, value)
 		_node.FrozenBalance = value
+	}
+	if value, ok := _c.mutation.PlatformConcurrencyLimits(); ok {
+		_spec.SetField(user.FieldPlatformConcurrencyLimits, field.TypeJSON, value)
+		_node.PlatformConcurrencyLimits = value
 	}
 	if value, ok := _c.mutation.Concurrency(); ok {
 		_spec.SetField(user.FieldConcurrency, field.TypeInt, value)
@@ -1288,6 +1305,18 @@ func (u *UserUpsert) AddFrozenBalance(v float64) *UserUpsert {
 	return u
 }
 
+// SetPlatformConcurrencyLimits sets the "platform_concurrency_limits" field.
+func (u *UserUpsert) SetPlatformConcurrencyLimits(v map[string]int) *UserUpsert {
+	u.Set(user.FieldPlatformConcurrencyLimits, v)
+	return u
+}
+
+// UpdatePlatformConcurrencyLimits sets the "platform_concurrency_limits" field to the value that was provided on create.
+func (u *UserUpsert) UpdatePlatformConcurrencyLimits() *UserUpsert {
+	u.SetExcluded(user.FieldPlatformConcurrencyLimits)
+	return u
+}
+
 // SetConcurrency sets the "concurrency" field.
 func (u *UserUpsert) SetConcurrency(v int) *UserUpsert {
 	u.Set(user.FieldConcurrency, v)
@@ -1721,6 +1750,20 @@ func (u *UserUpsertOne) AddFrozenBalance(v float64) *UserUpsertOne {
 func (u *UserUpsertOne) UpdateFrozenBalance() *UserUpsertOne {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateFrozenBalance()
+	})
+}
+
+// SetPlatformConcurrencyLimits sets the "platform_concurrency_limits" field.
+func (u *UserUpsertOne) SetPlatformConcurrencyLimits(v map[string]int) *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.SetPlatformConcurrencyLimits(v)
+	})
+}
+
+// UpdatePlatformConcurrencyLimits sets the "platform_concurrency_limits" field to the value that was provided on create.
+func (u *UserUpsertOne) UpdatePlatformConcurrencyLimits() *UserUpsertOne {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdatePlatformConcurrencyLimits()
 	})
 }
 
@@ -2366,6 +2409,20 @@ func (u *UserUpsertBulk) AddFrozenBalance(v float64) *UserUpsertBulk {
 func (u *UserUpsertBulk) UpdateFrozenBalance() *UserUpsertBulk {
 	return u.Update(func(s *UserUpsert) {
 		s.UpdateFrozenBalance()
+	})
+}
+
+// SetPlatformConcurrencyLimits sets the "platform_concurrency_limits" field.
+func (u *UserUpsertBulk) SetPlatformConcurrencyLimits(v map[string]int) *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.SetPlatformConcurrencyLimits(v)
+	})
+}
+
+// UpdatePlatformConcurrencyLimits sets the "platform_concurrency_limits" field to the value that was provided on create.
+func (u *UserUpsertBulk) UpdatePlatformConcurrencyLimits() *UserUpsertBulk {
+	return u.Update(func(s *UserUpsert) {
+		s.UpdatePlatformConcurrencyLimits()
 	})
 }
 

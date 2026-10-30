@@ -33,6 +33,8 @@ const (
 	FieldBalance = "balance"
 	// FieldFrozenBalance holds the string denoting the frozen_balance field in the database.
 	FieldFrozenBalance = "frozen_balance"
+	// FieldPlatformConcurrencyLimits holds the string denoting the platform_concurrency_limits field in the database.
+	FieldPlatformConcurrencyLimits = "platform_concurrency_limits"
 	// FieldConcurrency holds the string denoting the concurrency field in the database.
 	FieldConcurrency = "concurrency"
 	// FieldStatus holds the string denoting the status field in the database.
@@ -207,6 +209,7 @@ var Columns = []string{
 	FieldRole,
 	FieldBalance,
 	FieldFrozenBalance,
+	FieldPlatformConcurrencyLimits,
 	FieldConcurrency,
 	FieldStatus,
 	FieldUsername,
@@ -270,6 +273,8 @@ var (
 	DefaultBalance float64
 	// DefaultFrozenBalance holds the default value on creation for the "frozen_balance" field.
 	DefaultFrozenBalance float64
+	// DefaultPlatformConcurrencyLimits holds the default value on creation for the "platform_concurrency_limits" field.
+	DefaultPlatformConcurrencyLimits map[string]int
 	// DefaultConcurrency holds the default value on creation for the "concurrency" field.
 	DefaultConcurrency int
 	// DefaultStatus holds the default value on creation for the "status" field.

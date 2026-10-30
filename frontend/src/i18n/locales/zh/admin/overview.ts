@@ -665,6 +665,8 @@ export default {
         rpmLimit: '每分钟请求数 (RPM)',
         concurrencyPlaceholder: '0 表示不限制',
         concurrencyHint: '该用户的最大并发请求数，0 = 不限制',
+        platformConcurrency: '平台并发限制',
+        platformConcurrencyHint: '同一用户的所有 Key 和分组合并计数；留空或 0 不额外限制，仍受总并发限制。',
         rpmLimitPlaceholder: '0 表示不限制',
         rpmLimitHint: '该用户每分钟最大请求数，0 = 不限制；仅在所用分组未设置 rpm_limit 时作为兜底生效'
       },
