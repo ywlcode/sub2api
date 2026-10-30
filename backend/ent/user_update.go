@@ -163,6 +163,12 @@ func (_u *UserUpdate) AddFrozenBalance(v float64) *UserUpdate {
 	return _u
 }
 
+// SetPlatformConcurrencyLimits sets the "platform_concurrency_limits" field.
+func (_u *UserUpdate) SetPlatformConcurrencyLimits(v map[string]int) *UserUpdate {
+	_u.mutation.SetPlatformConcurrencyLimits(v)
+	return _u
+}
+
 // SetConcurrency sets the "concurrency" field.
 func (_u *UserUpdate) SetConcurrency(v int) *UserUpdate {
 	_u.mutation.ResetConcurrency()
@@ -1059,6 +1065,9 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	if value, ok := _u.mutation.AddedFrozenBalance(); ok {
 		_spec.AddField(user.FieldFrozenBalance, field.TypeFloat64, value)
 	}
+	if value, ok := _u.mutation.PlatformConcurrencyLimits(); ok {
+		_spec.SetField(user.FieldPlatformConcurrencyLimits, field.TypeJSON, value)
+	}
 	if value, ok := _u.mutation.Concurrency(); ok {
 		_spec.SetField(user.FieldConcurrency, field.TypeInt, value)
 	}
@@ -1873,6 +1882,12 @@ func (_u *UserUpdateOne) SetNillableFrozenBalance(v *float64) *UserUpdateOne {
 // AddFrozenBalance adds value to the "frozen_balance" field.
 func (_u *UserUpdateOne) AddFrozenBalance(v float64) *UserUpdateOne {
 	_u.mutation.AddFrozenBalance(v)
+	return _u
+}
+
+// SetPlatformConcurrencyLimits sets the "platform_concurrency_limits" field.
+func (_u *UserUpdateOne) SetPlatformConcurrencyLimits(v map[string]int) *UserUpdateOne {
+	_u.mutation.SetPlatformConcurrencyLimits(v)
 	return _u
 }
 
@@ -2801,6 +2816,9 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 	}
 	if value, ok := _u.mutation.AddedFrozenBalance(); ok {
 		_spec.AddField(user.FieldFrozenBalance, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.PlatformConcurrencyLimits(); ok {
+		_spec.SetField(user.FieldPlatformConcurrencyLimits, field.TypeJSON, value)
 	}
 	if value, ok := _u.mutation.Concurrency(); ok {
 		_spec.SetField(user.FieldConcurrency, field.TypeInt, value)

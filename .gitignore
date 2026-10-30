@@ -136,6 +136,7 @@ vite.config.js
 user-traffic-pending/
 docs/*
 !docs/stream-timing.md
+!docs/user-platform-concurrency.md
 !docs/user-traffic.md
 !docs/typesafe-content-audit.md
 !docs/multi-host-session-owner.md
