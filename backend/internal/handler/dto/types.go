@@ -10,6 +10,8 @@ import (
 )
 
 type User struct {
+	PlatformConcurrencyLimits map[string]int `json:"platform_concurrency_limits"`
+
 	ID               int64      `json:"id"`
 	Email            string     `json:"email"`
 	Username         string     `json:"username"`

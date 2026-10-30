@@ -39,6 +39,8 @@ func nextWithAPIKeyAdmissionOwner(c *gin.Context, apiKeyService *service.APIKeyS
 // owner/revalidation lifecycle preserves revocation and key-slot cancellation
 // without introducing the primary-backed API Key middleware.
 func nextWithAPIKeyAdmissionLookup(c *gin.Context, lookup func(context.Context, string) (*service.APIKey, error), credential string, trustedClientIP string, key *service.APIKey, googleStyle bool) {
+	revalidate := newAPIKeyAuthRevalidator(lookup, credential, trustedClientIP, key)
+	c.Request = c.Request.WithContext(service.WithUserConcurrencyPolicy(c.Request.Context(), key, revalidate))
 	var writer *apiKeyAdmissionWriter
 	// A WS connection outlives one capacity decision: install the revalidator
 	// (and its lightweight control owner) even when the handshake key is
@@ -46,7 +48,6 @@ func nextWithAPIKeyAdmissionLookup(c *gin.Context, lookup func(context.Context, 
 	// HTTP non-queue requests keep their existing shape.
 	installRevalidator := key.ConcurrencyLimit > 0 || isResponsesWebSocketRoute(c)
 	if installRevalidator {
-		revalidate := newAPIKeyAuthRevalidator(lookup, credential, trustedClientIP, key)
 		base := service.WithAPIKeyQueueAuthRevalidator(
 			c.Request.Context(),
 			revalidate,
@@ -139,6 +140,7 @@ func newAPIKeyAuthRevalidator(lookup func(context.Context, string) (*service.API
 		if capabilityErr := apiKeyQueueRevokedCapability(latest, permissions); capabilityErr != nil {
 			return 0, service.NewAPIKeyQueueAuthRejected(capabilityErr)
 		}
+		service.UpdateUserConcurrencyPolicy(ctx, latest.User)
 		return latest.ConcurrencyLimit, nil
 	}
 }

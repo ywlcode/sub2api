@@ -198,7 +198,8 @@ var (
 	// KEYS: 1=accountRegular, 2=accountLive, 3=userRegular, 4=userLive,
 	//       5=apiRegular, 6=apiLive, 7=fence
 	// ARGV: 1=accountMax, 2=userMax, 3=apiMax, 4=accountSource, 5=userSource,
-	//       6=keySource, 7=leaseID, 8=liveTTL, 9=slotTTL
+	//       6=keySource, 7=leaseID, 8=liveTTL, 9=slotTTL, 10=userPlatformMax
+	// KEYS[8] is the user's ordinary OpenAI platform reservation set.
 	// 返回: 1=LIVE, 2=Key 满, 3=Key 来源丢失, 4=账号满, 5=账号来源丢失,
 	//       6=用户满, 7=用户来源丢失, 8=已中止, 9=部分 Live 状态冲突
 	transferLiveLeaseScript = redis.NewScript(`
@@ -219,6 +220,8 @@ var (
 		local leaseID = ARGV[7]
 		local ttl = tonumber(ARGV[8])
 		local slotTTL = tonumber(ARGV[9])
+		local platformMax = tonumber(ARGV[10]) or 0
+		local platformRegular = KEYS[8]
 		local t = redis.call('TIME')
 		local nowMs = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
 		local now = math.floor(nowMs / 1000)
@@ -257,6 +260,12 @@ var (
 			end
 		end
 
+		redis.call('ZREMRANGEBYSCORE', platformRegular, '-inf', now - slotTTL)
+		local platformSourceExists = userSource ~= '' and redis.call('ZSCORE', platformRegular, userSource) ~= false
+		if platformMax > 0 then
+			if not platformSourceExists then return 7 end
+			if redis.call('ZCARD', platformRegular) + redis.call('ZCARD', userLive) - 1 >= platformMax then return 6 end
+		end
 		local accountCount = redis.call('ZCARD', accountRegular) + redis.call('ZCARD', accountLive)
 		local userCount = redis.call('ZCARD', userRegular) + redis.call('ZCARD', userLive)
 		local apiCount = redis.call('ZCARD', apiRegular) + redis.call('ZCARD', apiLive)
@@ -282,8 +291,9 @@ var (
 		if accountMax > 0 then
 			redis.call('ZREM', accountRegular, accountSource)
 		end
-		if userMax > 0 then
+		if userSource ~= '' then
 			redis.call('ZREM', userRegular, userSource)
+			redis.call('ZREM', platformRegular, userSource)
 		end
 		-- A stats-only key member is moved as well, so the unlimited tracking
 		-- worker is not left behind as an orphan alongside the Live member.
@@ -356,6 +366,7 @@ var (
 	// KEYS: 1=accountRegular, 2=userRegular, 3=apiRegular, 4=accountLive,
 	//       5=userLive, 6=apiLive, 7=fence
 	// ARGV: 1=accountSource, 2=userSource, 3=keySource, 4=leaseID, 5=fenceTTL
+	// KEYS[8] is the user's ordinary OpenAI platform reservation set.
 	abortLiveLeaseTransferScript = redis.NewScript(`
 		redis.replicate_commands()
 		local t = redis.call('TIME')
@@ -365,7 +376,10 @@ var (
 		redis.call('ZADD', KEYS[7], fenceUntil, ARGV[4])
 		redis.call('EXPIRE', KEYS[7], fenceTTL)
 		if ARGV[1] ~= '' then redis.call('ZREM', KEYS[1], ARGV[1]) end
-		if ARGV[2] ~= '' then redis.call('ZREM', KEYS[2], ARGV[2]) end
+		if ARGV[2] ~= '' then
+			redis.call('ZREM', KEYS[2], ARGV[2])
+			redis.call('ZREM', KEYS[8], ARGV[2])
+		end
 		if ARGV[3] ~= '' then redis.call('ZREM', KEYS[3], ARGV[3]) end
 		redis.call('ZREM', KEYS[4], ARGV[4])
 		redis.call('ZREM', KEYS[5], ARGV[4])
@@ -1337,6 +1351,7 @@ func (c *concurrencyCache) AcquireLiveLeaseTransferring(ctx context.Context, req
 		apiKeySlotKey(request.APIKeyID),
 		liveAPIKeySlotKey(request.APIKeyID),
 		liveTransferFenceKey(request.APIKeyID),
+		userPlatformSlotKey(request.UserID, service.PlatformOpenAI),
 	},
 		request.AccountMax,
 		request.UserMax,
@@ -1347,6 +1362,7 @@ func (c *concurrencyCache) AcquireLiveLeaseTransferring(ctx context.Context, req
 		request.LeaseID,
 		liveLeaseTTLSeconds,
 		c.slotTTLSeconds,
+		request.UserPlatformMax,
 	).Int()
 	if err != nil {
 		// The script may have executed even if the reply was lost; the caller
@@ -1434,6 +1450,7 @@ func (c *concurrencyCache) AbortLiveLeaseTransfer(ctx context.Context, request s
 		liveUserSlotKey(request.UserID),
 		liveAPIKeySlotKey(request.APIKeyID),
 		liveTransferFenceKey(request.APIKeyID),
+		userPlatformSlotKey(request.UserID, service.PlatformOpenAI),
 	},
 		request.AccountRequestID,
 		request.UserRequestID,

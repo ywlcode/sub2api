@@ -335,6 +335,19 @@ func (h *ConcurrencyHelper) AcquireUserSlotWithWait(c *gin.Context, userID int64
 	return h.acquireUserSlotWithWaitTimeout(c, userID, maxConcurrency, apiKeyID, keyLimit, maxConcurrencyWait, isStream, streamStarted)
 }
 
+// Called only after the previous upstream attempt stopped. Reuse normal
+// admission so fallback never holds old capacity while waiting for a new one.
+func (h *ConcurrencyHelper) reacquireUserSlotForPlatform(c *gin.Context, apiKey *service.APIKey, platform string, release func(), isStream bool, streamStarted *bool) (func(), error) {
+	if release != nil {
+		release()
+	}
+	c.Request = c.Request.WithContext(service.WithResolvedTargetPlatform(c.Request.Context(), platform))
+	if err := h.concurrencyService.RevalidateUserConcurrency(c.Request.Context()); err != nil {
+		return nil, err
+	}
+	return h.AcquireUserSlotWithWait(c, apiKey.User.ID, apiKey.User.Concurrency, apiKey.ID, apiKey.ConcurrencyLimit, isStream, streamStarted)
+}
+
 func (h *ConcurrencyHelper) acquireUserSlotWithWaitTimeout(c *gin.Context, userID int64, maxConcurrency int, apiKeyID int64, keyLimit int, timeout time.Duration, isStream bool, streamStarted *bool) (func(), error) {
 	ctx := c.Request.Context()
 	// Reserve key capacity before any user queue can emit an SSE heartbeat.
@@ -517,6 +530,9 @@ func (h *ConcurrencyHelper) waitForSlotWithPingTimeout(c *gin.Context, slotType 
 
 	acquireSlot := func() (*service.AcquireResult, error) {
 		if slotType == "user" {
+			if err := h.concurrencyService.RevalidateUserConcurrency(ctx); err != nil {
+				return nil, err
+			}
 			return h.concurrencyService.AcquireUserSlot(ctx, id, maxConcurrency)
 		}
 		return h.concurrencyService.AcquireAccountSlot(ctx, id, maxConcurrency)

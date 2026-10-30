@@ -389,6 +389,33 @@ func (s *ConcurrencyService) AcquireAccountSlot(ctx context.Context, accountID i
 // If the user is at max concurrency, it waits until a slot is available or timeout.
 // Returns a release function that MUST be called when the request completes.
 func (s *ConcurrencyService) AcquireUserSlot(ctx context.Context, userID int64, maxConcurrency int) (*AcquireResult, error) {
+	platform, total, platformMax, err := userConcurrencyLimits(ctx, userID, maxConcurrency)
+	if err != nil {
+		return nil, err
+	}
+	maxConcurrency = total
+	if platform != "" {
+		if cache, ok := s.cache.(UserPlatformConcurrencyCache); ok {
+			requestID := generateRequestID()
+			acquired, err := cache.AcquireUserPlatformSlot(ctx, userID, platform, total, platformMax, requestID)
+			if err != nil {
+				return nil, err
+			}
+			if !acquired {
+				return &AcquireResult{}, nil
+			}
+			return &AcquireResult{Acquired: true, RequestID: requestID, ReleaseFunc: sync.OnceFunc(func() {
+				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := cache.ReleaseUserPlatformSlot(bgCtx, userID, platform, requestID); err != nil {
+					logger.LegacyPrintf("service.concurrency", "release user/platform slot: user=%d platform=%s err=%v", userID, platform, err)
+				}
+			})}, nil
+		}
+		if platformMax > 0 {
+			return nil, fmt.Errorf("platform concurrency admission unavailable")
+		}
+	}
 	// If maxConcurrency is 0 or negative, no limit
 	if maxConcurrency <= 0 {
 		return &AcquireResult{

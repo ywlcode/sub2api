@@ -118,6 +118,7 @@ type LiveConcurrencyCache interface {
 // empty ID is only valid when the matching Max is 0 (the dimension is
 // unlimited and has no ordinary member to move).
 type LiveLeaseTransferRequest struct {
+	UserPlatformMax  int
 	AccountID        int64
 	AccountMax       int
 	AccountRequestID string
