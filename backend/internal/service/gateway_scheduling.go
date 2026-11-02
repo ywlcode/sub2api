@@ -2622,10 +2622,8 @@ func (s *GatewayService) isModelSupportedByAccountWithContext(ctx context.Contex
 	if account.Platform == PlatformAntigravity && account.hasOAuthInitialModelSelection() && !account.IsModelSupported(strings.TrimPrefix(requestedModel, "models/")) {
 		return false
 	}
-	if source, ok := CompositeRouteSourceFromContext(ctx); ok && source == CompositeRouteSourceAccount {
-		if publicModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK && !explicitModelMappingClaims(*account, publicModel) {
-			return false
-		}
+	if !compositeAccountModelOwned(ctx, account, requestedModel) {
+		return false
 	}
 	if account.Platform == PlatformAntigravity {
 		if strings.TrimSpace(requestedModel) == "" {

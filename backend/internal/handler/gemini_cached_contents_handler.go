@@ -127,6 +127,7 @@ func (h *GatewayHandler) GeminiCachedContentsCreate(c *gin.Context) {
 	}
 
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, modelName)
+	c.Request = c.Request.WithContext(channelMapping.WithModelRoutingContext(c.Request.Context(), modelName))
 	reqModel := modelName
 	if channelMapping.Mapped {
 		modelName = channelMapping.MappedModel
