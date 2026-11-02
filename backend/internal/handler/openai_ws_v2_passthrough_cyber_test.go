@@ -39,7 +39,7 @@ func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string, sett
 	return newOpenAIWSPassthroughHandlerHarnessWithOptions(t, upstreamURL, http.Header{"Session_id": []string{"ws-test-session"}}, extraSettings)
 }
 
-func newOpenAIWSPassthroughHandlerHarnessWithOptions(t *testing.T, upstreamURL string, clientHeaders http.Header, extraSettings map[string]string) *openAIWSPassthroughHandlerHarness {
+func newOpenAIWSPassthroughHandlerHarnessWithOptions(t *testing.T, upstreamURL string, clientHeaders http.Header, extraSettings map[string]string, configure ...func(*OpenAIGatewayHandler)) *openAIWSPassthroughHandlerHarness {
 	t.Helper()
 	gatewayCache := testutil.NewRedisGatewayCache(t)
 
@@ -104,6 +104,9 @@ func newOpenAIWSPassthroughHandlerHarnessWithOptions(t *testing.T, upstreamURL s
 		apiKeyService:            &service.APIKeyService{},
 		contentModerationService: moderationSvc,
 		concurrencyHelper:        NewConcurrencyHelper(service.NewConcurrencyService(concurrencyCache), SSEPingFormatNone, time.Second),
+	}
+	for _, configureHandler := range configure {
+		configureHandler(h)
 	}
 
 	apiKey := &service.APIKey{
