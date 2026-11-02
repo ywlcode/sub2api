@@ -2007,8 +2007,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					}
 				}
 			}
+			var cyberClientMessage []byte
+			cyberRuleMatched := false
 			if eventType == "error" || eventType == "response.failed" {
 				markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
+				cyberClientMessage, _, cyberRuleMatched = rewriteOpenAICyberPolicyForClient(c, account, upstreamMessage)
 			}
 			if eventType == "response.failed" && isOpenAIInvalidEncryptedContentSSE(upstreamMessage, eventType) {
 				s.markOpenAIWSInvalidEncryptedContentLineageFromPayload(c, payload, "ingress_ws_invalid_encrypted_lineage_mark", account.ID, turn, upstreamMessage)
@@ -2016,7 +2019,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			// Captured before this frame is written. The terminal handler below runs
 			// after the write, and the failure frame itself must not count as output.
 			turnOutputStarted := wroteDownstream
-			if eventType == "error" {
+			if eventType == "error" && !cyberRuleMatched {
 				eventCtx := openAIWSForwardStreamPhaseContext(openAI429LeaseObservation(ctx, lease), turnOutputStarted, upstreamMessage)
 				s.handleOpenAIWSErrorEventTransientFailure(eventCtx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
@@ -2156,6 +2159,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				// sanitizeOpenAICapacityShedErrorCodeForClient 注释里写明的前提。
 				clientMessage := upstreamMessage
 				if eventType == "error" || eventType == "response.failed" {
+					if cyberRuleMatched {
+						clientMessage = cyberClientMessage
+					}
 					if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 						clientMessage = rewritten
 					}

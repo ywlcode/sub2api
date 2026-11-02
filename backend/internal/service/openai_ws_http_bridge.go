@@ -19,6 +19,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 const (
@@ -676,7 +677,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, openAIWSHTTPBridgeErrorBodyLimitBytes))
 		_ = resp.Body.Close()
-		markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, nil)
+		cyberHit := markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, nil)
 		if resp.StatusCode == http.StatusBadRequest &&
 			extractUpstreamErrorCode(respBody) == openAIWSFallbackReasonInvalidEncryptedContent {
 			s.markOpenAIWSInvalidEncryptedContentLineageFromPayload(
@@ -720,6 +721,17 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		_, _, safeOwnerLimit := OpenAIUpstreamRecoveryRateLimit(resp.StatusCode, respBody)
 		if preserveAgentHistory || safeOwnerLimit {
 			clientError = buildOpenAIWSHTTPBridgeErrorEvent(resp.StatusCode, upstreamMsg, respBody)
+		}
+		if cyberHit {
+			// Match the original HTTP evidence, and preserve the policy code
+			// when converting a matched rejection into a client WS event.
+			if status, errType, message, matched := applyOpenAICyberPolicyPassthroughRule(
+				c, account, respBody, resp.StatusCode, "upstream_error", upstreamMsg,
+			); matched {
+				clientError = buildOpenAIWSHTTPBridgeErrorEvent(status, message)
+				clientError, _ = sjson.SetBytes(clientError, "error.code", "cyber_policy")
+				clientError, _ = sjson.SetBytes(clientError, "error.type", errType)
+			}
 		}
 		if writeErr := writeClientMessage(clientError); writeErr == nil {
 			markOpenAIWSClientVisibleFailure(c, "error", clientError)
@@ -843,6 +855,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			return nil
 		}
 		clientMessage := buildOpenAIWSHTTPBridgeFailedEvent(responseID, originalModel, createdAtStamper.Value(), bareErrorPayload, bareErrorMessage)
+		if rewritten, _, matched := rewriteOpenAICyberPolicyForClient(c, account, clientMessage); matched {
+			clientMessage = rewritten
+		}
 		if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 			clientMessage = rewritten
 		}
@@ -1030,6 +1045,9 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		// 仍使用未改写的 upstreamMessage。
 		clientMessage := upstreamMessage
 		if eventType == "error" || eventType == "response.failed" {
+			if rewritten, _, matched := rewriteOpenAICyberPolicyForClient(c, account, clientMessage); matched {
+				clientMessage = rewritten
+			}
 			if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 				clientMessage = rewritten
 			}
