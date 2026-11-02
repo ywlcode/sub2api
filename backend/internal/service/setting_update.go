@@ -827,6 +827,14 @@ func (s *SettingService) buildAuthSourceDefaultUpdates(ctx context.Context, sett
 	if settings == nil {
 		return nil, nil
 	}
+	for _, provider := range []ProviderDefaultGrantSettings{
+		settings.Email, settings.LinuxDo, settings.OIDC, settings.WeChat,
+		settings.GitHub, settings.Google, settings.DingTalk,
+	} {
+		if err := validatePlatformConcurrencyLimits(provider.PlatformConcurrencyLimits, s.cfg); err != nil {
+			return nil, err
+		}
+	}
 
 	for _, subscriptions := range [][]DefaultSubscriptionSetting{
 		settings.Email.Subscriptions,

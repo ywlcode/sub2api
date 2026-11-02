@@ -4308,6 +4308,28 @@
                       </div>
                     </div>
 
+                    <details class="space-y-3" :data-test="`${authSource.source}-platform-concurrency`">
+                      <summary class="cursor-pointer text-sm font-medium text-gray-900 dark:text-white">
+                        {{ t("admin.users.form.platformConcurrency") }}
+                      </summary>
+                      <p class="input-hint">
+                        {{ t("admin.settings.authSourceDefaults.platformConcurrencyHint") }}
+                      </p>
+                      <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+                        <div v-for="platform in concurrencyPlatforms" :key="platform.id" class="flex items-center justify-between gap-3">
+                          <label :for="`${authSource.source}-platform-concurrency-${platform.id}`" class="text-sm">
+                            {{ platform.display_name }}
+                          </label>
+                          <input
+                            :id="`${authSource.source}-platform-concurrency-${platform.id}`"
+                            v-model.number="authSourceDefaults[authSource.source].platform_concurrency_limits[platform.id]"
+                            type="number" min="0" max="2147483647" step="1"
+                            class="input w-28" placeholder="—"
+                          />
+                        </div>
+                      </div>
+                    </details>
+
                     <div
                       class="flex items-center justify-between rounded border border-gray-200 px-4 py-3 dark:border-dark-700"
                     >
@@ -9537,7 +9559,7 @@
 <script setup lang="ts">
 import { excelBPSImageLimits } from "@/utils/excelBPSImageLimits";
 import { ref, reactive, computed, onMounted, watch } from "vue";
-import { listPlatformIds } from "@/constants/platformCatalog";
+import { listPlatformIds, listPlatforms } from "@/constants/platformCatalog";
 import { useI18n } from "vue-i18n";
 import { useSettingsNavigation } from "@/composables/useSettingsNavigation";
 import type { SettingsTab } from "@/utils/settingsSearch";
@@ -10866,6 +10888,7 @@ const openAIAdvancedSchedulerWeightFields = computed<
 const authSourceDefaults = reactive<AuthSourceDefaultsState>(
   buildAuthSourceDefaultsState({}),
 );
+const concurrencyPlatforms = computed(() => listPlatforms());
 
 const authSourceDefaultsMeta = computed(() => [
   {
@@ -12088,6 +12111,12 @@ async function saveSettings() {
     }
 
     for (const authSource of authSourceDefaultsMeta.value) {
+      const limits = authSourceDefaults[authSource.source].platform_concurrency_limits;
+      if (Object.values(limits).some((value) => value !== "" &&
+        (!Number.isInteger(value) || value < 0 || value > 2147483647))) {
+        appStore.showError(`${authSource.title}: ${t("admin.users.concurrencyNonNegative")}`);
+        return;
+      }
       authSourceDefaults[authSource.source].subscriptions =
         normalizeDefaultSubscriptionSettings(
           authSourceDefaults[authSource.source].subscriptions,

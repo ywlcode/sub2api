@@ -103,10 +103,11 @@ type DefaultSubscriptionAssigner interface {
 }
 
 type signupGrantPlan struct {
-	Balance        float64
-	Concurrency    int
-	Subscriptions  []DefaultSubscriptionSetting
-	PlatformQuotas map[string]*DefaultPlatformQuotaSetting
+	PlatformConcurrencyLimits map[string]int
+	Balance                   float64
+	Concurrency               int
+	Subscriptions             []DefaultSubscriptionSetting
+	PlatformQuotas            map[string]*DefaultPlatformQuotaSetting
 }
 
 // NewAuthService 创建认证服务实例
@@ -242,13 +243,14 @@ func (s *AuthService) RegisterWithVerification(ctx context.Context, email, passw
 
 	// 创建用户
 	user := &User{
-		Email:        email,
-		PasswordHash: hashedPassword,
-		Role:         RoleUser,
-		Balance:      grantPlan.Balance,
-		Concurrency:  grantPlan.Concurrency,
-		RPMLimit:     defaultRPMLimit,
-		Status:       StatusActive,
+		Email:                     email,
+		PasswordHash:              hashedPassword,
+		Role:                      RoleUser,
+		Balance:                   grantPlan.Balance,
+		Concurrency:               grantPlan.Concurrency,
+		PlatformConcurrencyLimits: clonePlatformConcurrencyLimits(grantPlan.PlatformConcurrencyLimits),
+		RPMLimit:                  defaultRPMLimit,
+		Status:                    StatusActive,
 	}
 
 	if err := s.createUserAndClaimInvitation(ctx, user, invitationRedeemCode); err != nil {
@@ -629,15 +631,16 @@ func (s *AuthService) LoginOrRegisterOAuth(ctx context.Context, email, username 
 			}
 
 			newUser := &User{
-				Email:        email,
-				Username:     username,
-				PasswordHash: hashedPassword,
-				Role:         RoleUser,
-				Balance:      grantPlan.Balance,
-				Concurrency:  grantPlan.Concurrency,
-				RPMLimit:     defaultRPMLimit,
-				Status:       StatusActive,
-				SignupSource: signupSource,
+				Email:                     email,
+				Username:                  username,
+				PasswordHash:              hashedPassword,
+				Role:                      RoleUser,
+				Balance:                   grantPlan.Balance,
+				Concurrency:               grantPlan.Concurrency,
+				PlatformConcurrencyLimits: clonePlatformConcurrencyLimits(grantPlan.PlatformConcurrencyLimits),
+				RPMLimit:                  defaultRPMLimit,
+				Status:                    StatusActive,
+				SignupSource:              signupSource,
 			}
 
 			if err := s.userRepo.Create(ctx, newUser); err != nil {
@@ -785,15 +788,16 @@ func (s *AuthService) loginOrRegisterOAuthWithTokenPair(ctx context.Context, ema
 			}
 
 			newUser := &User{
-				Email:        email,
-				Username:     username,
-				PasswordHash: hashedPassword,
-				Role:         RoleUser,
-				Balance:      grantPlan.Balance,
-				Concurrency:  grantPlan.Concurrency,
-				RPMLimit:     defaultRPMLimit,
-				Status:       StatusActive,
-				SignupSource: signupSource,
+				Email:                     email,
+				Username:                  username,
+				PasswordHash:              hashedPassword,
+				Role:                      RoleUser,
+				Balance:                   grantPlan.Balance,
+				Concurrency:               grantPlan.Concurrency,
+				PlatformConcurrencyLimits: clonePlatformConcurrencyLimits(grantPlan.PlatformConcurrencyLimits),
+				RPMLimit:                  defaultRPMLimit,
+				Status:                    StatusActive,
+				SignupSource:              signupSource,
 			}
 
 			if s.entClient != nil && invitationRedeemCode != nil {
@@ -963,6 +967,7 @@ func (s *AuthService) resolveSignupGrantPlan(ctx context.Context, signupSource s
 
 	plan.Balance = resolved.Balance
 	plan.Concurrency = resolved.Concurrency
+	plan.PlatformConcurrencyLimits = clonePlatformConcurrencyLimits(resolved.PlatformConcurrencyLimits)
 	plan.Subscriptions = resolved.Subscriptions
 
 	// ============ auth source quota merge（仅在 enabled 分支内） ============

@@ -1420,7 +1420,8 @@ export default {
           }
         },
         grantOnFirstBindLabel: '首次绑定时授权',
-        grantOnFirstBindHint: '已有账号首次绑定该来源时发放默认权益。',
+        grantOnFirstBindHint: '已有账号首次绑定该来源时发放默认权益。余额和总并发累加，已填写的平台并发上限覆盖原值。',
+        platformConcurrencyHint: '首次注册或首次绑定时应用。留空：注册时不设平台上限，绑定时保留原值；0：取消该平台上限；正整数：设为该平台上限。仍受用户总并发限制，未填写的平台保持不变。',
         defaultSubscriptionsLabel: '默认订阅',
         defaultSubscriptionsHint: '仅对当前认证来源生效，未配置时不追加来源专属订阅。',
         noSourceSubscriptions: '当前来源未配置专属默认订阅。',

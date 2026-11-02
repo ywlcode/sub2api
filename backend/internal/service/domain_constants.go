@@ -814,6 +814,10 @@ func SettingKeyAuthSourcePlatformQuotas(source string) string {
 	return fmt.Sprintf("auth_source_default_%s_platform_quotas", source)
 }
 
+func SettingKeyAuthSourcePlatformConcurrencyLimits(source string) string {
+	return "auth_source_default_" + source + "_platform_concurrency_limits"
+}
+
 // QuotaDimension constants for spark shadow accounts.
 const (
 	QuotaDimensionGlobal = "global"

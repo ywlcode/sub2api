@@ -1426,7 +1426,8 @@ export default {
           }
         },
         grantOnFirstBindLabel: 'Grant on first bind',
-        grantOnFirstBindHint: 'Grant default entitlements when an existing user first binds this source.',
+        grantOnFirstBindHint: 'Grant default entitlements on first bind. Balance and total concurrency are added; configured platform concurrency limits replace existing values.',
+        platformConcurrencyHint: 'Applied on first signup or first bind. Blank: no platform cap on signup, preserve the existing cap on bind. Zero removes the platform cap; a positive integer sets it. The user total concurrency limit still applies. Unconfigured platforms are unchanged.',
         defaultSubscriptionsLabel: 'Default subscriptions',
         defaultSubscriptionsHint: 'Applies only to this auth source. Leave empty to skip source-specific subscriptions.',
         noSourceSubscriptions: 'No source-specific default subscriptions configured.',
