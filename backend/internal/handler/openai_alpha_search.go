@@ -88,6 +88,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 	}
 
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, requestedModel)
+	c.Request = c.Request.WithContext(channelMapping.WithModelRoutingContext(c.Request.Context(), requestedModel))
 	forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	service.SetOpsLatencyMs(c, service.OpsAuthLatencyMsKey, time.Since(requestStart).Milliseconds())
@@ -143,7 +144,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			apiKey.GroupID,
 			"",
 			sessionHash,
-			requestedModel,
+			channelMapping.MappedModel,
 			failedAccountIDs,
 			service.OpenAIUpstreamTransportHTTPSSE,
 			service.OpenAIEndpointCapabilityAlphaSearch,
@@ -165,7 +166,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 				return
 			}
 			if len(failedAccountIDs) == 0 {
-				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, requestedModel, requestedModel, service.PlatformOpenAI)
+				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, channelMapping.MappedModel, requestedModel, service.PlatformOpenAI)
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 				}

@@ -107,6 +107,8 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(requestCtx, apiKey.GroupID, reqModel)
+	requestCtx = channelMapping.WithModelRoutingContext(requestCtx, reqModel)
+	c.Request = c.Request.WithContext(requestCtx)
 
 	// Claude Code only restriction: /v1/responses is never a Claude Code
 	// endpoint. With a fallback group the request continues and account selection
@@ -194,14 +196,14 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 		if failoverClientGone(c) {
 			return
 		}
-		selection, err := h.gatewayService.SelectAccountWithLoadAwareness(requestCtx, apiKey.GroupID, sessionHash, reqModel, fs.FailedAccountIDs, "", int64(0))
+		selection, err := h.gatewayService.SelectAccountWithLoadAwareness(requestCtx, apiKey.GroupID, sessionHash, channelMapping.MappedModel, fs.FailedAccountIDs, "", int64(0))
 		if err != nil {
 			if failoverClientGone(c) {
 				reqLog.Info("gateway.responses.account_select_aborted_client_disconnected", zap.Error(err))
 				return
 			}
 			if len(fs.FailedAccountIDs) == 0 {
-				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, effectiveAPIKeyPlatform(c, apiKey))
+				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, channelMapping.MappedModel, reqModel, effectiveAPIKeyPlatform(c, apiKey))
 				cls = classifySelectionFailureError(err, cls)
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)

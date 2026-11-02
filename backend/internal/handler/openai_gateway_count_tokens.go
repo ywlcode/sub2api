@@ -84,6 +84,7 @@ func (h *OpenAIGatewayHandler) ResponsesInputTokens(c *gin.Context) {
 	}
 
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+	c.Request = c.Request.WithContext(channelMapping.WithModelRoutingContext(c.Request.Context(), reqModel))
 	routingModel := reqModel
 	forwardBody := body
 	if channelMapping.Mapped {
@@ -253,7 +254,11 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 	setOpsEndpointContext(c, "", int16(service.RequestTypeFromLegacy(false, false)))
 
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
+	c.Request = c.Request.WithContext(channelMapping.WithModelRoutingContext(c.Request.Context(), reqModel))
 	mappedBodyForMessages := newOpenAIModelMappedBodyCache(body, h.gatewayService.ReplaceModelInBody)
+	if mappedModel := openAIChannelForwardModel(channelMapping, reqModel); mappedModel != reqModel {
+		preferredMappedModel = mappedModel
+	}
 
 	subscription, _ := middleware2.GetSubscriptionFromContext(c)
 	if err := h.billingCacheService.CheckBillingEligibility(c.Request.Context(), apiKey.User, apiKey, apiKey.Group, subscription, service.QuotaPlatform(c.Request.Context(), apiKey)); err != nil {
