@@ -794,6 +794,9 @@ func (s *OpenAIGatewayService) checkChannelPricingRestriction(ctx context.Contex
 	if groupID == nil || s.channelService == nil || requestedModel == "" {
 		return false
 	}
+	if rewrite, ok := channelRewriteForRoutingModel(ctx, requestedModel); ok {
+		requestedModel = rewrite.publicModel
+	}
 	mapping := s.channelService.ResolveChannelMapping(ctx, *groupID, requestedModel)
 	billingModel := billingModelForRestriction(mapping.BillingModelSource, requestedModel, mapping.MappedModel)
 	if billingModel == "" {
