@@ -298,7 +298,7 @@ func TestMistralBridgeAndRawReaders(t *testing.T) {
 	require.Contains(t, w.Body.String(), "Hello world")
 	c, _ = mistralTestContext()
 	var chunks []*apicompat.ChatCompletionsChunk
-	state := s.scanCCStream(c, mistralTestResponse(stream), account, "test", "fake", time.Now(), func(ch *apicompat.ChatCompletionsChunk) { chunks = append(chunks, ch) })
+	state := s.scanCCStream(c, mistralTestResponse(stream), account, "test", "fake", time.Now(), func(ch *apicompat.ChatCompletionsChunk) { chunks = append(chunks, ch) }, func([]byte, int) { t.Fatal("unexpected cyber policy response") })
 	require.NoError(t, state.Err)
 	require.True(t, state.SawDone)
 	require.Len(t, chunks, 3)
@@ -313,7 +313,7 @@ func TestMistralBridgeAndRawReaders(t *testing.T) {
 	require.Contains(t, w.Body.String(), `"mistral_content"`)
 	bad := "data: " + `{"choices":[{"delta":{"content":[{"type":"secret-unknown"}]}}]}` + "\n\ndata: [DONE]\n\n"
 	c, _ = mistralTestContext()
-	state = s.scanCCStream(c, mistralTestResponse(bad), account, "test", "fake", time.Now(), func(*apicompat.ChatCompletionsChunk) { t.Fatal("unexpected emission") })
+	state = s.scanCCStream(c, mistralTestResponse(bad), account, "test", "fake", time.Now(), func(*apicompat.ChatCompletionsChunk) { t.Fatal("unexpected emission") }, func([]byte, int) { t.Fatal("unexpected cyber policy response") })
 	require.Error(t, state.Err)
 	require.False(t, state.SawDone)
 	c, w = mistralTestContext()
