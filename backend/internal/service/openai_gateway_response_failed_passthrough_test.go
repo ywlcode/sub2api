@@ -135,7 +135,7 @@ func TestResponsesStreamAccessStateFailoverPrecedesPassthroughRule(t *testing.T)
 	}
 }
 
-func TestResponsesStreamCyberPolicyPrecedesPassthroughRule(t *testing.T) {
+func TestResponsesStreamCyberPolicyAppliesPassthroughRuleWithoutFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	stream := "event: error\n" +
 		`data: {"type":"error","error":{"code":"cyber_policy","message":"blocked by cyber policy"}}` + "\n\n"
@@ -176,7 +176,7 @@ func TestResponsesStreamCyberPolicyPrecedesPassthroughRule(t *testing.T) {
 			var failoverErr *UpstreamFailoverError
 			require.False(t, errors.As(err, &failoverErr))
 			require.NotNil(t, GetOpsCyberPolicy(c))
-			require.NotEqual(t, http.StatusTeapot, rec.Code)
+			require.Equal(t, http.StatusTeapot, rec.Code)
 			require.Contains(t, rec.Body.String(), "cyber_policy")
 		})
 	}

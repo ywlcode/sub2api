@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -142,14 +144,15 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 
 	// 5. Convert response
 	if clientStream {
-		return s.streamChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+		return s.streamChatCompletionsAsAnthropic(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 	}
-	return s.bufferChatCompletionsAsAnthropic(c, resp, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
+	return s.bufferChatCompletionsAsAnthropic(c, resp, account, originalModel, billingModel, upstreamModel, reasoningEffort, serviceTier, startTime)
 }
 
 func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 	c *gin.Context,
 	resp *http.Response,
+	account *Account,
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
@@ -158,7 +161,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
-	ccResp, usage, err := s.readCCUpstreamJSONResponse(c, resp, writeAnthropicError)
+	ccResp, usage, err := s.readCCUpstreamJSONResponse(c, resp, account, writeAnthropicError)
 	if err != nil {
 		return nil, err
 	}
@@ -189,6 +192,7 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsAnthropic(
 func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 	c *gin.Context,
 	resp *http.Response,
+	account *Account,
 	originalModel string,
 	billingModel string,
 	upstreamModel string,
@@ -226,8 +230,21 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 		}
 	}
 
-	scan := s.scanCCStream(c, resp, "openai messages chat fallback", requestID, startTime, emitChunk)
+	scan := s.scanCCStream(c, resp, account, "openai messages chat fallback", requestID, startTime, emitChunk, func(payload []byte, status int) {
+		errType := gjson.GetBytes(payload, "error.type").String()
+		message := gjson.GetBytes(payload, "error.message").String()
+		MarkResponseCommitted(c)
+		if !c.Writer.Written() {
+			writeAnthropicError(c, status, errType, message)
+		} else if !clientDisconnected {
+			_, _ = fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE(errType, message))
+			c.Writer.Flush()
+		}
+	})
 	usage := scan.Usage
+	if errors.Is(scan.Err, errOpenAICyberPolicyForwarded) {
+		return nil, scan.Err
+	}
 
 	if scan.Err != nil {
 		// Broken upstream read: skip finalization so no synthetic message_stop

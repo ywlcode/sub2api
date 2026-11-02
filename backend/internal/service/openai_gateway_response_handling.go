@@ -402,7 +402,15 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		}
 		if codexFailureTerminal && sawBareError && !sawResponseFailed && !clientDisconnected {
 			applyAttemptResponseHeaders()
-			if _, err := writePendingString(buildOpenAIResponseFailedSSE(responseID, originalModel, createdAtStamper.Value(), bareErrorPayload, failedMessage)); err != nil {
+			clientPayload := bareErrorPayload
+			if rewritten, status, matched := rewriteOpenAICyberPolicyForClient(c, account, bareErrorPayload); matched {
+				if !c.Writer.Written() {
+					writeOpenAICyberPolicyClientError(c, status, rewritten)
+					return resultWithUsage(), errOpenAICyberPolicyForwarded
+				}
+				clientPayload = rewritten
+			}
+			if _, err := writePendingString(buildOpenAIResponseFailedSSE(responseID, originalModel, createdAtStamper.Value(), clientPayload, failedMessage)); err != nil {
 				handlePendingWriteError(err)
 			} else {
 				failureDelivered = true
@@ -662,6 +670,18 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 							streamEarlyErr = fmt.Errorf("upstream response failed: passthrough rule matched message=%s", errMsg)
 							return
 						}
+					}
+				}
+				if cyberHit && !suppressCurrentEvent {
+					if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, dataBytes); matched {
+						if !c.Writer.Written() {
+							writeOpenAICyberPolicyClientError(c, status, clientPayload)
+							streamEarlyErr = errOpenAICyberPolicyForwarded
+							return
+						}
+						dataBytes = clientPayload
+						data = string(clientPayload)
+						line = "data: " + data
 					}
 				}
 				forceFlushFailedEvent = true
@@ -1716,6 +1736,13 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
 	regionalMeterObserveUsage(ctx, body, "json")
+	if markOpenAICyberPolicyEvent(c, body, resp.StatusCode, &usageValue) {
+		if clientBody, status, matched := rewriteOpenAICyberPolicyForClient(c, account, body); matched {
+			responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+			writeOpenAICyberPolicyClientError(c, status, clientBody)
+			return nil, errOpenAICyberPolicyForwarded
+		}
+	}
 	if !usageOK {
 		if bodyLooksLikeSSE {
 			return s.handleSSEToJSON(resp, c, account, body, originalModel, mappedModel)
@@ -1797,6 +1824,14 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		regionalMeterObserveUsage(c.Request.Context(), terminalPayload, terminalType)
 	}
 	if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
+		usage := s.parseSSEUsageFromBody(bodyText)
+		if markOpenAICyberPolicyEvent(c, terminalPayload, resp.StatusCode, usage) {
+			if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, terminalPayload); matched {
+				responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+				writeOpenAICyberPolicyClientError(c, status, clientPayload)
+				return nil, errOpenAICyberPolicyForwarded
+			}
+		}
 		msg := extractOpenAISSEErrorMessage(terminalPayload)
 		if msg == "" {
 			msg = "Upstream compact response failed"
