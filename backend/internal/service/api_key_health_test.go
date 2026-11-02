@@ -369,7 +369,7 @@ func TestAPIKeyHealthHTTPSemanticOutputTimeoutCountsBeforeCleanupCancellation(t 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	reader, writer := io.Pipe()
-	defer writer.Close()
+	t.Cleanup(func() { require.NoError(t, writer.Close()) })
 	upstream := apiKeyHealthTestHTTP{DoFunc: func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: reader}, nil
 	}}

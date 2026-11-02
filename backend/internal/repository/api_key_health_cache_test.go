@@ -19,7 +19,9 @@ func newAPIKeyHealthTestCache(t *testing.T) (*miniredis.Miniredis, service.APIKe
 	server.SetTime(time.Unix(1_700_000_000, 0))
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	return server, NewTempUnschedCache(client).(service.APIKeyHealthCache), client
+	cache, ok := NewTempUnschedCache(client).(service.APIKeyHealthCache)
+	require.True(t, ok)
+	return server, cache, client
 }
 
 func TestAPIKeyHealthCachePhysicalAttemptsAndSlidingEviction(t *testing.T) {
