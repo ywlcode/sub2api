@@ -274,7 +274,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if anchor != nil {
 		anchorScope = anchor.scope
 	}
-	lease, err := s.getOpenAIWSConnPool().Acquire(acquireCtx, openAIWSAcquireRequest{
+	lease, err := acquireAPIKeyHealthWS(acquireCtx, s.getOpenAIWSConnPool(), s.rateLimitService, openAIWSAcquireRequest{
 		AnchorScope: anchorScope,
 		Account:     account,
 		WSURL:       wsURL,
@@ -383,6 +383,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 		return nil, wrapOpenAIWSFallback(classifyOpenAIWSAcquireError(err), err)
 	}
+	lease.health = newAPIKeyHealthWSTracker(ctx, s.rateLimitService, account)
 	// cleanExit 标记正常终态或尚未发送消息的本地拒绝，连接可安全归还复用。
 	// 所有异常路径（读写错误、error 事件等）已在各自分支中提前调用 MarkBroken，
 	// 因此 defer 中只需处理正常退出时不 MarkBroken 即可。

@@ -189,9 +189,16 @@ const ruleIndexDisplay = computed(() => {
   return state.value.rule_index + 1
 })
 
-const hasThresholdEvidence = computed(() => (state.value?.trigger_count || 0) > 1)
+const hasThresholdEvidence = computed(() => (state.value?.trigger_count || 0) > 1 || (state.value?.trigger_window_requests || 0) > 0)
 
 const triggerEvidenceText = computed(() => {
+  if (state.value?.trigger_window_requests) {
+    return t('admin.accounts.healthBreaker.triggerEvidence', {
+      count: state.value.trigger_count || 0, samples: state.value.trigger_samples || 0,
+      window: state.value.trigger_window_requests, threshold: state.value.trigger_threshold || 0,
+      trips: state.value.breaker_trip_count || 1
+    })
+  }
   const count = state.value?.trigger_count || 0
   const threshold = state.value?.trigger_threshold || 0
   const minutes = state.value?.trigger_window_minutes || 0

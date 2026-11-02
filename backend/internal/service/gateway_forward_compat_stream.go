@@ -31,6 +31,8 @@ var anthropicCompatDisconnectDrainInterval = 180 * time.Second
 type anthropicCompatStream struct {
 	pump        *anthropicNativeLinePump
 	body        io.Closer
+	response    *http.Response
+	callerCtx   context.Context
 	maxLineSize int
 	logPrefix   string
 	requestID   string
@@ -68,12 +70,14 @@ func newAnthropicCompatStream(cfg *config.Config, c *gin.Context, resp *http.Res
 	stream := &anthropicCompatStream{
 		pump:        newAnthropicNativeLinePump(scanner, anthropicNativeStreamInterval(cfg)),
 		body:        resp.Body,
+		response:    resp,
 		maxLineSize: maxLineSize,
 		logPrefix:   logPrefix,
 		requestID:   requestID,
 	}
 	if c.Request != nil {
 		stream.clientGone = c.Request.Context().Done()
+		stream.callerCtx = c.Request.Context()
 	}
 	return stream
 }
@@ -123,6 +127,9 @@ func (st *anthropicCompatStream) nextLine() (string, bool) {
 		st.readErr = err
 		switch {
 		case errors.Is(err, errAnthropicNativeStreamIdle):
+			if !st.clientDisconnected {
+				recordAPIKeyHealthResponseFailure(st.callerCtx, st.response, "Upstream response stream timed out")
+			}
 			_ = st.body.Close()
 			logger.L().Warn(st.logPrefix+" stream: data interval timeout",
 				zap.String("request_id", st.requestID),

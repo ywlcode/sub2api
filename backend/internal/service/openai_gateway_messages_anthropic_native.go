@@ -507,6 +507,7 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 					fmt.Errorf("stream usage incomplete after timeout")
 			}
 			logger.LegacyPrintf("service.gateway", "[CN Anthropic 直通] Stream data interval timeout: account=%d model=%s interval=%s", account.ID, upstreamModel, streamInterval)
+			recordAPIKeyHealthResponseFailure(ctx, resp, "Upstream response stream timed out")
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, upstreamModel)
 			}

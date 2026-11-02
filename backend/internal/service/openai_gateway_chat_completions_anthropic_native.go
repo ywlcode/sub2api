@@ -185,6 +185,7 @@ func (s *OpenAIGatewayService) handleCCBufferedFromNativeAnthropic(
 		}
 	}
 	onIdle := func() (*OpenAIForwardResult, error) {
+		recordAPIKeyHealthResponseFailure(c.Request.Context(), resp, "Upstream response stream timed out")
 		_ = resp.Body.Close()
 		logger.L().Warn("openai cc via native anthropic buffered: data interval timeout",
 			zap.String("request_id", requestID),
@@ -379,6 +380,9 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 	// onIdle 关闭上游连接（解除阻塞的读、归还连接池位），并按已累计 usage
 	// 返回——与 messages 主路径 "stream usage incomplete after timeout" 同语义。
 	onIdle := func() (*OpenAIForwardResult, error) {
+		if !clientDisconnected {
+			recordAPIKeyHealthResponseFailure(c.Request.Context(), resp, "Upstream response stream timed out")
+		}
 		_ = resp.Body.Close()
 		if !clientDisconnected {
 			logger.L().Warn("openai cc via native anthropic stream: data interval timeout",
