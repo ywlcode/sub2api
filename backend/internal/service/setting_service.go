@@ -222,12 +222,13 @@ func (q *DefaultPlatformQuotaSetting) HasAnyLimit() bool {
 }
 
 type ProviderDefaultGrantSettings struct {
-	Balance          float64
-	Concurrency      int
-	Subscriptions    []DefaultSubscriptionSetting
-	GrantOnSignup    bool
-	GrantOnFirstBind bool
-	PlatformQuotas   map[string]*DefaultPlatformQuotaSetting // key = platform name
+	PlatformConcurrencyLimits map[string]int
+	Balance                   float64
+	Concurrency               int
+	Subscriptions             []DefaultSubscriptionSetting
+	GrantOnSignup             bool
+	GrantOnFirstBind          bool
+	PlatformQuotas            map[string]*DefaultPlatformQuotaSetting // key = platform name
 }
 
 type AuthSourceDefaultSettings struct {

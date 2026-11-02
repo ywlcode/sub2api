@@ -416,6 +416,9 @@ func (s *SettingService) GetAuthSourceDefaultSettings(ctx context.Context) (*Aut
 		SettingKeyAuthSourcePlatformQuotas("dingtalk"),
 		SettingKeyForceEmailOnThirdPartySignup,
 	}
+	for _, source := range []string{"email", "linuxdo", "oidc", "wechat", "github", "google", "dingtalk"} {
+		keys = append(keys, SettingKeyAuthSourcePlatformConcurrencyLimits(source))
+	}
 
 	settings, err := s.settingRepo.GetMultiple(ctx, keys)
 	if err != nil {
@@ -457,6 +460,9 @@ func (s *SettingService) ResolveAuthSourceGrantSettings(ctx context.Context, sig
 	}
 	if !enabled {
 		return result, false, nil
+	}
+	if err := validatePlatformConcurrencyLimits(providerDefaults.PlatformConcurrencyLimits, s.cfg); err != nil {
+		return result, false, err
 	}
 
 	return mergeProviderDefaultGrantSettings(result, providerDefaults), true, nil
