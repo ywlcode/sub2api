@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
@@ -18,11 +19,15 @@ func clonePlatformConcurrencyLimits(limits map[string]int) map[string]int {
 }
 
 func (s *adminServiceImpl) validatePlatformConcurrencyLimits(limits map[string]int) error {
+	return validatePlatformConcurrencyLimits(limits, s.cfg)
+}
+
+func validatePlatformConcurrencyLimits(limits map[string]int, cfg *config.Config) error {
 	for platform, limit := range limits {
 		if !domain.IsConcretePlatform(platform) || limit < 0 || int64(limit) > 2147483647 {
 			return infraerrors.BadRequest("INVALID_PLATFORM_CONCURRENCY", "Platform concurrency must use a concrete platform and a non-negative integer")
 		}
-		if limit > 0 && s.cfg != nil && s.cfg.Runtime.RegionalConcurrencyFile != "" {
+		if limit > 0 && cfg != nil && cfg.Runtime.RegionalConcurrencyFile != "" {
 			return infraerrors.BadRequest("PLATFORM_CONCURRENCY_UNSUPPORTED", "Platform concurrency is not supported by regional concurrency mode")
 		}
 	}

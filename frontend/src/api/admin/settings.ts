@@ -117,6 +117,7 @@ export type AuthSourceType =
 export interface AuthSourceDefaultsValue {
   balance: number;
   concurrency: number;
+  platform_concurrency_limits: Record<string, number | "">;
   subscriptions: DefaultSubscriptionSetting[];
   grant_on_signup: boolean;
   grant_on_first_bind: boolean;
@@ -275,6 +276,7 @@ export function buildAuthSourceDefaultsState(
             AUTH_SOURCE_DEFAULT_CONCURRENCY,
         ),
       ),
+      platform_concurrency_limits: { ...(raw[`auth_source_default_${source}_platform_concurrency_limits`] as Record<string, number> | undefined) },
       subscriptions: normalizeDefaultSubscriptionSettings(
         Array.isArray(subscriptions)
           ? (subscriptions as DefaultSubscriptionSetting[])
@@ -312,6 +314,8 @@ export function appendAuthSourceDefaultsToUpdateRequest(
       current.grant_on_signup;
     target[`auth_source_default_${source}_grant_on_first_bind`] =
       current.grant_on_first_bind;
+    target[`auth_source_default_${source}_platform_concurrency_limits`] =
+      Object.fromEntries(Object.entries(current.platform_concurrency_limits ?? {}).filter(([, value]) => value !== ""));
     target[`auth_source_default_${source}_platform_quotas`] = sanitizePlatformQuotasMap(current.platform_quotas)
   }
 
@@ -445,36 +449,43 @@ export interface SystemSettings {
   default_subscriptions: DefaultSubscriptionSetting[];
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
+  auth_source_default_email_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_email_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_email_grant_on_signup?: boolean;
   auth_source_default_email_grant_on_first_bind?: boolean;
   auth_source_default_linuxdo_balance?: number;
   auth_source_default_linuxdo_concurrency?: number;
+  auth_source_default_linuxdo_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_linuxdo_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_linuxdo_grant_on_signup?: boolean;
   auth_source_default_linuxdo_grant_on_first_bind?: boolean;
   auth_source_default_oidc_balance?: number;
   auth_source_default_oidc_concurrency?: number;
+  auth_source_default_oidc_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_oidc_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_oidc_grant_on_signup?: boolean;
   auth_source_default_oidc_grant_on_first_bind?: boolean;
   auth_source_default_wechat_balance?: number;
   auth_source_default_wechat_concurrency?: number;
+  auth_source_default_wechat_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_wechat_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_wechat_grant_on_signup?: boolean;
   auth_source_default_wechat_grant_on_first_bind?: boolean;
   auth_source_default_dingtalk_balance?: number;
   auth_source_default_dingtalk_concurrency?: number;
+  auth_source_default_dingtalk_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_dingtalk_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_dingtalk_grant_on_signup?: boolean;
   auth_source_default_dingtalk_grant_on_first_bind?: boolean;
   auth_source_default_github_balance?: number;
   auth_source_default_github_concurrency?: number;
+  auth_source_default_github_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_github_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_github_grant_on_signup?: boolean;
   auth_source_default_github_grant_on_first_bind?: boolean;
   auth_source_default_google_balance?: number;
   auth_source_default_google_concurrency?: number;
+  auth_source_default_google_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_google_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_google_grant_on_signup?: boolean;
   auth_source_default_google_grant_on_first_bind?: boolean;
@@ -848,36 +859,43 @@ export interface UpdateSettingsRequest {
   default_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_email_balance?: number;
   auth_source_default_email_concurrency?: number;
+  auth_source_default_email_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_email_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_email_grant_on_signup?: boolean;
   auth_source_default_email_grant_on_first_bind?: boolean;
   auth_source_default_linuxdo_balance?: number;
   auth_source_default_linuxdo_concurrency?: number;
+  auth_source_default_linuxdo_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_linuxdo_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_linuxdo_grant_on_signup?: boolean;
   auth_source_default_linuxdo_grant_on_first_bind?: boolean;
   auth_source_default_oidc_balance?: number;
   auth_source_default_oidc_concurrency?: number;
+  auth_source_default_oidc_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_oidc_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_oidc_grant_on_signup?: boolean;
   auth_source_default_oidc_grant_on_first_bind?: boolean;
   auth_source_default_wechat_balance?: number;
   auth_source_default_wechat_concurrency?: number;
+  auth_source_default_wechat_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_wechat_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_wechat_grant_on_signup?: boolean;
   auth_source_default_wechat_grant_on_first_bind?: boolean;
   auth_source_default_dingtalk_balance?: number;
   auth_source_default_dingtalk_concurrency?: number;
+  auth_source_default_dingtalk_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_dingtalk_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_dingtalk_grant_on_signup?: boolean;
   auth_source_default_dingtalk_grant_on_first_bind?: boolean;
   auth_source_default_github_balance?: number;
   auth_source_default_github_concurrency?: number;
+  auth_source_default_github_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_github_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_github_grant_on_signup?: boolean;
   auth_source_default_github_grant_on_first_bind?: boolean;
   auth_source_default_google_balance?: number;
   auth_source_default_google_concurrency?: number;
+  auth_source_default_google_platform_concurrency_limits?: Record<string, number>;
   auth_source_default_google_subscriptions?: DefaultSubscriptionSetting[];
   auth_source_default_google_grant_on_signup?: boolean;
   auth_source_default_google_grant_on_first_bind?: boolean;
