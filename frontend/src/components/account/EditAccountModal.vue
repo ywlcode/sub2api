@@ -1723,6 +1723,8 @@
         </div>
       </div>
 
+      <APIKeyHealthSettings v-if="account?.type === 'apikey'" v-model="apiKeyHealth" />
+
       <!-- Temp Unschedulable Rules -->
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
         <div class="mb-3 flex items-center justify-between">
@@ -3746,6 +3748,8 @@ import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import Toggle from '@/components/common/Toggle.vue'
+import APIKeyHealthSettings from '@/components/account/APIKeyHealthSettings.vue'
+import { defaultAPIKeyHealthConfig, readAPIKeyHealthConfig, applyAPIKeyHealthConfig } from '@/components/account/apiKeyHealth'
 import AccountRpmSettings from '@/components/account/AccountRpmSettings.vue'
 import { applyAccountRPMSettings } from '@/components/account/accountRpm'
 import Icon from '@/components/icons/Icon.vue'
@@ -4486,6 +4490,7 @@ const antigravityModelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist'
 const antigravityWhitelistModels = ref<string[]>([])
 const antigravityModelMappings = ref<ModelMapping[]>([])
 const isSyncingAntigravityUpstream = ref(false)
+const apiKeyHealth = ref(defaultAPIKeyHealthConfig())
 const tempUnschedEnabled = ref(false)
 const accountSchedulingThresholdOverrideEnabled = ref(false)
 const accountSchedulingThresholdOverrideValue = ref(100)
@@ -5332,6 +5337,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   // Load quota control settings (Anthropic OAuth/SetupToken only)
   loadQuotaControlSettings(newAccount)
 
+  apiKeyHealth.value = readAPIKeyHealthConfig(credentials)
   loadTempUnschedRules(credentials)
   loadAccountSchedulingThresholdOverride(newAccount.platform, credentials)
 
@@ -6150,6 +6156,14 @@ const saveAutoBPSRule = async (accountID: number) => {
 const submitUpdateAccount = async (accountID: number, updatePayload: Record<string, unknown>) => {
   submitting.value = true
   try {
+    if (props.account?.type === 'apikey') {
+      const credentials = { ...((updatePayload.credentials || props.account.credentials || {}) as Record<string, unknown>) }
+      if (!applyAPIKeyHealthConfig(credentials, apiKeyHealth.value)) {
+        appStore.showError(t('admin.accounts.healthBreaker.invalid'))
+        return
+      }
+      updatePayload.credentials = credentials
+    }
     let updatedAccount = await adminAPI.accounts.update(accountID, withAntigravityConfirmFlag(updatePayload))
     updatedAccount = await persistGrokMediaEligibility(accountID, updatedAccount)
     appStore.showSuccess(t('admin.accounts.accountUpdated'))

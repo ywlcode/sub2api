@@ -1127,6 +1127,9 @@ export interface TempUnschedulableState {
   trigger_count?: number
   trigger_threshold?: number
   trigger_window_minutes?: number
+  trigger_window_requests?: number
+  trigger_samples?: number
+  breaker_trip_count?: number
 }
 
 export interface TempUnschedulableStatus {

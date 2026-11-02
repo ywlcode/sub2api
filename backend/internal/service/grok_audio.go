@@ -97,7 +97,7 @@ func (s *OpenAIGatewayService) ForwardGrokVoice(ctx context.Context, c *gin.Cont
 		proxyURL = account.Proxy.URL()
 	}
 	started := time.Now()
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	resp, err := apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).Do(req, proxyURL, account.ID, account.Concurrency)
 	s.rateLimitService.observeQualityResponse(req.Context(), account, resp, err)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(started).Milliseconds())
 	if err != nil {
