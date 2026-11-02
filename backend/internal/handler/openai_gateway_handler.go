@@ -2874,6 +2874,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	if !h.ensureResponsesDependencies(c, reqLog) {
 		return
 	}
+	// WebSocket turns share this context with the service forwarders, just like
+	// HTTP requests. Bind rules before upgrading so cyber_policy events can
+	// apply the configured client message throughout the connection.
+	service.BindErrorPassthroughService(c, h.errorPassthroughService)
 	reqLog.Info("openai.websocket_ingress_started")
 	clientIP := ip.GetClientIP(c)
 	userAgent := strings.TrimSpace(c.GetHeader("User-Agent"))
