@@ -19,7 +19,9 @@ func platformTestCache(t *testing.T) (*concurrencyCache, *miniredis.Miniredis) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
 	t.Cleanup(func() { _ = client.Close() })
-	return NewConcurrencyCache(client, 15, 900).(*concurrencyCache), server
+	cache, ok := NewConcurrencyCache(client, 15, 900).(*concurrencyCache)
+	require.True(t, ok)
+	return cache, server
 }
 
 func TestUserPlatformConcurrencyAtomicLimits(t *testing.T) {
