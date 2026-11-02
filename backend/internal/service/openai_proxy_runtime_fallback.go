@@ -172,7 +172,7 @@ func (s *OpenAIGatewayService) doOpenAIProxyAttempt(req *http.Request, account *
 			return markOpenAIResponseEgress(resp, req, target.proxyID), err
 		}
 	}
-	resp, err = s.httpUpstream.Do(req, target.url, account.ID, account.Concurrency)
+	resp, err = apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).Do(req, target.url, account.ID, account.Concurrency)
 	if options, ok := pelicanTestOptionsFromContext(req.Context()); ok && options.nativeOAuthTransport != nil && !IsAstraSourceAcquisition(req.Context()) {
 		// Fail-open ticket admission may still send natively. Check the final
 		// sent request too: fast admission can install a ticket in the adapter.

@@ -95,6 +95,36 @@ function mountModal(extraProps: Record<string, unknown> = {}) {
 }
 
 describe('BulkEditAccountModal', () => {
+  it('changes health settings only when selected and can explicitly disable them', async () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'] })
+    await wrapper.get('#bulk-edit-status-enabled').setValue(true)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenLastCalledWith([1, 2], { status: 'active' })
+    await wrapper.get('[data-testid="bulk-api-key-health-apply"]').setValue(true)
+    await wrapper.get('[data-testid="api-key-health-settings"] [role="switch"]').trigger('click')
+    await wrapper.get('[data-testid="api-key-health-window"]').setValue(60)
+    await wrapper.get('[data-testid="api-key-health-threshold"]').setValue(6)
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenLastCalledWith([1, 2], {
+      status: 'active', credentials: { api_key_health_breaker: { enabled: true, window_size: 60, failure_threshold: 6 } }
+    })
+    await wrapper.get('[data-testid="api-key-health-settings"] [role="switch"]').trigger('click')
+    await wrapper.get('#bulk-edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(adminAPI.accounts.bulkUpdate).toHaveBeenLastCalledWith([1, 2], {
+      status: 'active', credentials: { api_key_health_breaker: { enabled: false, window_size: 100, failure_threshold: 10 } }
+    })
+    wrapper.unmount()
+  })
+
+  it('hides health settings for mixed account types', () => {
+    const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['apikey', 'oauth'] })
+    expect(wrapper.find('[data-testid="bulk-api-key-health-apply"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
   it('repairs OAuth alias scope without replacing mappings or enabling BPS', async () => {
     const wrapper = mountModal({ selectedPlatforms: ['openai'], selectedTypes: ['oauth'] })
     await wrapper.get('[data-testid="enable-model-aliases"]').setValue(true)

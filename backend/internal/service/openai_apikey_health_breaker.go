@@ -16,7 +16,7 @@ import (
 const openAIAPIKeyHealthBreakerReason = "openai_apikey_health_breaker"
 
 func isOpenAIAPIKeyHealthBreakerAccount(account *Account) bool {
-	return account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey && account.IsPoolMode()
+	return account != nil && account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey && account.IsPoolMode() && !account.APIKeyHealthConfig().Enabled
 }
 
 func classifyOpenAIAPIKeyHealthFailure(err error) (int, []byte, bool) {
