@@ -22,6 +22,20 @@ const allNullQuotas: DefaultPlatformQuotasMap = Object.fromEntries(
 )
 
 describe("admin settings auth source defaults helpers", () => {
+  it("round trips platform concurrency while distinguishing blank from zero", () => {
+    const original = { openai: 5, anthropic: 8 };
+    const state = buildAuthSourceDefaultsState({
+      auth_source_default_dingtalk_platform_concurrency_limits: original,
+    });
+    expect(state.dingtalk.platform_concurrency_limits).toEqual(original);
+    state.dingtalk.platform_concurrency_limits.anthropic = "";
+    state.dingtalk.platform_concurrency_limits.gemini = 0;
+    const payload = appendAuthSourceDefaultsToUpdateRequest({}, state);
+    expect(payload.auth_source_default_dingtalk_platform_concurrency_limits).toEqual({ openai: 5, gemini: 0 });
+    expect(payload.auth_source_default_email_platform_concurrency_limits).toEqual({});
+    expect(original).toEqual({ openai: 5, anthropic: 8 });
+  });
+
   it("builds auth source defaults state from flat settings fields", () => {
     const state = buildAuthSourceDefaultsState({
       auth_source_default_email_balance: 9.5,
@@ -46,6 +60,7 @@ describe("admin settings auth source defaults helpers", () => {
       subscriptions: [{ group_id: 1, validity_days: 30 }],
       grant_on_signup: false,
       grant_on_first_bind: true,
+      platform_concurrency_limits: {},
       platform_quotas: allNullQuotas,
     });
     expect(state.linuxdo).toEqual({
@@ -54,6 +69,7 @@ describe("admin settings auth source defaults helpers", () => {
       subscriptions: [{ group_id: 2, validity_days: 60 }],
       grant_on_signup: true,
       grant_on_first_bind: false,
+      platform_concurrency_limits: {},
       platform_quotas: allNullQuotas,
     });
     expect(state.oidc).toEqual({
@@ -62,6 +78,7 @@ describe("admin settings auth source defaults helpers", () => {
       subscriptions: [],
       grant_on_signup: false,
       grant_on_first_bind: false,
+      platform_concurrency_limits: {},
       platform_quotas: allNullQuotas,
     });
     expect(state.wechat).toEqual({
@@ -70,6 +87,7 @@ describe("admin settings auth source defaults helpers", () => {
       subscriptions: [],
       grant_on_signup: false,
       grant_on_first_bind: false,
+      platform_concurrency_limits: {},
       platform_quotas: allNullQuotas,
     });
   });
@@ -112,6 +130,7 @@ describe("admin settings auth source defaults helpers", () => {
         subscriptions: [{ group_id: 3, validity_days: 7 }],
         grant_on_signup: true,
         grant_on_first_bind: false,
+        platform_concurrency_limits: {},
         platform_quotas: {},
       },
       linuxdo: {
@@ -120,6 +139,7 @@ describe("admin settings auth source defaults helpers", () => {
         subscriptions: [],
         grant_on_signup: false,
         grant_on_first_bind: true,
+        platform_concurrency_limits: {},
         platform_quotas: {},
       },
       oidc: {
@@ -128,6 +148,7 @@ describe("admin settings auth source defaults helpers", () => {
         subscriptions: [{ group_id: 9, validity_days: 90 }],
         grant_on_signup: true,
         grant_on_first_bind: true,
+        platform_concurrency_limits: {},
         platform_quotas: {},
       },
       wechat: {
@@ -136,6 +157,7 @@ describe("admin settings auth source defaults helpers", () => {
         subscriptions: [],
         grant_on_signup: false,
         grant_on_first_bind: false,
+        platform_concurrency_limits: {},
         platform_quotas: {},
       },
       github: {
@@ -144,6 +166,7 @@ describe("admin settings auth source defaults helpers", () => {
         subscriptions: [],
         grant_on_signup: false,
         grant_on_first_bind: false,
+        platform_concurrency_limits: {},
         platform_quotas: {},
       },
       google: {
@@ -152,6 +175,7 @@ describe("admin settings auth source defaults helpers", () => {
         subscriptions: [],
         grant_on_signup: false,
         grant_on_first_bind: false,
+        platform_concurrency_limits: {},
         platform_quotas: {},
       },
       dingtalk: {
@@ -160,6 +184,7 @@ describe("admin settings auth source defaults helpers", () => {
         subscriptions: [],
         grant_on_signup: false,
         grant_on_first_bind: false,
+        platform_concurrency_limits: {},
         platform_quotas: {},
       },
     });
@@ -210,17 +235,18 @@ describe("admin settings auth source defaults helpers", () => {
         subscriptions: [],
         grant_on_signup: false,
         grant_on_first_bind: false,
+        platform_concurrency_limits: {},
         platform_quotas: {
           anthropic: { daily: 10, weekly: 50, monthly: 200 },
           openai:    { daily: 0, weekly: null, monthly: null },
         },
       },
-      linuxdo: { balance: 0, concurrency: 5, subscriptions: [], grant_on_signup: false, grant_on_first_bind: false, platform_quotas: {} },
-      oidc:    { balance: 0, concurrency: 5, subscriptions: [], grant_on_signup: false, grant_on_first_bind: false, platform_quotas: {} },
-      wechat:  { balance: 0, concurrency: 5, subscriptions: [], grant_on_signup: false, grant_on_first_bind: false, platform_quotas: {} },
-      github:  { balance: 0, concurrency: 5, subscriptions: [], grant_on_signup: false, grant_on_first_bind: false, platform_quotas: {} },
-      google:  { balance: 0, concurrency: 5, subscriptions: [], grant_on_signup: false, grant_on_first_bind: false, platform_quotas: {} },
-      dingtalk: { balance: 0, concurrency: 5, subscriptions: [], grant_on_signup: false, grant_on_first_bind: false, platform_quotas: {} },
+      linuxdo: { balance: 0, concurrency: 5, subscriptions: [], grant_on_signup: false, grant_on_first_bind: false, platform_concurrency_limits: {}, platform_quotas: {} },
+      oidc:    { balance: 0, concurrency: 5, subscriptions: [], grant_on_signup: false, grant_on_first_bind: false, platform_concurrency_limits: {}, platform_quotas: {} },
+      wechat:  { balance: 0, concurrency: 5, subscriptions: [], grant_on_signup: false, grant_on_first_bind: false, platform_concurrency_limits: {}, platform_quotas: {} },
+      github:  { balance: 0, concurrency: 5, subscriptions: [], grant_on_signup: false, grant_on_first_bind: false, platform_concurrency_limits: {}, platform_quotas: {} },
+      google:  { balance: 0, concurrency: 5, subscriptions: [], grant_on_signup: false, grant_on_first_bind: false, platform_concurrency_limits: {}, platform_quotas: {} },
+      dingtalk: { balance: 0, concurrency: 5, subscriptions: [], grant_on_signup: false, grant_on_first_bind: false, platform_concurrency_limits: {}, platform_quotas: {} },
     });
 
     const emailQuotas = (payload as Record<string, unknown>)["auth_source_default_email_platform_quotas"] as DefaultPlatformQuotasMap;

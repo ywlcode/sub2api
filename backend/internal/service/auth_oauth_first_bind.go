@@ -77,14 +77,23 @@ ON CONFLICT (user_id, provider_type, grant_reason) DO NOTHING`,
 		return nil
 	}
 
-	if providerDefaults.Balance != 0 {
-		if err := client.User.UpdateOneID(userID).AddBalance(providerDefaults.Balance).Exec(ctx); err != nil {
-			return fmt.Errorf("apply first bind balance default: %w", err)
-		}
+	// The update locks the user row until this transaction commits. Read the
+	// current limits after acquiring that lock so simultaneous grants cannot
+	// lose another platform's configuration.
+	user, err := client.User.UpdateOneID(userID).
+		AddBalance(providerDefaults.Balance).
+		AddConcurrency(providerDefaults.Concurrency).
+		Save(ctx)
+	if err != nil {
+		return fmt.Errorf("apply first bind balance/concurrency defaults: %w", err)
 	}
-	if providerDefaults.Concurrency != 0 {
-		if err := client.User.UpdateOneID(userID).AddConcurrency(providerDefaults.Concurrency).Exec(ctx); err != nil {
-			return fmt.Errorf("apply first bind concurrency default: %w", err)
+	if len(providerDefaults.PlatformConcurrencyLimits) > 0 {
+		limits := clonePlatformConcurrencyLimits(user.PlatformConcurrencyLimits)
+		for platform, limit := range providerDefaults.PlatformConcurrencyLimits {
+			limits[platform] = limit
+		}
+		if err := client.User.UpdateOneID(userID).SetPlatformConcurrencyLimits(limits).Exec(ctx); err != nil {
+			return fmt.Errorf("apply first bind platform concurrency defaults: %w", err)
 		}
 	}
 	if s.defaultSubAssigner != nil {
