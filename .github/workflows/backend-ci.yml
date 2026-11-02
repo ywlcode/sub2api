@@ -48,6 +48,7 @@ jobs:
   shell:
     needs: changes
     if: needs.changes.outputs['shell'] == 'true'
+    # The container CLI is mocked; Intel runners retain macOS shell coverage.
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v6
