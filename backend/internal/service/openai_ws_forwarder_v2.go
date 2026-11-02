@@ -725,6 +725,9 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if clientDisconnected {
 			return
 		}
+		if rewritten, _, matched := rewriteOpenAICyberPolicyForClient(c, account, message); matched {
+			message = rewritten
+		}
 		frame := make([]byte, 0, len(message)+8)
 		frame = append(frame, "data: "...)
 		frame = append(frame, message...)
@@ -959,6 +962,13 @@ readLoop:
 		wsOutputStarted := wroteDownstream
 		if eventType == "error" || eventType == "response.failed" {
 			markOpenAICyberPolicyEvent(c, message, http.StatusOK, usage)
+			if eventType == "response.failed" && reqStream && !c.Writer.Written() {
+				if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, message); matched {
+					lease.MarkBroken()
+					writeOpenAICyberPolicyClientError(c, status, clientPayload)
+					return nil, errOpenAICyberPolicyForwarded
+				}
+			}
 		}
 
 		if eventType == "error" {
@@ -1040,6 +1050,10 @@ readLoop:
 			}
 			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
 			setOpsUpstreamError(c, statusCode, errMsg, "")
+			if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, message); matched && !c.Writer.Written() {
+				writeOpenAICyberPolicyClientError(c, status, clientPayload)
+				return nil, errOpenAICyberPolicyForwarded
+			}
 			if reqStream && !clientDisconnected {
 				flushBufferedStreamEvents("error_event")
 				emitStreamMessage(message, true)
@@ -1161,6 +1175,10 @@ readLoop:
 			responseID = strings.TrimSpace(gjson.GetBytes(finalResponse, "id").String())
 		}
 
+		if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, finalResponse); matched {
+			writeOpenAICyberPolicyClientError(c, status, clientPayload)
+			return nil, errOpenAICyberPolicyForwarded
+		}
 		c.Data(http.StatusOK, "application/json", finalResponse)
 	} else {
 		flushStreamWriter(true)

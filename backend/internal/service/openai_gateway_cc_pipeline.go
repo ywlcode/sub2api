@@ -339,6 +339,7 @@ func (s *OpenAIGatewayService) scanCCStream(
 	requestID string,
 	startTime time.Time,
 	emit func(*apicompat.ChatCompletionsChunk),
+	writeCyberPolicy func([]byte, int),
 ) ccStreamScanState {
 	var st ccStreamScanState
 	var pendingData strings.Builder
@@ -412,6 +413,13 @@ func (s *OpenAIGatewayService) scanCCStream(
 			mergeOpenAIProtectionUsageEvidence(st.Usage, u)
 			st.Usage = *u
 		}
+		if markOpenAICyberPolicyEvent(c, []byte(payload), resp.StatusCode, &st.Usage) {
+			if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, []byte(payload)); matched {
+				writeCyberPolicy(clientPayload, status)
+				st.Err = errOpenAICyberPolicyForwarded
+				return st
+			}
+		}
 
 		normalized, err := normalizeMistralChatResponse(account, []byte(payload), true)
 		if err != nil {
@@ -478,6 +486,17 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 		return nil, OpenAIUsage{}, fmt.Errorf("read upstream body: %w", err)
 	}
 
+	usage := OpenAIUsage{}
+	if parsed, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
+		usage = parsed
+	}
+	if markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, &usage) {
+		if clientBody, status, matched := rewriteOpenAICyberPolicyForClient(c, account, respBody); matched {
+			MarkResponseCommitted(c)
+			writeError(c, status, gjson.GetBytes(clientBody, "error.type").String(), gjson.GetBytes(clientBody, "error.message").String())
+			return nil, usage, errOpenAICyberPolicyForwarded
+		}
+	}
 	respBody, err = normalizeMistralChatResponse(account, respBody, true)
 	if err != nil {
 		writeError(c, http.StatusBadGateway, "api_error", "Failed to parse upstream response")
@@ -494,10 +513,6 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 		observer.ObserveOpenAI(respBody, "")
 	}
 
-	usage := OpenAIUsage{}
-	if parsed, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
-		usage = parsed
-	}
 	return &ccResp, usage, nil
 }
 

@@ -2050,8 +2050,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					}
 				}
 			}
+			var cyberClientMessage []byte
+			cyberRuleMatched := false
 			if eventType == "error" || eventType == "response.failed" {
 				markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
+				cyberClientMessage, _, cyberRuleMatched = rewriteOpenAICyberPolicyForClient(c, account, upstreamMessage)
 			}
 			if eventType == "response.failed" && isOpenAIInvalidEncryptedContentSSE(upstreamMessage, eventType) {
 				s.markOpenAIWSInvalidEncryptedContentLineageFromPayload(c, payload, "ingress_ws_invalid_encrypted_lineage_mark", account.ID, turn, upstreamMessage)
@@ -2064,7 +2067,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				s.handleOpenAIWSModelFailure(ctx, account, mappedModel, upstreamMessage)
 				modelUnavailable = true
 			}
-			if eventType == "error" {
+			if eventType == "error" && !cyberRuleMatched {
 				eventCtx := openAIWSForwardStreamPhaseContext(openAI429LeaseObservation(ctx, lease), turnOutputStarted, upstreamMessage)
 				modelHandled := s.handleOpenAIWSErrorEventTransientFailure(eventCtx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
 				modelUnavailable = openAIWSModelFailureStatus(account, upstreamMessage) != 0
@@ -2209,6 +2212,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				// sanitizeOpenAICapacityShedErrorCodeForClient 注释里写明的前提。
 				clientMessage := upstreamMessage
 				if eventType == "error" || eventType == "response.failed" {
+					if cyberRuleMatched {
+						clientMessage = cyberClientMessage
+					}
 					if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 						clientMessage = rewritten
 					}
