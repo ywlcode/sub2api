@@ -85,6 +85,49 @@ func CompositeRouteSourceFromContext(ctx context.Context) (string, bool) {
 	return source, true
 }
 
+type channelModelRewriteContextKey struct{}
+
+type channelModelRewrite struct {
+	publicModel string
+	targetModel string
+}
+
+// WithModelRoutingContext records the channel mapping actually applied to this
+// request. Only a non-empty, different target releases account alias ownership;
+// identity mappings and account-level aliases keep the original protection.
+func (mapping ChannelMappingResult) WithModelRoutingContext(ctx context.Context, model string) context.Context {
+	if ctx == nil {
+		return ctx
+	}
+	rewrite := channelModelRewrite{}
+	if target := strings.TrimSpace(mapping.MappedModel); mapping.Mapped && target != "" && target != strings.TrimSpace(model) {
+		rewrite = channelModelRewrite{publicModel: strings.TrimSpace(model), targetModel: target}
+	}
+	return context.WithValue(ctx, channelModelRewriteContextKey{}, rewrite)
+}
+
+func channelRewriteForRoutingModel(ctx context.Context, model string) (channelModelRewrite, bool) {
+	if ctx == nil {
+		return channelModelRewrite{}, false
+	}
+	rewrite, ok := ctx.Value(channelModelRewriteContextKey{}).(channelModelRewrite)
+	return rewrite, ok && rewrite.publicModel != "" && rewrite.targetModel == strings.TrimSpace(model)
+}
+
+func compositeAccountModelOwned(ctx context.Context, account *Account, routingModel string) bool {
+	if source, ok := CompositeRouteSourceFromContext(ctx); !ok || source != CompositeRouteSourceAccount {
+		return true
+	}
+	publicModel, ok := RequestedPublicModelFromContext(ctx)
+	if !ok {
+		return true
+	}
+	if rewrite, ok := channelRewriteForRoutingModel(ctx, routingModel); ok && rewrite.publicModel == publicModel {
+		return true
+	}
+	return account != nil && explicitModelMappingClaims(*account, publicModel)
+}
+
 // DetectModelPlatform maps common public model IDs to the concrete provider
 // platform used by sub2api. It intentionally returns false for ambiguous model
 // names so composite groups fail closed instead of guessing.
@@ -197,6 +240,13 @@ func (s *GatewayService) resolveCompositeRouteDecision(ctx context.Context, grou
 		if resolvedModel, modelOK := ResolvedUpstreamModelFromContext(ctx); modelOK {
 			upstreamModel = resolvedModel
 		}
+		if _, rewritten := channelRewriteForRoutingModel(ctx, requestedModel); rewritten {
+			upstreamModel = requestedModel
+		}
+		publicModel := requestedModel
+		if originalModel, modelOK := RequestedPublicModelFromContext(ctx); modelOK {
+			publicModel = originalModel
+		}
 		source := CompositeRouteSourceDetector
 		if resolvedSource, sourceOK := CompositeRouteSourceFromContext(ctx); sourceOK {
 			source = resolvedSource
@@ -205,7 +255,7 @@ func (s *GatewayService) resolveCompositeRouteDecision(ctx context.Context, grou
 			Matched:        true,
 			Source:         source,
 			GroupID:        group.ID,
-			PublicModel:    requestedModel,
+			PublicModel:    publicModel,
 			TargetPlatform: platform,
 			UpstreamModel:  upstreamModel,
 			Endpoint:       normalizeCompositeRouteEndpoint(endpoint),
