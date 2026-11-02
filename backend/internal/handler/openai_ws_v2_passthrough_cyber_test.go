@@ -51,6 +51,10 @@ func newOpenAIWSPassthroughHandlerHarnessWithOptions(t *testing.T, upstreamURL s
 }
 
 func newOpenAIWSPassthroughHandlerHarnessWithCache(t *testing.T, upstreamURL string, clientHeaders http.Header, extraSettings map[string]string, gatewayCache service.GatewayCache, configure ...func(*service.Account, *config.Config, *service.HTTPUpstream, *service.AccountRepository)) *openAIWSPassthroughHandlerHarness {
+	return newOpenAIWSPassthroughHandlerHarnessWithSetup(t, upstreamURL, clientHeaders, extraSettings, gatewayCache, nil, configure...)
+}
+
+func newOpenAIWSPassthroughHandlerHarnessWithSetup(t *testing.T, upstreamURL string, clientHeaders http.Header, extraSettings map[string]string, gatewayCache service.GatewayCache, configureHandler func(*OpenAIGatewayHandler), configure ...func(*service.Account, *config.Config, *service.HTTPUpstream, *service.AccountRepository)) *openAIWSPassthroughHandlerHarness {
 	t.Helper()
 	return newOpenAIWSPassthroughHandlerHarnessWithKey(t, upstreamURL, clientHeaders, extraSettings, gatewayCache, nil, configure...)
 }
@@ -142,6 +146,9 @@ func newOpenAIWSPassthroughHandlerHarnessWithAuth(t *testing.T, upstreamURL stri
 		contentModerationService: moderationSvc,
 		maxAccountSwitches:       cfg.Gateway.MaxAccountSwitches,
 		concurrencyHelper:        NewConcurrencyHelper(service.NewConcurrencyService(concurrencyCache), SSEPingFormatNone, time.Second),
+	}
+	if configureHandler != nil {
+		configureHandler(h)
 	}
 
 	apiKey := &service.APIKey{
