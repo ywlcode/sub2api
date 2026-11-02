@@ -6,6 +6,16 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 
 自用分支同步上游、构建镜像和更新服务器的流程见 [dev-ywlcode 分支维护与 Docker 发布](DEV_YWLCODE.md)。
 
+## 部署前置条件：全部 CI 通过
+
+**部署镜像前，必须确认镜像对应提交的全部适用 CI 工作流和检查均已通过。** 此要求同样适用于手动部署到 `ecosserver`、`boscserver`；本地测试通过不能代替远端 CI 通过。
+
+1. 提交并推送所有待发布改动，记录待部署提交的完整 SHA；在 GitHub Actions 中按该 SHA 核对结果，不能沿用其他提交的成功状态。
+2. 确认该提交应触发的全部 CI 均已完成且结果为 `success`，包括 `CI`、`Security Scan`、`Multi-host Caddy contract`、`Multi-host full application bootstrap` 及其他适用检查。应运行的检查缺失、排队、运行中、失败、取消或被跳过时，不得部署；修复或重新运行后仍须全部通过。
+3. 全部通过后，才从干净工作区构建该提交的镜像，并按 [Docker 发布流程](DEV_YWLCODE.md#本地构建分支镜像) 核对镜像标签、程序 commit 和 revision。部署前再次确认镜像对应 SHA 的 CI 结果，并保留提交 SHA、CI 链接、镜像标识及校验和作为发布记录。
+
+新增提交（包括仅修改文档）或 rebase 改变 SHA 后，必须重新核对新提交的全部 CI；不得绕过检查或把检查未运行视为通过。
+
 ## Deployment Methods
 
 | Method | Best For | Setup Wizard |
