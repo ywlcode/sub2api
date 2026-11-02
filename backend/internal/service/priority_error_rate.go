@@ -232,7 +232,7 @@ func (s *OpenAIGatewayService) doPriorityObservedHTTP(req *http.Request, proxy s
 		return nil, err
 	}
 	observe := s.observePriorityAttempt(req, account)
-	resp, err := s.httpUpstream.Do(req, proxy, account.ID, account.Concurrency)
+	resp, err := apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).Do(req, proxy, account.ID, account.Concurrency)
 	observe(resp, err)
 	return resp, err
 }

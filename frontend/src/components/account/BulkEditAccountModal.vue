@@ -1482,6 +1482,14 @@
         </div>
       </div>
 
+      <div v-if="allAPIKeys" class="space-y-3 border-t border-gray-200 pt-4 dark:border-dark-600">
+        <label class="flex items-center gap-2 text-sm">
+          <input v-model="enableAPIKeyHealth" data-testid="bulk-api-key-health-apply" type="checkbox" class="rounded border-gray-300 text-primary-600" />
+          {{ t('admin.accounts.healthBreaker.bulkApply') }}
+        </label>
+        <APIKeyHealthSettings v-if="enableAPIKeyHealth" v-model="apiKeyHealth" />
+      </div>
+
       <!-- Groups -->
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div class="mb-3 flex items-center justify-between">
@@ -1566,6 +1574,8 @@ import { DEFAULT_ACCOUNT_COST_MULTIPLIER, isValidAccountCostMultiplier } from '@
 
 import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import APIKeyHealthSettings from '@/components/account/APIKeyHealthSettings.vue'
+import { defaultAPIKeyHealthConfig, applyAPIKeyHealthConfig } from '@/components/account/apiKeyHealth'
 import ExcelBPSModeSwitches from './ExcelBPSModeSwitches.vue'
 import type { ExcelBPSMode } from '@/utils/excelBPSDefaults'
 import { useExcelBPSDefaults } from '@/composables/useExcelBPSDefaults'
@@ -1696,6 +1706,8 @@ const allOpenAIAPIKey = computed(() => {
   )
 })
 
+const allAPIKeys = computed(() => targetSelectedTypes.value.length > 0 && targetSelectedTypes.value.every(type => type === 'apikey'))
+
 // 上游倍率自动探测已放宽到全部 API-key 平台：只要求所选类型全为 apikey，
 // 平台不限（sub2api 上游即可应答 /v1/sub2api/billing）。
 const allBillingProbeCapable = computed(() => {
@@ -1751,6 +1763,8 @@ interface ModelMapping {
 
 // State - field enable flags
 const enableBaseUrl = ref(false)
+const enableAPIKeyHealth = ref(false)
+const apiKeyHealth = ref(defaultAPIKeyHealthConfig())
 const enableModelRestriction = ref(false)
 const enableOpenAIModelAliases = ref(false)
 const openaiModelAliases = ref(true)
@@ -2075,6 +2089,13 @@ const buildUpdatePayload = (): Record<string, unknown> | null => {
   const updates: Record<string, unknown> = {}
   const credentials: Record<string, unknown> = {}
   let credentialsChanged = false
+  if (enableAPIKeyHealth.value && allAPIKeys.value) {
+    if (!applyAPIKeyHealthConfig(credentials, apiKeyHealth.value)) {
+      appStore.showError(t('admin.accounts.healthBreaker.invalid'))
+      return null
+    }
+    credentialsChanged = true
+  }
   const applyOpenAILongContextBilling =
     enableOpenAILongContextBilling.value && allOpenAIPassthroughCapable.value
   const applyOpenAIEndpointCapabilities =
@@ -2571,6 +2592,8 @@ watch(
       enableRateMultiplier.value = false
       enableStatus.value = false
       enableGroups.value = false
+      enableAPIKeyHealth.value = false
+      apiKeyHealth.value = defaultAPIKeyHealthConfig()
       enableExcelBPS.value = false
       enableOpenAIPassthrough.value = false
       enableOpenAIFlattenNamespaces.value = false

@@ -173,7 +173,7 @@ func (s *OpenAIGatewayService) ForwardMiniMaxH3(ctx context.Context, c *gin.Cont
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxy = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(req, proxy, account.ID, account.Concurrency)
+	resp, err := apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).Do(req, proxy, account.ID, account.Concurrency)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(started).Milliseconds())
 	if err != nil {
 		return nil, fmt.Errorf("MiniMax-H3 upstream transport failed")

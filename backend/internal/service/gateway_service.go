@@ -1373,7 +1373,7 @@ func (s *GatewayService) DoGrokNativeResponsesJSON(ctx context.Context, account 
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	s.rateLimitService.observeQualityResponse(upstreamReq.Context(), account, resp, err)
 	if err != nil {
 		return nil, &UpstreamFailoverError{StatusCode: http.StatusBadGateway, Reason: GatewayFailureReason("grok_search_transport")}

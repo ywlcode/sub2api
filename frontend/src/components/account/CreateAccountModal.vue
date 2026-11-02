@@ -2652,6 +2652,8 @@
         </template>
       </div>
 
+      <APIKeyHealthSettings v-if="accountCategory === 'apikey'" v-model="apiKeyHealth" />
+
       <!-- Temp Unschedulable Rules -->
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
         <div class="mb-3 flex items-center justify-between">
@@ -4211,6 +4213,8 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import AccountAutoBPSSection from '@/components/account/AccountAutoBPSSection.vue'
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import Toggle from '@/components/common/Toggle.vue'
+import APIKeyHealthSettings from '@/components/account/APIKeyHealthSettings.vue'
+import { defaultAPIKeyHealthConfig, applyAPIKeyHealthConfig } from '@/components/account/apiKeyHealth'
 import AccountRpmSettings from '@/components/account/AccountRpmSettings.vue'
 import { applyAccountRPMSettings } from '@/components/account/accountRpm'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
@@ -4856,6 +4860,7 @@ watch(vertexAuthMode, () => {
   vertexClientEmail.value = ''
   vertexApiKey.value = ''
 })
+const apiKeyHealth = ref(defaultAPIKeyHealthConfig())
 const tempUnschedEnabled = ref(false)
 const tempUnschedRules = ref<TempUnschedRuleForm[]>([])
 const getModelMappingKey = createStableObjectKeyResolver<ModelMapping>('create-model-mapping')
@@ -5533,6 +5538,10 @@ const buildTempUnschedRules = (rules: TempUnschedRuleForm[]) => {
 }
 
 const applyTempUnschedConfig = (credentials: Record<string, unknown>) => {
+  if (accountCategory.value === 'apikey' && !applyAPIKeyHealthConfig(credentials, apiKeyHealth.value)) {
+    appStore.showError(t('admin.accounts.healthBreaker.invalid'))
+    return false
+  }
   if (!tempUnschedEnabled.value) {
     delete credentials.temp_unschedulable_enabled
     delete credentials.temp_unschedulable_rules
@@ -5635,6 +5644,10 @@ const ensureAntigravityMixedChannelConfirmed = async (onConfirm: () => Promise<v
 const submitCreateAccount = async (payload: CreateAccountRequest) => {
   submitting.value = true
   try {
+    if (payload.type === 'apikey' && !applyAPIKeyHealthConfig(payload.credentials, apiKeyHealth.value)) {
+      appStore.showError(t('admin.accounts.healthBreaker.invalid'))
+      return
+    }
     const account = await adminAPI.accounts.create(withAntigravityConfirmFlag(payload))
     const modelMapping = payload.credentials.model_mapping
     const hasConcreteMappedTarget = payload.type === 'apikey' &&
@@ -5688,6 +5701,7 @@ const submitCreateAccount = async (payload: CreateAccountRequest) => {
 
 // Methods
 const resetForm = () => {
+  apiKeyHealth.value = defaultAPIKeyHealthConfig()
   step.value = 1
   openaiTwoFA.value = false
   openaiBPSOAuth.value = false

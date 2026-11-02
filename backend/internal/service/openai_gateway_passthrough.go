@@ -2508,6 +2508,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 			return resultWithUsage(), fmt.Errorf("upstream response failed: %s", failedMessage)
 		}
 		if errors.Is(err, errOpenAISSEIdle) || errors.Is(err, errOpenAISSEFirstOutput) {
+			if !clientDisconnected {
+				recordAPIKeyHealthResponseFailure(ctx, resp, "Upstream response stream timed out")
+			}
 			// The request was already sent. Silence, even before visible output,
 			// does not authorize replay, account cooldown or a fabricated success.
 			stopKeepalive()

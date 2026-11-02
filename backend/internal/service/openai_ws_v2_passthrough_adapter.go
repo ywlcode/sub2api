@@ -935,9 +935,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
 		}
 		dialCtx, cancelDial := context.WithTimeout(upstreamroute.WithAccountID(ctx, account.ID), s.openAIWSDialTimeout())
+		healthObservation, healthErr := beginAPIKeyHealthAttempt(ctx, s.rateLimitService, account)
+		if healthErr != nil {
+			cancelDial()
+			return healthErr
+		}
 		finishCapture := captureOpenAIWSHandshake(ctx, account.ID, wsURL)
 		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
 		finishCapture(statusCode, handshakeHeaders, err)
+		if err != nil {
+			healthObservation.recordWSDialError(statusCode, err)
+		}
 		cancelDial()
 		if err == nil {
 			break
@@ -987,7 +995,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if capture := requestcapture.FromContext(ctx); capture != nil {
 		upstreamFrameConn = &captureUpstreamFrameConn{FrameConn: upstreamFrameConn, capture: capture, account: account.ID, route: openAIWSCaptureRoute(ctx, wsURL)}
 	}
-	relayUpstreamFrameConn := &openAIWSPassthroughFirstOutputFrameConn{
+	var relayUpstreamFrameConn openaiwsv2.FrameConn = &openAIWSPassthroughFirstOutputFrameConn{
 		inner:             upstreamFrameConn,
 		activeReadTimeout: s.openAIWSPassthroughIdleTimeout(),
 		deadlineChanged:   make(chan struct{}, 1),
@@ -1014,6 +1022,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				reasoningEffort: reasoningEffort,
 			}
 		},
+	}
+	if health := newAPIKeyHealthWSTracker(ctx, s.rateLimitService, account); health != nil {
+		relayUpstreamFrameConn = &apiKeyHealthWSFrameConn{FrameConn: relayUpstreamFrameConn, health: health}
 	}
 
 	completedTurns := atomic.Int32{}

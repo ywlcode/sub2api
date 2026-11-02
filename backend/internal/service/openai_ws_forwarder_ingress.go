@@ -1600,7 +1600,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return nil, pinErr
 		}
 		req.ProxyURL = proxyURL
-		lease, acquireErr := pool.Acquire(acquireCtx, req)
+		lease, acquireErr := acquireAPIKeyHealthWS(acquireCtx, pool, s.rateLimitService, req)
 		releaseHarvest()
 		acquireCancel()
 		var dialErr *openAIWSDialError
@@ -1662,6 +1662,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			return nil, acquireErr
 		}
+		lease.health = newAPIKeyHealthWSTracker(ctx, s.rateLimitService, account)
 		connID := strings.TrimSpace(lease.ConnID())
 		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); handshakeTurnState != "" {
 			turnState = handshakeTurnState
