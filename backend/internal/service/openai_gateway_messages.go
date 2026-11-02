@@ -682,7 +682,11 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 			if clientMsg == "" {
 				clientMsg = "Request blocked by upstream cyber-security policy"
 			}
-			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
+			status, errType, clientMsg, _ := applyOpenAICyberPolicyPassthroughRule(
+				c, account, payload, http.StatusBadRequest, "invalid_request_error", clientMsg,
+			)
+			MarkResponseCommitted(c)
+			writeAnthropicError(c, status, errType, clientMsg)
 			return nil, fmt.Errorf("openai cyber_policy: %s", msg)
 		}
 		message := openAICompatFailedResponseMessage(finalResponse)
@@ -1156,12 +1160,21 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 						UpstreamOutTok: usage.OutputTokens,
 					})
 					if !clientDisconnected {
-						writeStreamHeaders()
 						clientMsg := msg
 						if clientMsg == "" {
 							clientMsg = "Request blocked by upstream cyber-security policy"
 						}
-						if _, err := fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE("invalid_request_error", clientMsg)); err == nil {
+						status, errType, clientMsg, matched := applyOpenAICyberPolicyPassthroughRule(
+							c, account, payloadBytes, http.StatusBadRequest, "invalid_request_error", clientMsg,
+						)
+						if matched && !c.Writer.Written() {
+							MarkResponseCommitted(c)
+							writeAnthropicError(c, status, errType, clientMsg)
+							clientDisconnected = true
+							return true
+						}
+						writeStreamHeaders()
+						if _, err := fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE(errType, clientMsg)); err == nil {
 							c.Writer.Flush()
 						}
 						clientDisconnected = true

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"go.uber.org/zap"
 )
 
@@ -233,8 +235,21 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 		}
 	}
 
-	scan := s.scanCCStream(c, resp, account, "openai messages chat fallback", requestID, startTime, emitChunk)
+	scan := s.scanCCStream(c, resp, account, "openai messages chat fallback", requestID, startTime, emitChunk, func(payload []byte, status int) {
+		errType := gjson.GetBytes(payload, "error.type").String()
+		message := gjson.GetBytes(payload, "error.message").String()
+		MarkResponseCommitted(c)
+		if !c.Writer.Written() {
+			writeAnthropicError(c, status, errType, message)
+		} else if !clientDisconnected {
+			_, _ = fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE(errType, message))
+			c.Writer.Flush()
+		}
+	})
 	usage := scan.Usage
+	if errors.Is(scan.Err, errOpenAICyberPolicyForwarded) {
+		return nil, scan.Err
+	}
 
 	if scan.Err != nil {
 		// Broken upstream read: skip finalization so no synthetic message_stop

@@ -756,7 +756,11 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 			if clientMsg == "" {
 				clientMsg = "Request blocked by upstream cyber-security policy"
 			}
-			writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
+			status, errType, clientMsg, _ := applyOpenAICyberPolicyPassthroughRule(
+				c, account, payload, http.StatusBadRequest, "invalid_request_error", clientMsg,
+			)
+			MarkResponseCommitted(c)
+			writeChatCompletionsError(c, status, errType, clientMsg)
 			return nil, fmt.Errorf("openai cyber_policy: %s", msg)
 		}
 		message := openAICompatFailedResponseMessage(finalResponse)
@@ -1009,12 +1013,21 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				})
 				if !clientDisconnected {
 					// 被 refusal 检测扣留的 pendingSSE 有意丢弃——cyber 拦截优先于部分内容下发。
-					writeStreamHeaders()
 					clientMsg := msg
 					if clientMsg == "" {
 						clientMsg = "Request blocked by upstream cyber-security policy"
 					}
-					if _, err := fmt.Fprint(c.Writer, buildChatStreamErrorSSE(code, clientMsg)); err == nil {
+					status, errType, clientMsg, matched := applyOpenAICyberPolicyPassthroughRule(
+						c, account, payloadBytes, http.StatusBadRequest, "invalid_request_error", clientMsg,
+					)
+					if matched && !c.Writer.Written() {
+						MarkResponseCommitted(c)
+						writeChatCompletionsError(c, status, errType, clientMsg)
+						clientDisconnected = true
+						return true
+					}
+					writeStreamHeaders()
+					if _, err := fmt.Fprint(c.Writer, buildChatStreamErrorSSE(code, clientMsg, errType)); err == nil {
 						_, _ = fmt.Fprint(c.Writer, "data: [DONE]\n\n")
 						if fl, ok := c.Writer.(http.Flusher); ok {
 							fl.Flush()
@@ -1413,10 +1426,14 @@ func writeChatCompletionsError(c *gin.Context, statusCode int, errType, message 
 // streaming error object. Used when the stream must terminate with a visible
 // error (e.g. upstream cyber_policy), so programmatic clients stop retrying.
 // Marshal 失败的兜底会丢弃 message 原文，仅保留 code 与固定提示。
-func buildChatStreamErrorSSE(code, message string) string {
+func buildChatStreamErrorSSE(code, message string, errorTypes ...string) string {
+	errType := "invalid_request_error"
+	if len(errorTypes) > 0 && errorTypes[0] != "" {
+		errType = errorTypes[0]
+	}
 	payload, err := json.Marshal(gin.H{
 		"error": gin.H{
-			"type":    "invalid_request_error",
+			"type":    errType,
 			"code":    code,
 			"message": message,
 		},
