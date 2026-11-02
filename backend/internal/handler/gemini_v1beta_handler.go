@@ -409,6 +409,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, modelName)
+	c.Request = c.Request.WithContext(channelMapping.WithModelRoutingContext(c.Request.Context(), modelName))
 	reqModel := modelName // 保存映射前的原始模型名
 	if action != "countTokens" && geminiImageGenerationRejected(c, apiKey, body, urlModel, reqModel, channelMapping.MappedModel) {
 		googleError(c, http.StatusBadRequest, service.ImageGenerationPermissionMessage())

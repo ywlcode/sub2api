@@ -148,6 +148,34 @@ func TestOpenAIResponsesWebSocket_CompositeDetectorFallback(t *testing.T) {
 	require.Equal(t, "gpt-5.4", gjson.GetBytes(got.upstreamFirstPayload, "model").String())
 }
 
+func TestOpenAIResponsesWebSocket_CompositeChannelRewriteSelectsTargetAccount(t *testing.T) {
+	for _, mode := range []string{service.OpenAIWSIngressModePassthrough, service.OpenAIWSIngressModeDedicated} {
+		t.Run(mode, func(t *testing.T) {
+			resolver := service.NewCompositeRouteResolver(&compositeWSRouteRepo{})
+			resolver.SetModelOwnershipResolver(func(context.Context, int64, string) (service.CompositeModelOwnership, error) {
+				return service.CompositeModelOwnership{Matched: true, TargetPlatform: service.PlatformOpenAI}, nil
+			})
+			got := runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
+				firstPayload:        `{"type":"response.create","model":"gpt-5.6-luna","input":"hi"}`,
+				secondPayload:       `{"type":"response.create","input":"again"}`,
+				group:               compositeWSGroup("gpt-5.6-luna"),
+				ingressMode:         mode,
+				compositeResolver:   resolver,
+				channelMapping:      map[string]string{"gpt-5.6-luna": "gpt-6.1-sol"},
+				accountModelMapping: map[string]any{"gpt-6.1-sol": "gpt-6.1-sol"},
+			})
+			require.Len(t, got.upstreamPayloads, 2)
+			for i, payload := range got.upstreamPayloads {
+				require.Equal(t, "gpt-6.1-sol", gjson.GetBytes(payload, "model").String())
+				require.Equal(t, "gpt-5.6-luna", gjson.GetBytes(got.clientEvents[i], "response.model").String())
+				require.Equal(t, "gpt-5.6-luna", got.logs[i].RequestedModel)
+				require.NotNil(t, got.logs[i].UpstreamModel)
+				require.Equal(t, "gpt-6.1-sol", *got.logs[i].UpstreamModel)
+			}
+		})
+	}
+}
+
 func TestOpenAIResponsesWebSocket_CompositeSessionModelSwitchRequiresReconnect(t *testing.T) {
 	runOpenAIResponsesWebSocketUsageLogCase(t, openAIResponsesWSUsageLogCase{
 		firstPayload:  `{"type":"response.create","model":"public-alias"}`,
