@@ -385,6 +385,17 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 					regionalUsagePayload = []byte(payload)
 					usage = *u
 				}
+				if markOpenAICyberPolicyEvent(c, []byte(payload), resp.StatusCode, &usage) {
+					if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, []byte(payload)); matched {
+						if !c.Writer.Written() {
+							writeOpenAICyberPolicyClientError(c, status, clientPayload)
+						} else if !clientDisconnected {
+							_, _ = fmt.Fprintf(c.Writer, "data: %s\n\ndata: [DONE]\n\n", clientPayload)
+							c.Writer.Flush()
+						}
+						return nil, errOpenAICyberPolicyForwarded
+					}
+				}
 				if firstTokenMs == nil && !usageOnlyChunk {
 					elapsed := int(time.Since(startTime).Milliseconds())
 					firstTokenMs = &elapsed
@@ -561,6 +572,12 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	var usage OpenAIUsage
 	if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
 		usage = parsedUsage
+	}
+	if markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, &usage) {
+		if clientBody, status, matched := rewriteOpenAICyberPolicyForClient(c, account, respBody); matched {
+			writeOpenAICyberPolicyClientError(c, status, clientBody)
+			return nil, errOpenAICyberPolicyForwarded
+		}
 	}
 	responseModel := gjson.GetBytes(respBody, "model").String()
 	if requiresBillableGrokChatUsage(account, billingModel, upstreamModel, responseModel) && !hasBillableGrokChatUsage(usage) {

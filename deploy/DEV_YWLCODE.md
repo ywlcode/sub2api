@@ -15,6 +15,19 @@
 
 rebase 会改变被重放提交的 SHA，已经构建或部署的镜像不会随分支移动而更新。已部署提交应保留独立、不可移动的标签，例如 `deploy-ywlcode-<提交短 SHA>`，并保留对应镜像。不要用 `v*` 标签代替自用部署标记，仓库的 Release 工作流会匹配这类标签。
 
+## OpenAI cyber_policy 错误透传
+
+精确命中 `error.code=cyber_policy` 或 `response.error.code=cyber_policy` 时，按语义状态码 **403** 匹配错误透传规则，包括上游用 HTTP 400 或 HTTP 200 内的 SSE / WebSocket 事件返回的情况。因此「403 + cyber，全部匹配」可自定义内容审计提示，且不会被通用的 400 过载规则覆盖。规则仍按账号平台、启用状态和优先级匹配；没有命中规则时保留原有响应行为。
+
+HTTP 响应尚未发送时，使用规则指定的状态码和消息；已经发送的 SSE 或已升级的 WebSocket 保留 HTTP 状态，在错误事件中改写消息。原有 `cyber_policy` 错误码、终止事件和上游审计证据保留，规则改写不触发账号重试或切换。不要将 `session_blocked_by_cyber_policy` 当作一次新的 `cyber_policy` 命中。
+
+修改或同步相关代码后，可运行专项回归：
+
+```bash
+cd backend
+go test -tags=unit ./internal/service -run 'TestCyberPolicy|TestResponsesStreamCyberPolicy|Test.*CyberPolicy' -count=1
+```
+
 ## 将 dev-ywlcode rebase 到上游 production
 
 以下命令从仓库根目录、在同一个 Bash 终端中分块执行。每块成功后再继续；不要在生产部署目录执行 rebase。

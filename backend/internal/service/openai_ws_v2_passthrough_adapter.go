@@ -33,6 +33,7 @@ type openAIWSClientFrameConn struct {
 	// model identifier they supplied for the current turn.
 	restoreResponseModel func([]byte) []byte
 	restoreToolNames     func([]byte) []byte
+	rewriteClientError   func([]byte) []byte
 }
 
 // openAIWSPolicyEnforcingFrameConn wraps a client-side FrameConn and runs
@@ -693,6 +694,9 @@ func (c *openAIWSClientFrameConn) WriteFrame(ctx context.Context, msgType coderw
 		if c.restoreToolNames != nil {
 			payload = c.restoreToolNames(payload)
 		}
+		if c.rewriteClientError != nil {
+			payload = c.rewriteClientError(payload)
+		}
 	}
 	return WriteCapturedWSClient(ctx, c.conn, msgType, payload)
 }
@@ -1061,6 +1065,10 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		},
 		restoreToolNames: func(payload []byte) []byte {
 			return restoreCodexToolNamesFromContext(c, payload)
+		},
+		rewriteClientError: func(payload []byte) []byte {
+			clientPayload, _, _ := rewriteOpenAICyberPolicyForClient(c, account, payload)
+			return clientPayload
 		},
 	}
 	policyClientConn := &openAIWSPolicyEnforcingFrameConn{
