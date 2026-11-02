@@ -1405,6 +1405,16 @@ func parseProviderDefaultGrantSettings(settings map[string]string, keys authSour
 	if raw, ok := settings[keys.grantOnFirstBind]; ok {
 		result.GrantOnFirstBind = raw == "true"
 	}
+	if raw := settings[SettingKeyAuthSourcePlatformConcurrencyLimits(keys.source)]; raw != "" {
+		var limits map[string]int
+		if err := json.Unmarshal([]byte(raw), &limits); err != nil {
+			slog.Warn("[Setting] invalid auth source platform concurrency JSON", "source", keys.source)
+		} else if err := validatePlatformConcurrencyLimits(limits, nil); err != nil {
+			slog.Warn("[Setting] invalid auth source platform concurrency limits", "source", keys.source)
+		} else {
+			result.PlatformConcurrencyLimits = limits
+		}
+	}
 
 	if raw := settings[keys.platformQuotas]; raw != "" {
 		parsed := map[string]*DefaultPlatformQuotaSetting{}
@@ -1433,6 +1443,11 @@ func writeProviderDefaultGrantUpdates(updates map[string]string, keys authSource
 	updates[keys.subscriptions] = string(raw)
 	updates[keys.grantOnSignup] = strconv.FormatBool(settings.GrantOnSignup)
 	updates[keys.grantOnFirstBind] = strconv.FormatBool(settings.GrantOnFirstBind)
+	// Omitted fields preserve stored defaults; an explicit empty map clears them.
+	if settings.PlatformConcurrencyLimits != nil {
+		raw, _ := json.Marshal(settings.PlatformConcurrencyLimits)
+		updates[SettingKeyAuthSourcePlatformConcurrencyLimits(keys.source)] = string(raw)
+	}
 
 	// auth source platform quota：整体替换语义。
 	// nil = 请求未携带该字段，跳过写入以保留既有配置（与系统层 buildSystemSettingsUpdates 的
@@ -1448,11 +1463,12 @@ func writeProviderDefaultGrantUpdates(updates map[string]string, keys authSource
 
 func mergeProviderDefaultGrantSettings(globalDefaults ProviderDefaultGrantSettings, providerDefaults ProviderDefaultGrantSettings) ProviderDefaultGrantSettings {
 	result := ProviderDefaultGrantSettings{
-		Balance:          globalDefaults.Balance,
-		Concurrency:      globalDefaults.Concurrency,
-		Subscriptions:    append([]DefaultSubscriptionSetting(nil), globalDefaults.Subscriptions...),
-		GrantOnSignup:    providerDefaults.GrantOnSignup,
-		GrantOnFirstBind: providerDefaults.GrantOnFirstBind,
+		PlatformConcurrencyLimits: clonePlatformConcurrencyLimits(providerDefaults.PlatformConcurrencyLimits),
+		Balance:                   globalDefaults.Balance,
+		Concurrency:               globalDefaults.Concurrency,
+		Subscriptions:             append([]DefaultSubscriptionSetting(nil), globalDefaults.Subscriptions...),
+		GrantOnSignup:             providerDefaults.GrantOnSignup,
+		GrantOnFirstBind:          providerDefaults.GrantOnFirstBind,
 	}
 
 	// 注意：不能把 parse 默认值 (defaultAuthSourceBalance / defaultAuthSourceConcurrency)

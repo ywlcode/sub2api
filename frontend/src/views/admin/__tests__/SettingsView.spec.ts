@@ -2522,6 +2522,40 @@ describe("admin SettingsView wechat connect controls", () => {
     expect(wrapper.text()).toContain("首次绑定时授权");
   });
 
+  it("edits DingTalk platform concurrency defaults and preserves zero", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      auth_source_default_dingtalk_grant_on_signup: true,
+      auth_source_default_dingtalk_platform_concurrency_limits: { openai: 9, anthropic: 7 },
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openUsersTab(wrapper);
+    expect((wrapper.get('#dingtalk-platform-concurrency-openai').element as HTMLInputElement).value).toBe('9');
+    await wrapper.get('#dingtalk-platform-concurrency-openai').setValue('5');
+    await wrapper.get('#dingtalk-platform-concurrency-anthropic').setValue('');
+    await wrapper.get('#dingtalk-platform-concurrency-gemini').setValue('0');
+    await wrapper.find('form').trigger('submit.prevent');
+    await flushPromises();
+    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      auth_source_default_dingtalk_platform_concurrency_limits: { openai: 5, gemini: 0 },
+    }));
+  });
+
+  it.each(['-1', '1.5', '2147483648'])("rejects invalid DingTalk platform concurrency %s", async (value) => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      auth_source_default_dingtalk_grant_on_signup: true,
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await openUsersTab(wrapper);
+    await wrapper.get('#dingtalk-platform-concurrency-openai').setValue(value);
+    await wrapper.find('form').trigger('submit.prevent');
+    await flushPromises();
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
   it("preserves optional OIDC compatibility flags instead of forcing them on save", async () => {
     getSettings.mockResolvedValueOnce({
       ...baseSettingsResponse,

@@ -2,6 +2,7 @@ package admin
 
 import (
 	"log/slog"
+	"maps"
 	"reflect"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler/dto"
@@ -727,6 +728,9 @@ func appendAuthSourceDefaultChanges(changed []string, before *service.AuthSource
 		if field.before.GrantOnFirstBind != field.after.GrantOnFirstBind {
 			changed = append(changed, "auth_source_default_"+field.name+"_grant_on_first_bind")
 		}
+		if !maps.Equal(field.before.PlatformConcurrencyLimits, field.after.PlatformConcurrencyLimits) {
+			changed = append(changed, service.SettingKeyAuthSourcePlatformConcurrencyLimits(field.name))
+		}
 		// Platform quotas diff：整体替换语义，发单个 JSON key。
 		if !equalPlatformQuotaSettings(field.before.PlatformQuotas, field.after.PlatformQuotas) {
 			changed = append(changed, service.SettingKeyAuthSourcePlatformQuotas(field.name))
@@ -956,4 +960,11 @@ func pelicanShowcaseConfigChanged(before, after service.PelicanShowcaseConfig) b
 	normalizedBefore, errBefore := service.NormalizePelicanShowcaseConfig(before)
 	normalizedAfter, errAfter := service.NormalizePelicanShowcaseConfig(after)
 	return errBefore != nil || errAfter != nil || !reflect.DeepEqual(normalizedBefore, normalizedAfter)
+}
+
+func platformConcurrencyLimitsValueOrDefault(input, fallback map[string]int) map[string]int {
+	if input == nil {
+		return fallback
+	}
+	return input
 }
