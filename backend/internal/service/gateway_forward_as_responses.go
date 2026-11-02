@@ -148,7 +148,7 @@ func (s *GatewayService) ForwardAsResponses(
 		if err != nil {
 			return nil, fmt.Errorf("build upstream request: %w", err)
 		}
-		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+		resp, err = apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 		s.rateLimitService.observeQualityResponse(upstreamReq.Context(), account, resp, err)
 		if err != nil {
 			if resp != nil && resp.Body != nil {
@@ -230,6 +230,7 @@ func (s *GatewayService) ForwardAsResponses(
 		case errors.As(handleErr, &sseErr):
 			return nil, s.sseStreamErrorEventFailover(ctx, c, account, resp, sseErr.RawData, mappedModel, c.Writer.Size() != writerSizeBeforeStream)
 		case errors.Is(handleErr, errAnthropicNativeStreamIdle) && s.rateLimitService != nil:
+			recordAPIKeyHealthResponseFailure(ctx, resp, "Upstream response stream timed out")
 			s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
 		}
 	} else {

@@ -184,6 +184,7 @@ docs/*
 !docs/account-token-guard.md
 !docs/priority-scheduling.md
 !docs/scheduler-publication-contention.md
+!docs/api-key-health-breaker.md
 !docs/astra-account-scheduling.md
 !docs/legal/
 !docs/legal/*.md
