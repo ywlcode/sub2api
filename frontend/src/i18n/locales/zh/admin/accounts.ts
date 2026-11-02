@@ -609,6 +609,16 @@ export default {
         viewTempUnschedDetails: '查看临时不可调度详情',
         tempUnschedulableUntil: '预计 {time} 恢复'
       },
+      healthBreaker: {
+        title: 'API Key 健康熔断',
+        hint: '按本账号最近 N 次上游调用统计，失败达到 M 次时暂停整个账号；每次重试独立计数，窗口未满也会判断。',
+        windowSize: '窗口请求数 N',
+        failureThreshold: '失败阈值 M',
+        policy: '400、429、5xx、连接失败、上游超时、流中断及 HTTP 200 错误响应计为失败。第 1 次暂停 15 分钟，第 2 次 30 分钟，第 3 次及以后 60 分钟。每轮熔断清空窗口；有正常成功请求且距上次熔断满 6 小时后重置阶梯。',
+        invalid: '请输入整数，满足 1 ≤ M ≤ N ≤ 10000。',
+        bulkApply: '修改健康熔断配置',
+        triggerEvidence: '最近 {samples} 次调用（窗口上限 {window} 次）中有 {count} 次失败，达到阈值 {threshold}；本次为第 {trips} 次健康熔断。'
+      },
       tempUnschedulable: {
         title: '临时不可调度',
         statusTitle: '临时不可调度状态',

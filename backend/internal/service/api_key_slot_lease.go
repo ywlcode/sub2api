@@ -59,6 +59,11 @@ func APIKeySlotLeaseLost(ctx context.Context) bool {
 // Detach client cancellation, but never detach the capacity owner's stop signal.
 func detachAPIKeyUpstreamContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	base := context.WithoutCancel(ctx)
+	if ctx.Value(apiKeyHealthCallerContextKey{}) == nil {
+		// Billing drains can outlive the client. Retain cancellation evidence
+		// for health attribution without propagating it to the upstream I/O.
+		base = context.WithValue(base, apiKeyHealthCallerContextKey{}, ctx)
+	}
 	owner, ok := apiKeyAdmissionOwnerFromContext(ctx)
 	if !ok {
 		return base, func() {}

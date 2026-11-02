@@ -106,6 +106,7 @@ type openAIWSHandshakeCompatibilityKey struct {
 }
 
 type openAIWSConnLease struct {
+	health     *apiKeyHealthWSTracker
 	pool       *openAIWSConnPool
 	accountID  int64
 	conn       *openAIWSConn
@@ -219,7 +220,12 @@ func (l *openAIWSConnLease) WriteJSONWithContextTimeout(ctx context.Context, val
 	if err != nil {
 		return err
 	}
-	return captureWSLeaseWrite(ctx, l.accountID, l.HandshakeHeaders(), value, func() error { return conn.writeJSONWithTimeout(ctx, value, timeout) })
+	if err := l.health.beforeSend(); err != nil {
+		return err
+	}
+	err = captureWSLeaseWrite(ctx, l.accountID, l.HandshakeHeaders(), value, func() error { return conn.writeJSONWithTimeout(ctx, value, timeout) })
+	l.health.ioError(err)
+	return err
 }
 
 func (l *openAIWSConnLease) WriteJSONContext(ctx context.Context, value any) error {
@@ -251,7 +257,13 @@ func (l *openAIWSConnLease) ReadMessageWithContextTimeout(ctx context.Context, t
 	if err != nil {
 		return nil, err
 	}
-	return captureWSLeaseRead(ctx, func() ([]byte, error) { return conn.readMessageWithContextTimeout(ctx, timeout) })
+	data, err := captureWSLeaseRead(ctx, func() ([]byte, error) { return conn.readMessageWithContextTimeout(ctx, timeout) })
+	if err != nil {
+		l.health.ioError(err)
+	} else {
+		l.health.receive(data)
+	}
+	return data, err
 }
 
 func (l *openAIWSConnLease) PingWithTimeout(timeout time.Duration) error {

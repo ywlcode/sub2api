@@ -991,6 +991,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				return resultWithUsage(), fmt.Errorf("stream usage incomplete after timeout")
 			}
 			logger.LegacyPrintf("service.openai_gateway", "Stream data interval timeout: account=%d model=%s interval=%s", account.ID, originalModel, streamInterval)
+			recordAPIKeyHealthResponseFailure(ctx, resp, "Upstream response stream timed out")
 			// 处理流超时，可能标记账户为临时不可调度或错误状态
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
@@ -1017,6 +1018,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				_ = resp.Body.Close()
 				return finalizeStream()
 			}
+			recordAPIKeyHealthResponseFailure(ctx, resp, "Upstream produced no output before the deadline")
 			_ = resp.Body.Close()
 			for ev := range events {
 				markEventProcessed(ev)

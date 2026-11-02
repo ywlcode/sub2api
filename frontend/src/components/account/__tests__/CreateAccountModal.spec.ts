@@ -252,6 +252,29 @@ function expectWSAcceleration(extra: unknown, enabled: boolean) {
 }
 
 describe('CreateAccountModal OpenAI long-context billing', () => {
+  it('creates an API-key account with opt-in health settings and 100/10 defaults', async () => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'OpenAI')
+    expect(wrapper.find('[data-testid="api-key-health-settings"]').exists()).toBe(false)
+    await selectButtonByText(wrapper, 'API Key')
+    const toggle = wrapper.get('[data-testid="api-key-health-settings"] [role="switch"]')
+    expect(toggle.attributes('aria-checked')).toBe('false')
+    await toggle.trigger('click')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="api-key-health-window"]').element.value).toBe('100')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="api-key-health-threshold"]').element.value).toBe('10')
+    await wrapper.get('[data-testid="api-key-health-window"]').setValue(50)
+    await wrapper.get('[data-testid="api-key-health-threshold"]').setValue(5)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Healthy supplier')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'apikey', credentials: expect.objectContaining({
+        api_key: 'test-api-key', api_key_health_breaker: { enabled: true, window_size: 50, failure_threshold: 5 }
+      })
+    }))
+  })
+
   it('saves extra image models only for OpenAI API-key accounts', async () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenAI')

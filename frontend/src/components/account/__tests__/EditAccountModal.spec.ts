@@ -340,6 +340,46 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 }
 
 describe('EditAccountModal', () => {
+  it('loads, edits and explicitly disables API-key health settings while preserving credentials', async () => {
+    const account = buildAccount()
+    account.credentials.api_key_health_breaker = { enabled: true, window_size: 80, failure_threshold: 8 }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    await flushPromises()
+    expect(wrapper.get<HTMLInputElement>('[data-testid="api-key-health-window"]').element.value).toBe('80')
+    await wrapper.get('[data-testid="api-key-health-window"]').setValue(120)
+    await wrapper.get('[data-testid="api-key-health-threshold"]').setValue(12)
+    await wrapper.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      api_key: 'sk-test',
+      api_key_health_breaker: { enabled: true, window_size: 120, failure_threshold: 12 }
+    })
+    await wrapper.get('[data-testid="api-key-health-settings"] [role="switch"]').trigger('click')
+    await wrapper.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[1]?.[1]?.credentials).toMatchObject({
+      api_key: 'sk-test', api_key_health_breaker: { enabled: false, window_size: 100, failure_threshold: 10 }
+    })
+    wrapper.unmount()
+  })
+
+  it('rejects invalid health thresholds and hides the feature for OAuth', async () => {
+    updateAccountMock.mockReset()
+    const wrapper = mountModal()
+    await flushPromises()
+    await wrapper.get('[data-testid="api-key-health-settings"] [role="switch"]').trigger('click')
+    await wrapper.get('[data-testid="api-key-health-threshold"]').setValue(101)
+    await wrapper.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.healthBreaker.invalid')
+    wrapper.unmount()
+    const oauth = mountModal({ ...buildAccount(), type: 'oauth' })
+    expect(oauth.find('[data-testid="api-key-health-settings"]').exists()).toBe(false)
+    oauth.unmount()
+  })
+
   it('round-trips and clears API-key image grants without affecting other extra fields', async () => {
     const account = buildAccount()
     account.extra = { extra_image_models: ['my-nai'], extra_image_model_prefixes: ['nai-diffusion-'], unrelated: 'preserve' }

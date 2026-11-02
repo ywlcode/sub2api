@@ -187,6 +187,7 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 		}
 	}
 	onIdle := func() (*OpenAIForwardResult, error) {
+		recordAPIKeyHealthResponseFailure(c.Request.Context(), resp, "Upstream response stream timed out")
 		_ = resp.Body.Close()
 		logger.L().Warn("openai responses via native anthropic buffered: data interval timeout",
 			zap.String("request_id", requestID),
@@ -388,6 +389,9 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 		}
 	}
 	onIdle := func() (*OpenAIForwardResult, error) {
+		if !clientDisconnected {
+			recordAPIKeyHealthResponseFailure(c.Request.Context(), resp, "Upstream response stream timed out")
+		}
 		_ = resp.Body.Close()
 		logger.L().Warn("openai responses via native anthropic stream: data interval timeout",
 			zap.String("request_id", requestID),

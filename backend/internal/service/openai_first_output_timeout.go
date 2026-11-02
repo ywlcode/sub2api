@@ -287,19 +287,25 @@ func (s *OpenAIGatewayService) newOpenAIFirstOutputTimeoutError(
 }
 
 type openAIFirstOutputHeaderGuard struct {
-	cancel  context.CancelFunc
+	cancel  context.CancelCauseFunc
 	release context.CancelFunc
 	timer   *time.Timer
 	fired   chan struct{}
 	once    sync.Once
 }
 
+type openAIFirstOutputHeaderTimeout struct{}
+
+func (*openAIFirstOutputHeaderTimeout) Error() string   { return "upstream response header timeout" }
+func (*openAIFirstOutputHeaderTimeout) Timeout() bool   { return true }
+func (*openAIFirstOutputHeaderTimeout) Temporary() bool { return true }
+
 func newOpenAIFirstOutputHeaderGuard(
 	ctx context.Context,
 	release context.CancelFunc,
 	deadline time.Time,
 ) (context.Context, *openAIFirstOutputHeaderGuard) {
-	guardedCtx, cancel := context.WithCancel(ctx)
+	guardedCtx, cancel := context.WithCancelCause(ctx)
 	guard := &openAIFirstOutputHeaderGuard{cancel: cancel, release: release, fired: make(chan struct{})}
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
@@ -307,7 +313,7 @@ func newOpenAIFirstOutputHeaderGuard(
 	}
 	guard.timer = time.AfterFunc(remaining, func() {
 		close(guard.fired)
-		cancel()
+		cancel(&openAIFirstOutputHeaderTimeout{})
 	})
 	return guardedCtx, guard
 }
@@ -323,7 +329,7 @@ func (g *openAIFirstOutputHeaderGuard) stopHeaderWait() bool {
 func (g *openAIFirstOutputHeaderGuard) close() {
 	g.once.Do(func() {
 		g.timer.Stop()
-		g.cancel()
+		g.cancel(context.Canceled)
 		g.release()
 	})
 }

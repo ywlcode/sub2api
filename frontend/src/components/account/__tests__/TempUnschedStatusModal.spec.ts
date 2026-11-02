@@ -22,6 +22,15 @@ async function open() {
   await w.setProps({ show: true }); return w
 }
 describe('temporary unschedulable status requests', () => {
+  it('shows health trip evidence even when one failure is enough to trip', async () => {
+    mocks.getTempUnschedulableStatus.mockResolvedValueOnce({ active: true, state: {
+      until_unix: Date.now() / 1000 + 900, rule_index: -1, trigger_count: 1, trigger_threshold: 1,
+      trigger_window_requests: 100, trigger_samples: 1, breaker_trip_count: 1
+    } })
+    const w = await open(); await flushPromises()
+    expect(w.get('[data-testid="temp-unsched-trigger-evidence"]').text()).toBe('admin.accounts.healthBreaker.triggerEvidence')
+  })
+
   it('does not let a late response replace the next account status', async () => {
     const old = deferred()
     mocks.getTempUnschedulableStatus.mockReturnValueOnce(old.promise).mockResolvedValueOnce(active('current-error'))

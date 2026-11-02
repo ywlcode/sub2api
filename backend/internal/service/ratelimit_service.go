@@ -28,6 +28,7 @@ type RateLimitService struct {
 	geminiQuotaService    *GeminiQuotaService
 	tempUnschedCache      TempUnschedCache
 	openAIAPIKeyHealth    OpenAIAPIKeyHealthCache
+	apiKeyHealth          APIKeyHealthCache
 	timeoutCounterCache   TimeoutCounterCache
 	openAI403CounterCache OpenAI403CounterCache
 	settingService        *SettingService
@@ -62,6 +63,7 @@ type SuccessfulTestRecoveryResult struct {
 type AccountRecoveryOptions struct {
 	InvalidateToken          bool
 	preserveGrokScopedBlocks bool
+	preserveAPIKeyHealth     bool
 }
 
 type geminiUsageCacheEntry struct {
@@ -102,7 +104,7 @@ const (
 
 // NewRateLimitService 创建RateLimitService实例
 func NewRateLimitService(accountRepo AccountRepository, usageRepo UsageLogRepository, cfg *config.Config, geminiQuotaService *GeminiQuotaService, tempUnschedCache TempUnschedCache) *RateLimitService {
-	return &RateLimitService{
+	svc := &RateLimitService{
 		accountRepo:        accountRepo,
 		usageRepo:          usageRepo,
 		cfg:                cfg,
@@ -110,6 +112,8 @@ func NewRateLimitService(accountRepo AccountRepository, usageRepo UsageLogReposi
 		tempUnschedCache:   tempUnschedCache,
 		usageCache:         make(map[int64]*geminiUsageCacheEntry),
 	}
+	svc.apiKeyHealth, _ = tempUnschedCache.(APIKeyHealthCache)
+	return svc
 }
 
 // SetTimeoutCounterCache 设置超时计数器缓存（可选依赖）
@@ -2275,10 +2279,10 @@ func (s *RateLimitService) samplePassiveUsageFromHeaders(ctx context.Context, ac
 
 // ClearRateLimit 清除账号的限流状态
 func (s *RateLimitService) ClearRateLimit(ctx context.Context, accountID int64) error {
-	return s.clearRateLimit(ctx, accountID, false)
+	return s.clearRateLimit(ctx, accountID, false, false)
 }
 
-func (s *RateLimitService) clearRateLimit(ctx context.Context, accountID int64, preserveGrokScopedBlocks bool) error {
+func (s *RateLimitService) clearRateLimit(ctx context.Context, accountID int64, preserveGrokScopedBlocks, preserveAPIKeyHealth bool) error {
 	if err := s.accountRepo.ClearRateLimit(ctx, accountID); err != nil {
 		return err
 	}
@@ -2293,6 +2297,11 @@ func (s *RateLimitService) clearRateLimit(ctx context.Context, accountID int64, 
 	// 清除限流时一并清理临时不可调度状态，避免周限/窗口重置后仍被本地临时状态阻断。
 	if err := s.accountRepo.ClearTempUnschedulable(ctx, accountID); err != nil {
 		return err
+	}
+	if !preserveAPIKeyHealth {
+		if err := s.resetAPIKeyHealth(ctx, accountID); err != nil {
+			return err
+		}
 	}
 	if s.tempUnschedCache != nil {
 		if err := s.tempUnschedCache.DeleteTempUnsched(ctx, accountID); err != nil {
@@ -2324,6 +2333,15 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 	}
 
 	result := &SuccessfulTestRecoveryResult{}
+	if options.preserveAPIKeyHealth {
+		blocked, err := s.hasAPIKeyHealthCooldown(ctx, account)
+		if err != nil {
+			return nil, err
+		}
+		if blocked {
+			return result, nil
+		}
+	}
 	if account.Status == StatusError {
 		if err := s.accountRepo.ClearError(ctx, accountID); err != nil {
 			return nil, err
@@ -2339,10 +2357,16 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 	hasScopedGrokState := account.IsGrok() && !options.preserveGrokScopedBlocks &&
 		(hasGrokModelQuotaBlockForAccount(account.ID) || hasGrokTeamModelRateLimitForAccount(account))
 	if hasRecoverableRuntimeState(account) || hasScopedGrokState {
-		if err := s.clearRateLimit(ctx, accountID, options.preserveGrokScopedBlocks && account.IsGrok()); err != nil {
+		if err := s.clearRateLimit(ctx, accountID, options.preserveGrokScopedBlocks && account.IsGrok(), options.preserveAPIKeyHealth); err != nil {
 			return nil, err
 		}
 		result.ClearedRateLimit = true
+	} else if !options.preserveAPIKeyHealth {
+		// A previous DB write may have failed, leaving the active health block
+		// only in Redis. Explicit recovery must clear that state as well.
+		if err := s.resetAPIKeyHealth(ctx, accountID); err != nil {
+			return nil, err
+		}
 	}
 	if result.ClearedError || result.ClearedRateLimit {
 		s.ResetOpenAI403Counter(ctx, accountID)
@@ -2359,11 +2383,14 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 func (s *RateLimitService) RecoverAccountAfterSuccessfulTest(ctx context.Context, accountID int64) (*SuccessfulTestRecoveryResult, error) {
 	// This callback does not identify the tested model. A successful text probe
 	// cannot establish that another model or the shared team quota recovered.
-	return s.RecoverAccountState(ctx, accountID, AccountRecoveryOptions{preserveGrokScopedBlocks: true})
+	return s.RecoverAccountState(ctx, accountID, AccountRecoveryOptions{preserveGrokScopedBlocks: true, preserveAPIKeyHealth: true})
 }
 
 func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID int64) error {
 	if err := s.accountRepo.ClearTempUnschedulable(ctx, accountID); err != nil {
+		return err
+	}
+	if err := s.resetAPIKeyHealth(ctx, accountID); err != nil {
 		return err
 	}
 	if s.tempUnschedCache != nil {
