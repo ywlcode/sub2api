@@ -736,7 +736,7 @@ func (s *OpenAIGatewayService) ForwardGrokMedia(
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamStart := time.Now()
-	resp, err := apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	resp, err := gatewayHTTPUpstream(s.httpUpstream, s.rateLimitService, account, s.cfg).Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	s.rateLimitService.observeQualityResponse(upstreamReq.Context(), account, resp, err)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
@@ -846,7 +846,7 @@ func (s *OpenAIGatewayService) forwardGrokMediaVideoContent(
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamStart := time.Now()
-	statusResp, err := apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).Do(statusReq, proxyURL, account.ID, account.Concurrency)
+	statusResp, err := gatewayHTTPUpstream(s.httpUpstream, s.rateLimitService, account, s.cfg).Do(statusReq, proxyURL, account.ID, account.Concurrency)
 	s.rateLimitService.observeQualityResponse(statusReq.Context(), account, statusResp, err)
 	if err != nil {
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
@@ -906,7 +906,7 @@ func (s *OpenAIGatewayService) forwardGrokMediaVideoContent(
 		account.ApplyHeaderOverrides(contentReq.Header)
 	}
 
-	contentResp, err := apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).Do(contentReq, proxyURL, account.ID, account.Concurrency)
+	contentResp, err := gatewayHTTPUpstream(s.httpUpstream, s.rateLimitService, account, s.cfg).Do(contentReq, proxyURL, account.ID, account.Concurrency)
 	s.rateLimitService.observeQualityResponse(contentReq.Context(), account, contentResp, err)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {

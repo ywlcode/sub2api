@@ -135,7 +135,7 @@ func (o *apiKeyHealthObservation) record(success bool, status int, message strin
 		if errors.Is(o.ctx.Err(), context.Canceled) && !apiKeyHealthUpstreamTimeout(o.ctx) {
 			return
 		}
-		if caller, ok := o.ctx.Value(apiKeyHealthCallerContextKey{}).(context.Context); ok && errors.Is(caller.Err(), context.Canceled) {
+		if caller, ok := o.ctx.Value(apiKeyHealthCallerContextKey{}).(context.Context); ok && caller.Err() != nil {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(o.ctx), 3*time.Second)
