@@ -41,6 +41,8 @@ const localizedMessages: Record<'en' | 'zh', Record<string, string>> = {
     'requestTiming.semanticShort': enTiming.semanticShort,
     'requestTiming.textShort': enTiming.textShort,
     'requestTiming.contentOrigin': enTiming.contentOrigin,
+    'usage.duration': enDashboard.usage.duration,
+    'usage.requestPhasesHint': enDashboard.usage.requestPhasesHint,
     'requestTiming.legacyFirst': enTiming.legacyFirst,
     'requestTiming.legacyTotal': enTiming.legacyTotal,
     'usage.latencyFirstTokenHint': enDashboard.usage.latencyFirstTokenHint,
@@ -63,6 +65,8 @@ const localizedMessages: Record<'en' | 'zh', Record<string, string>> = {
     'requestTiming.semanticShort': zhTiming.semanticShort,
     'requestTiming.textShort': zhTiming.textShort,
     'requestTiming.contentOrigin': zhTiming.contentOrigin,
+    'usage.duration': zhDashboard.usage.duration,
+    'usage.requestPhasesHint': zhDashboard.usage.requestPhasesHint,
     'requestTiming.legacyFirst': zhTiming.legacyFirst,
     'requestTiming.legacyTotal': zhTiming.legacyTotal,
     'usage.latencyFirstTokenHint': zhDashboard.usage.latencyFirstTokenHint,
@@ -223,7 +227,7 @@ describe('admin UsageTable tooltip', () => {
       global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
     })
     expect(wrapper.text()).toContain('32.00s')
-    expect(wrapper.text()).toContain('50.00s')
+    expect(wrapper.get('[data-testid="request-phase-duration"]').text()).toBe('— / —')
     expect(wrapper.text()).not.toContain('30.00s')
     expect(wrapper.find('[data-testid="latency-e2e-uncollected"]').exists()).toBe(false)
   })
@@ -234,7 +238,7 @@ describe('admin UsageTable tooltip', () => {
         server_first_token_ms: 32_000, server_duration_ms: 50_000, forward_first_token_ms: 2_000, forward_duration_ms: 20_000 } }
     const wrapper = mount(UsageTable, { props: { data: [row], loading: false, columns: [{ key: 'latency', label: 'Latency' }] }, global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } } })
     expect(wrapper.text()).toContain('32.00s')
-    expect(wrapper.text()).toContain('50.00s')
+    expect(wrapper.get('[data-testid="request-phase-duration"]').text()).toBe('— / —')
     expect(wrapper.text()).not.toContain('62.00s')
     expect(wrapper.get('[data-testid="latency-tps"]').text()).toBe('2.0 t/s')
     expect(wrapper.find('[data-testid="latency-e2e-uncollected"]').exists()).toBe(false)
@@ -1243,24 +1247,24 @@ describe('admin UsageTable latency TPS', () => {
   })
 })
 
-for (const [language, first, total] of [['en', 'Server TTFT', 'Server total'], ['zh', '服务端首字', '服务端总耗时']] as const) {
-  it(`keeps the original four latency rows and omits typed-content timing in ${language}`, () => {
+for (const [language, first] of [['en', 'Server TTFT'], ['zh', '服务端首字']] as const) {
+  it(`shows measured request phases and omits typed-content timing in ${language}`, () => {
     locale = language
     const dashboardMessages = language === 'en' ? enDashboard : zhDashboard
     appStoreMocks.cachedPublicSettings = { usage_show_cache_rate: true }
     const wrapper = mount(UsageTable, {
       props: { data: [{ ...baseImageRow, image_count: 0, billing_mode: 'token', output_tokens: 100, duration_ms: 20_000, first_token_ms: 2_000, queue_wait_ms: 30_000,
         queue_timing: { status: 'measured', source: 'ws_frame_ctx_pool', scope: 'pre_final_forward', queue_clamped: false, server_first_token_ms: 32_000, server_duration_ms: 50_000, forward_first_token_ms: 2_000, forward_duration_ms: 20_000 },
-        content_timing: { reasoning_first_ms: 120, visible_text_first_ms: 450, response_byte_first_ms: 30 } }], loading: false, columns: [{ key: 'latency', label: 'Latency' }] },
+        content_timing: { request_phases: { user_upload_ms: 2000, processing_ms: 6000 }, reasoning_first_ms: 120, visible_text_first_ms: 450, response_byte_first_ms: 30 } }], loading: false, columns: [{ key: 'latency', label: 'Latency' }] },
       global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
     })
     expect(wrapper.text()).toContain(first)
-    expect(wrapper.text()).toContain(total)
+    expect(wrapper.text()).toContain(dashboardMessages.usage.duration)
     expect(wrapper.text()).toContain('32.00s')
-    expect(wrapper.text()).toContain('50.00s')
+    expect(wrapper.get('[data-testid="request-phase-duration"]').text()).toBe('2s / 6s')
     expect(wrapper.findAll('[class*="col-start-2"][class*="row-start-"]').map(node => node.text())).toEqual([
       dashboardMessages.usage.latencyFirstToken,
-      dashboardMessages.usage.latencyDuration,
+      dashboardMessages.usage.duration,
       dashboardMessages.usage.latencyTps,
       dashboardMessages.usage.latencyCacheRate,
     ])
@@ -1272,7 +1276,7 @@ for (const [language, first, total] of [['en', 'Server TTFT', 'Server total'], [
   })
 }
 
-it('keeps queue-inclusive admin latency compact and explains server boundaries on hover', () => {
+it('keeps queue-inclusive first token and explains the two request phases on hover', () => {
   const row = {
     ...baseImageRow,
     image_count: 0,
@@ -1281,6 +1285,7 @@ it('keeps queue-inclusive admin latency compact and explains server boundaries o
     duration_ms: 20_000,
     first_token_ms: 2_000,
     queue_wait_ms: 30_000,
+    content_timing: { request_phases: { user_upload_ms: 2000, processing_ms: 6000 } },
     queue_timing: {
       status: 'measured',
       source: 'ws_frame_ctx_pool',
@@ -1298,17 +1303,16 @@ it('keeps queue-inclusive admin latency compact and explains server boundaries o
   })
 
   expect(wrapper.text()).toContain('First token')
-  expect(wrapper.text()).toContain('Total')
+  expect(wrapper.text()).toContain('Duration')
   expect(wrapper.text()).toContain('32.00s')
-  expect(wrapper.text()).toContain('50.00s')
+  expect(wrapper.get('[data-testid="request-phase-duration"]').text()).toBe('2s / 6s')
   expect(wrapper.text()).not.toContain('incl. pre-forward wait')
   expect(wrapper.text()).not.toContain('30.00s')
   const firstValue = wrapper.findAll('span').find((span) => span.text() === '32.00s')
-  const totalValue = wrapper.findAll('span').find((span) => span.text() === '50.00s')
+  const totalValue = wrapper.get('[data-testid="request-phase-duration"]')
   expect(firstValue?.attributes('title')).not.toContain('30.00s')
   expect(firstValue?.attributes('title')).toContain('sampled server boundaries')
-  expect(totalValue?.attributes('title')).not.toContain('30.00s')
-  expect(totalValue?.attributes('title')).toContain('sampled server boundaries')
+  expect(totalValue.attributes('title')).toContain('User upload time / processing and return time')
   wrapper.unmount()
 })
 

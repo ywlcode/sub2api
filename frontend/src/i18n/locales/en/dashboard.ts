@@ -1,3 +1,5 @@
+import usageRequestTiming from './usageRequestTiming'
+
 export default {
   dashboard: {
     title: 'Dashboard',
@@ -378,6 +380,7 @@ export default {
 
   // Usage
   usage: {
+    ...usageRequestTiming,
     title: 'Usage Records',
     description: 'View and analyze your API usage history',
     costDetails: 'Cost Breakdown',

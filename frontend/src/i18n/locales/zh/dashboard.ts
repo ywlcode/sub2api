@@ -1,3 +1,5 @@
+import usageRequestTiming from './usageRequestTiming'
+
 export default {
   dashboard: {
     title: '仪表盘',
@@ -383,6 +385,7 @@ export default {
 
   // Usage
   usage: {
+    ...usageRequestTiming,
     title: '使用记录',
     description: '查看和分析您的 API 使用历史',
     costDetails: '费用明细',

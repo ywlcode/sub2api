@@ -83,7 +83,8 @@
       <div class="rounded-lg bg-purple-100 p-2 dark:bg-purple-900/30 text-purple-600">
         <Icon name="clock" size="md" />
       </div>
-      <div><p class="text-xs font-medium text-gray-500">{{ t('usage.avgDuration') }}</p><p class="text-xl font-bold">{{ formatDuration(stats?.average_duration_ms || 0) }}</p></div>
+      <RequestTimingAverages v-if="showRequestPhases" :stats="stats" />
+      <div v-else><p class="text-xs font-medium text-gray-500">{{ t('usage.avgDuration') }}</p><p class="text-xl font-bold">{{ formatDuration(stats?.average_duration_ms || 0) }}</p></div>
     </div>
   </div>
 </template>
@@ -94,14 +95,17 @@ import { useI18n } from 'vue-i18n'
 import type { AdminUsageStatsResponse } from '@/api/admin/usage'
 import type { UsageStatsResponse } from '@/types'
 import Icon from '@/components/icons/Icon.vue'
+import RequestTimingAverages from '@/components/common/RequestTimingAverages.vue'
 
 const props = withDefaults(defineProps<{
   stats: (AdminUsageStatsResponse | UsageStatsResponse) | null
   showAccountCost?: boolean
   strikeStandardCost?: boolean
+  showRequestPhases?: boolean
 }>(), {
   showAccountCost: true,
   strikeStandardCost: false,
+  showRequestPhases: false,
 })
 
 const { t } = useI18n()

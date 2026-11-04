@@ -1,6 +1,7 @@
 /**
  * Core Type Definitions for Sub2API Frontend
  */
+import type { RequestPhaseAverages, RequestPhases } from './usageTiming'
 
 // ==================== Common Types ====================
 
@@ -2038,6 +2039,7 @@ export interface UsageLog {
   } | null
   content_timing?: {
     sse_event_first_ms?: number | null; semantic_first_ms?: number | null
+    request_phases?: RequestPhases
     reasoning_first_ms: number | null; visible_text_first_ms: number | null; response_byte_first_ms: number | null
     status: string; source: string; scope: string; reasoning_streaming_capability: string; capability_source: string
   }
@@ -2226,7 +2228,7 @@ export interface DashboardStats {
   tpm: number // 近5分钟平均每分钟Token数
 }
 
-export interface UsageStatsResponse {
+export interface UsageStatsResponse extends RequestPhaseAverages {
   period?: string
   total_requests: number
   total_input_tokens: number

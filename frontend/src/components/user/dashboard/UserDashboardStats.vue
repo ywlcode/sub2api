@@ -117,17 +117,13 @@
       </div>
     </div>
 
-    <!-- Avg Response Time -->
+    <!-- Average request phases -->
     <div class="card p-4">
       <div class="flex items-center gap-3">
         <div class="rounded-lg bg-rose-100 p-2 dark:bg-rose-900/30">
           <Icon name="clock" size="md" class="text-rose-600 dark:text-rose-400" :stroke-width="2" />
         </div>
-        <div>
-          <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('dashboard.avgResponse') }}</p>
-          <p class="text-xl font-bold text-gray-900 dark:text-white">{{ formatDuration(stats?.average_duration_ms || 0) }}</p>
-          <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('dashboard.averageTime') }}</p>
-        </div>
+        <RequestTimingAverages :stats="stats" />
       </div>
     </div>
   </div>
@@ -228,6 +224,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
+import RequestTimingAverages from '@/components/common/RequestTimingAverages.vue'
 import type { PlatformDashboardStats, UserDashboardStats as UserStatsType } from '@/api/usage'
 import type { PlatformQuotaItem } from '@/types'
 
@@ -398,5 +395,4 @@ const formatTokens = (t: number) => {
   if (t >= 1000) return `${(t / 1000).toFixed(1)}K`
   return t.toString()
 }
-const formatDuration = (ms: number) => ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms.toFixed(0)}ms`
 </script>

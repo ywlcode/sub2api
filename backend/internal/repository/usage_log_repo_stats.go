@@ -656,6 +656,12 @@ func (r *usageLogRepository) GetGlobalStats(ctx context.Context, startTime, endT
 
 // GetStatsWithFilters gets usage statistics with optional filters
 func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters UsageLogFilters) (*UsageStats, error) {
+	conditions, args := usageStatsWhereConditions(filters)
+	return r.getStatsWithConditions(ctx, filters, conditions, args)
+}
+
+// Keep phase averages in exactly the same user/key/model/date cohort as totals.
+func usageStatsWhereConditions(filters UsageLogFilters) ([]string, []any) {
 	conditions := make([]string, 0, 9)
 	args := make([]any, 0, 9)
 
@@ -695,6 +701,10 @@ func (r *usageLogRepository) GetStatsWithFilters(ctx context.Context, filters Us
 		args = append(args, *filters.EndTime)
 	}
 
+	return conditions, args
+}
+
+func (r *usageLogRepository) getStatsWithConditions(ctx context.Context, filters UsageLogFilters, conditions []string, args []any) (*UsageStats, error) {
 	query := fmt.Sprintf(`
 		WITH scoped AS (
 			SELECT
