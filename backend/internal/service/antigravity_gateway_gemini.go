@@ -170,7 +170,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		action:          upstreamAction,
 		body:            wrappedBody,
 		c:               c,
-		httpUpstream:    s.httpUpstream,
+		httpUpstream:    s.guardedHTTPUpstream(account),
 		settingService:  s.settingService,
 		accountRepo:     s.accountRepo,
 		handleError:     s.handleUpstreamError,
@@ -218,7 +218,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 				if err == nil {
 					fallbackReq, err := antigravity.NewAPIRequest(ctx, upstreamAction, accessToken, fallbackWrapped)
 					if err == nil {
-						fallbackResp, err := s.httpUpstream.Do(fallbackReq, proxyURL, account.ID, account.Concurrency)
+						fallbackResp, err := s.guardedHTTPUpstream(account).Do(fallbackReq, proxyURL, account.ID, account.Concurrency)
 						s.rateLimitService.observeQualityResponse(fallbackReq.Context(), account, fallbackResp, err)
 						if err == nil && fallbackResp.StatusCode < 400 {
 							_ = resp.Body.Close()
@@ -272,7 +272,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 					action:          upstreamAction,
 					body:            retryWrappedBody,
 					c:               c,
-					httpUpstream:    s.httpUpstream,
+					httpUpstream:    s.guardedHTTPUpstream(account),
 					settingService:  s.settingService,
 					accountRepo:     s.accountRepo,
 					handleError:     s.handleUpstreamError,
