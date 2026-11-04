@@ -3268,6 +3268,8 @@
         :type="form.type"
       />
 
+      <RequestGzipField v-if="form.type === 'apikey'" v-model="requestGzipEnabled" />
+
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
@@ -4375,6 +4377,7 @@ import MatureProviderImport, { type ProviderSelection } from './MatureProviderIm
 import NewFeatureBadge from '@/components/common/NewFeatureBadge.vue'
 import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
+import RequestGzipField from '@/components/account/RequestGzipField.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
@@ -4476,12 +4479,18 @@ const oauthStepTitle = computed(() => {
 // 上游ID：直接上游声明请求标识的响应头名，留空不记录。
 const costMultiplier = ref(DEFAULT_ACCOUNT_COST_MULTIPLIER)
 const upstreamRequestIdHeader = ref('')
+const requestGzipEnabled = ref(false)
 const withAccountExtraSettings = (extra?: Record<string, unknown>): Record<string, unknown> => {
   if (!isValidAccountCostMultiplier(costMultiplier.value)) {
     throw new Error(t('admin.accounts.costMultiplierInvalid'))
   }
   const name = upstreamRequestIdHeader.value.trim()
-  return { ...(extra || {}), cost_multiplier: costMultiplier.value, ...(name ? { upstream_request_id_header: name } : {}) }
+  return {
+    ...(extra || {}),
+    cost_multiplier: costMultiplier.value,
+    ...(name ? { upstream_request_id_header: name } : {}),
+    ...(form.type === 'apikey' && requestGzipEnabled.value ? { request_gzip_enabled: true } : {})
+  }
 }
 
 const baseUrlHint = computed(() => {
@@ -6053,6 +6062,7 @@ const resetForm = () => {
   providerSelection.value = null
   apiKeyValue.value = ''
   upstreamRequestIdHeader.value = ''
+  requestGzipEnabled.value = false
   upstreamBillingAutoProbeEnabled.value = true
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
