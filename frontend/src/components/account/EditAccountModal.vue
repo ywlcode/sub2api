@@ -1991,6 +1991,8 @@
         :type="account.type"
       />
 
+      <RequestGzipField v-if="account.type === 'apikey'" v-model="requestGzipEnabled" />
+
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
           <label class="input-label">{{ t('admin.accounts.concurrency') }}</label>
@@ -3747,6 +3749,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
+import RequestGzipField from '@/components/account/RequestGzipField.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import APIKeyHealthSettings from '@/components/account/APIKeyHealthSettings.vue'
 import { defaultAPIKeyHealthConfig, readAPIKeyHealthConfig, applyAPIKeyHealthConfig } from '@/components/account/apiKeyHealth'
@@ -4480,6 +4483,7 @@ const isNewAPIUpstream = computed(() => props.account?.extra?.upstream_billing_p
 const mixedScheduling = ref(false) // For antigravity accounts: enable mixed scheduling
 // 上游ID：直接上游声明请求标识的响应头名，留空不记录。
 const upstreamRequestIdHeader = ref('')
+const requestGzipEnabled = ref(false)
 const readUpstreamRequestIdHeader = (extra: unknown): string => {
   const value = (extra as Record<string, unknown> | undefined)?.upstream_request_id_header
   return typeof value === 'string' ? value : ''
@@ -5098,6 +5102,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 	mixedScheduling.value = extra?.mixed_scheduling === true
 	allowOverages.value = extra?.allow_overages === true
 	upstreamRequestIdHeader.value = readUpstreamRequestIdHeader(extra)
+	requestGzipEnabled.value = extra?.request_gzip_enabled === true
 	openAIImagesUrlToB64JsonEnabled.value = extra?.images_url_to_b64_json === true
 	autoPause5hThreshold.value = typeof extra?.auto_pause_5h_threshold === 'number' ? extra.auto_pause_5h_threshold * 100 : null
 	autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
@@ -7079,6 +7084,13 @@ const handleSubmit = async () => {
       // Quota notify config
       writeQuotaNotifyToExtra(newExtra, 'update')
       updatePayload.extra = newExtra
+    }
+
+    if (props.account.type === 'apikey' && requestGzipEnabled.value !== (props.account.extra?.request_gzip_enabled === true)) {
+      updatePayload.extra = {
+        ...(updatePayload.extra || props.account.extra || {}),
+        request_gzip_enabled: requestGzipEnabled.value
+      }
     }
 
     // 上游ID头名只在改动时写回 extra，避免用弹窗打开时的快照覆盖运行态键。

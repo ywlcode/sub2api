@@ -20,6 +20,16 @@ func TestFilterSchedulerCredentialsKeepsSubscriptionPlanType(t *testing.T) {
 	require.NotContains(t, filtered, "refresh_token")
 }
 
+func TestSchedulerMetadataAccountKeepsRequestGzip(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		account := service.Account{Type: service.AccountTypeAPIKey,
+			Extra: map[string]any{service.AccountExtraRequestGzipEnabled: enabled}}
+		metadata := buildSchedulerMetadataAccount(account)
+		require.Equal(t, enabled, metadata.RequestGzipEnabled())
+		require.Equal(t, enabled, metadata.Extra[service.AccountExtraRequestGzipEnabled])
+	}
+}
+
 func TestFilterSchedulerCredentialsOmitsCodexTicketIdentity(t *testing.T) {
 	filtered := filterSchedulerCredentials(map[string]any{
 		"plan_type":          "plus",
