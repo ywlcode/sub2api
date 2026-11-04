@@ -109,7 +109,8 @@
       <div class="rounded-lg bg-purple-100 p-2 dark:bg-purple-900/30 text-purple-600">
         <Icon name="clock" size="md" />
       </div>
-      <div><p class="text-xs font-medium text-gray-500">{{ t('usage.avgDuration') }}</p><p class="text-xl font-bold">{{ formatDuration(stats?.average_duration_ms || 0) }}</p></div>
+      <RequestTimingAverages v-if="showRequestPhases" :stats="stats" />
+      <div v-else><p class="text-xs font-medium text-gray-500">{{ t('usage.avgDuration') }}</p><p class="text-xl font-bold">{{ formatDuration(stats?.average_duration_ms || 0) }}</p></div>
     </div>
   </div>
 </template>
@@ -123,6 +124,7 @@ import Icon from '@/components/icons/Icon.vue'
 import NewFeatureBadge from '@/components/common/NewFeatureBadge.vue'
 import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 import { formatUsageRate, usagePerMinute, type UsageRateWindow } from '@/utils/usageRate'
+import RequestTimingAverages from '@/components/common/RequestTimingAverages.vue'
 
 const props = withDefaults(defineProps<{
   stats: (AdminUsageStatsResponse | UsageStatsResponse) | null
@@ -133,12 +135,14 @@ const props = withDefaults(defineProps<{
   rateWindow?: UsageRateWindow | null
   /** Admin who owns the new-feature badge dismissal; omit to hide the badge. */
   noticeUserId?: number | null
+  showRequestPhases?: boolean
 }>(), {
   showAccountCost: true,
   strikeStandardCost: false,
   showRate: false,
   rateWindow: null,
   noticeUserId: null,
+  showRequestPhases: false,
 })
 
 const { t } = useI18n()

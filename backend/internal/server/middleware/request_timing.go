@@ -23,7 +23,7 @@ type ConnectionTraceRecorder interface {
 func RequestTiming(recorders ...ConnectionTraceRecorder) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := strings.TrimRight(c.Request.URL.Path, "/")
-		if c.Request.Method != http.MethodPost || (!strings.HasSuffix(path, "/responses") && !strings.HasSuffix(path, "/responses/compact")) {
+		if c.Request.Method != http.MethodPost || !isTimedInferencePath(path) {
 			c.Next()
 			return
 		}

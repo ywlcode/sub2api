@@ -1,7 +1,7 @@
 <template>
   <AppLayout>
     <div class="space-y-6">
-      <UsageStatsCards v-if="activeTab !== 'traffic'" :stats="usageStats" :show-account-cost="false" :strike-standard-cost="true" />
+      <UsageStatsCards v-if="activeTab !== 'traffic'" :stats="usageStats" :show-account-cost="false" :strike-standard-cost="true" show-request-phases />
 
       <div v-if="activeTab !== 'traffic'" class="space-y-4">
         <div class="card p-4">
