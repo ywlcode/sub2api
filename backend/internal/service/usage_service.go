@@ -295,6 +295,7 @@ func (s *UsageService) GetUserDashboardStats(ctx context.Context, userID int64) 
 	if err != nil {
 		return nil, fmt.Errorf("get user dashboard stats: %w", err)
 	}
+	stats.RequestPhaseAverages = s.requestPhaseAverages(ctx, usagestats.UsageLogFilters{UserID: userID})
 	return stats, nil
 }
 
@@ -304,6 +305,7 @@ func (s *UsageService) GetAPIKeyDashboardStats(ctx context.Context, apiKeyID int
 	if err != nil {
 		return nil, fmt.Errorf("get api key dashboard stats: %w", err)
 	}
+	stats.RequestPhaseAverages = s.requestPhaseAverages(ctx, usagestats.UsageLogFilters{APIKeyID: apiKeyID})
 	return stats, nil
 }
 
@@ -459,5 +461,6 @@ func (s *UsageService) GetStatsWithFilters(ctx context.Context, filters usagesta
 	if err != nil {
 		return nil, fmt.Errorf("get usage stats with filters: %w", err)
 	}
+	stats.RequestPhaseAverages = s.requestPhaseAverages(ctx, filters)
 	return stats, nil
 }

@@ -4,6 +4,7 @@
  */
 
 import { apiClient } from './client'
+import type { RequestPhaseAverages } from '@/types/usageTiming'
 import type {
   UsageLog,
   UsageQueryParams,
@@ -30,7 +31,7 @@ export interface PlatformDashboardStats {
   today_actual_cost: number
 }
 
-export interface UserDashboardStats {
+export interface UserDashboardStats extends RequestPhaseAverages {
   total_api_keys: number
   active_api_keys: number
   total_requests: number

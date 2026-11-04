@@ -238,7 +238,8 @@
 
         <!-- 状态列：首字/总耗时/TPS 用左侧色条表示健康度。缓存率百分数为绿色，色条延伸到这一行，但不改变上面三段的健康色。 -->
         <template #cell-latency="{ row }">
-          <component :is="enableTimingDetails ? 'button' : 'div'" :type="enableTimingDetails ? 'button' : undefined" class="grid grid-cols-[0.25rem_max-content_max-content] items-baseline gap-x-2 gap-y-0.5 text-left text-xs" :class="enableTimingDetails ? 'hover:opacity-80 focus-visible:outline focus-visible:outline-primary-500' : ''" :aria-label="enableTimingDetails ? t('requestTiming.title') : undefined" @click="enableTimingDetails && (timingRecord = row)">
+          <UserRequestLatency v-if="cacheRateAudience === 'user'" :row="row" :show-cache-rate="showCacheRate" :clickable="enableTimingDetails" @click="enableTimingDetails && (timingRecord = row)" />
+          <component v-else :is="enableTimingDetails ? 'button' : 'div'" :type="enableTimingDetails ? 'button' : undefined" class="grid grid-cols-[0.25rem_max-content_max-content] items-baseline gap-x-2 gap-y-0.5 text-left text-xs" :class="enableTimingDetails ? 'hover:opacity-80 focus-visible:outline focus-visible:outline-primary-500' : ''" :aria-label="enableTimingDetails ? t('requestTiming.title') : undefined" @click="enableTimingDetails && (timingRecord = row)">
             <span
               data-testid="latency-bar"
               class="col-start-1 row-start-1 w-1 self-stretch rounded-full"
@@ -252,10 +253,9 @@
               <span v-if="!enableTimingDetails && row.queue_timing?.status === 'measured' && row.queue_wait_ms" class="ml-1 text-[10px] font-normal text-amber-600 dark:text-amber-400">{{ t('usage.queuePortion') }} {{ row.queue_timing.queue_clamped ? '≥' : '' }}{{ formatDuration(row.queue_wait_ms) }}</span>
             </span>
             <span v-else class="col-start-3 row-start-1 text-gray-400 dark:text-gray-500" :title="enableTimingDetails ? t('requestTiming.legacyFirst') : undefined">-</span>
-            <span class="col-start-2 row-start-2 text-gray-400 dark:text-gray-500">{{ t(enableTimingDetails ? 'usage.latencyDurationShort' : row.queue_timing?.status === 'measured' ? 'usage.latencyDuration' : 'requestTiming.legacyTotal') }}</span>
-            <span class="col-start-3 row-start-2 font-medium tabular-nums" :class="LATENCY_TEXT_CLASSES[durationSeverity(durationQueueInclusive(row) ?? 0)]" :title="row.queue_timing?.status === 'measured' ? t('usage.latencyDurationHint', { forward: formatDuration(row.queue_timing?.forward_duration_ms), queue: formatDuration(row.queue_wait_ms ?? 0) }) : enableTimingDetails ? t('requestTiming.legacyTotal') : undefined">
-              {{ formatDuration(durationQueueInclusive(row)) }}
-              <span v-if="!enableTimingDetails && row.queue_timing?.status === 'measured' && row.queue_wait_ms" class="ml-1 text-[10px] font-normal text-amber-600 dark:text-amber-400">{{ t('usage.queuePortion') }} {{ row.queue_timing.queue_clamped ? '≥' : '' }}{{ formatDuration(row.queue_wait_ms) }}</span>
+            <span class="col-start-2 row-start-2 text-gray-400 dark:text-gray-500">{{ t('usage.duration') }}</span>
+            <span data-testid="request-phase-duration" class="col-start-3 row-start-2 font-medium tabular-nums" :title="t('usage.requestPhasesHint')">
+              {{ formatRequestPhaseDuration(row.content_timing?.request_phases?.user_upload_ms) }} / {{ formatRequestPhaseDuration(row.content_timing?.request_phases?.processing_ms) }}
             </span>
             <span class="col-start-2 row-start-3 text-gray-400 dark:text-gray-500">{{ t('usage.latencyTps') }}</span>
             <span
@@ -570,6 +570,8 @@ import {
   type LatencySeverity,
 } from '@/utils/latencyHealth'
 import { formatUsageOutputTps, usageOutputTps } from '@/utils/usageTps'
+import { formatRequestPhaseDuration } from '@/utils/usageRequestTiming'
+import UserRequestLatency from './UserRequestLatency.vue'
 import { formatUsageCacheRate, showUsageCacheRate, usageCacheRateParts } from '@/utils/usageCacheRate'
 import {
   BILLING_MODE_TOKEN,

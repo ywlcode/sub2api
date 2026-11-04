@@ -65,6 +65,7 @@ type SocketEvidence struct {
 	Scope           string   `json:"scope"`
 }
 type ContentObservation struct {
+	RequestPhases                RequestPhases  `json:"request_phases"`
 	ReasoningFirstMS             *float64       `json:"reasoning_first_ms"`
 	VisibleTextFirstMS           *float64       `json:"visible_text_first_ms"`
 	ResponseByteFirstMS          *float64       `json:"response_byte_first_ms"`
@@ -84,6 +85,7 @@ func UnknownContentObservation() ContentObservation {
 }
 func DeriveContentObservation(s Snapshot) ContentObservation {
 	out := UnknownContentObservation()
+	out.RequestPhases = DeriveRequestPhases(s)
 	if s.Truncated || len(s.Attempts) == 0 {
 		return out
 	}

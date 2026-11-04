@@ -82,9 +82,9 @@
                 <td class="whitespace-nowrap p-2">{{ g.body_bucket }}</td>
                 <td class="whitespace-nowrap p-2">{{ g.cache_bucket }}</td>
                 <td class="whitespace-nowrap p-2">{{ g.reasoning_effort }}</td>
-                <td class="whitespace-nowrap p-2">{{ measured(g.reasoning_first_avg_ms, g.reasoning_samples) }}</td>
-                <td class="whitespace-nowrap p-2">{{ measured(g.visible_text_first_avg_ms, g.text_samples) }}</td>
-                <td class="whitespace-nowrap p-2">{{ measured(g.response_byte_first_avg_ms, g.byte_samples) }}</td>
+                <td v-if="ops" class="whitespace-nowrap p-2">{{ measured(g.reasoning_first_avg_ms, g.reasoning_samples) }}</td>
+                <td v-if="ops" class="whitespace-nowrap p-2">{{ measured(g.visible_text_first_avg_ms, g.text_samples) }}</td>
+                <td v-if="ops" class="whitespace-nowrap p-2">{{ measured(g.response_byte_first_avg_ms, g.byte_samples) }}</td>
                 <td class="whitespace-nowrap p-2">{{ [g.visible_text_p50_ms, g.visible_text_p90_ms, g.visible_text_p99_ms].map(v => v == null ? '—' : `${v.toFixed(1)} ms`).join(' / ') }}</td>
                 <td class="whitespace-nowrap p-2">{{ g.requests }} / {{ g.traces }} / {{ g.attempts }}</td>
                 <td class="whitespace-nowrap p-2">{{ measured(g.body_upload_avg_ms, g.upload_samples) }}</td>
@@ -165,7 +165,7 @@ const report = ref<LatencyReport | null>(null)
 const loading = ref(false)
 const error = ref(false)
 const page = ref(1)
-const columns = ['accountModel', 'body', 'cache', 'effort', 'reasoning_first_ms', 'visible_text_first_ms', 'response_byte_first_ms', 'textQuantiles', 'samples', 'upload', 'semantic', 'visible', 'switches', 'extra']
+const columns = computed(() => ['accountModel', 'body', 'cache', 'effort', ...(props.ops ? ['reasoning_first_ms', 'visible_text_first_ms', 'response_byte_first_ms'] : []), 'textQuantiles', 'samples', 'upload', 'semantic', 'visible', 'switches', 'extra'])
 const measured = (value: number | null | undefined, count: number | undefined) => `${value == null ? t('latencyObservability.notCollected') : `${value.toFixed(1)} ms`} (n=${count ?? 0})`
 
 const dimensions = [
