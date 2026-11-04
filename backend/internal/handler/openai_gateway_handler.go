@@ -4741,7 +4741,7 @@ func (h *OpenAIGatewayHandler) applyOpenAIFailoverPassthroughRule(
 	if h.errorPassthroughService == nil || statusCode <= 0 || len(responseBody) == 0 {
 		return false
 	}
-	rule := h.errorPassthroughService.MatchRule("openai", statusCode, responseBody)
+	rule := h.errorPassthroughService.MatchRule(errorPassthroughPlatform(c), statusCode, responseBody)
 	if rule == nil {
 		return false
 	}
