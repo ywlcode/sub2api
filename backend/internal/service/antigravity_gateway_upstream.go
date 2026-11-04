@@ -82,7 +82,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	if err := checkAPIKeyLongContextBeforeForward(ctx, c, nil, body, originalModel); err != nil {
 		return nil, err
 	}
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	resp, err := s.guardedHTTPUpstream(account).Do(req, proxyURL, account.ID, account.Concurrency)
 	s.rateLimitService.observeQualityResponse(req.Context(), account, resp, err)
 	if err != nil {
 		logger.LegacyPrintf("service.antigravity_gateway", "%s upstream request failed: %v", prefix, err)

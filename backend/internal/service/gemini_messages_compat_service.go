@@ -750,7 +750,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		if err := checkAPIKeyLongContextRequestBeforeForward(ctx, c, upstreamReq, originalModel, mappedModel); err != nil {
 			return nil, err
 		}
-		resp, err = apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		resp, err = gatewayHTTPUpstream(s.httpUpstream, s.rateLimitService, account, s.cfg).Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		s.rateLimitService.observeQualityResponse(upstreamReq.Context(), account, resp, err)
 		if err != nil {
 			return nil, s.handleUpstreamTransportError(ctx, c, account, err)
@@ -1307,7 +1307,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		if err := checkAPIKeyLongContextRequestBeforeForward(ctx, c, upstreamReq, originalModel, mappedModel); err != nil {
 			return nil, err
 		}
-		resp, err = apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		resp, err = gatewayHTTPUpstream(s.httpUpstream, s.rateLimitService, account, s.cfg).Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 		s.rateLimitService.observeQualityResponse(upstreamReq.Context(), account, resp, err)
 		if err != nil {
 			transportErr := s.handleUpstreamTransportError(ctx, c, account, err)

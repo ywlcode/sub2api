@@ -1178,6 +1178,10 @@ type GatewayConfig struct {
 	OpenAIPluginSSEEarlyEventsEnabled bool `mapstructure:"openai_plugin_sse_early_events_enabled"`
 	// HTTP submission deadline shared across retries; zero disables it.
 	OpenAIUploadTimeoutSeconds int `mapstructure:"openai_upload_timeout_seconds"`
+	// Non-OpenAI shared HTTP sends: upload deadline (0 disables) and the maximum
+	// billing drain after a disconnected client has received upstream headers.
+	UpstreamUploadTimeoutSeconds         int `mapstructure:"upstream_upload_timeout_seconds"`
+	UpstreamClientDisconnectGraceSeconds int `mapstructure:"upstream_client_disconnect_grace_seconds"`
 	// Shared HTTP budget before the first complete model output event; zero disables it.
 	OpenAIPreOutputBudgetSeconds int `mapstructure:"openai_pre_output_budget_seconds"`
 	// OpenAIHighEffortFirstOutputTimeoutSeconds: high/xhigh/max 推理的首个语义输出超时（秒）。
@@ -2700,6 +2704,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_first_output_timeout_seconds", 0)
 	viper.SetDefault("gateway.openai_plugin_sse_early_events_enabled", false)
 	viper.SetDefault("gateway.openai_upload_timeout_seconds", 0)
+	viper.SetDefault("gateway.upstream_upload_timeout_seconds", 120)
+	viper.SetDefault("gateway.upstream_client_disconnect_grace_seconds", 30)
 	viper.SetDefault("gateway.openai_pre_output_budget_seconds", 0)
 	viper.SetDefault("gateway.openai_high_effort_first_output_timeout_seconds", 0)
 	viper.SetDefault("gateway.log_upstream_error_body", true)
@@ -3699,6 +3705,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIUploadTimeoutSeconds < 0 || c.Gateway.OpenAIUploadTimeoutSeconds > 1800 {
 		return fmt.Errorf("gateway.openai_upload_timeout_seconds must be between 0-1800 seconds")
+	}
+	if c.Gateway.UpstreamUploadTimeoutSeconds < 0 || c.Gateway.UpstreamUploadTimeoutSeconds > 1800 {
+		return fmt.Errorf("gateway.upstream_upload_timeout_seconds must be between 0-1800 seconds")
+	}
+	if c.Gateway.UpstreamClientDisconnectGraceSeconds < 0 || c.Gateway.UpstreamClientDisconnectGraceSeconds > 300 {
+		return fmt.Errorf("gateway.upstream_client_disconnect_grace_seconds must be between 0-300 seconds")
 	}
 	if c.Gateway.OpenAIPreOutputBudgetSeconds < 0 || c.Gateway.OpenAIPreOutputBudgetSeconds > 3600 {
 		return fmt.Errorf("gateway.openai_pre_output_budget_seconds must be between 0-3600 seconds")

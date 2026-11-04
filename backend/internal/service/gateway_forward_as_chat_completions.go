@@ -135,7 +135,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	reasoningEffort = ApplyThinkingEnabledFallback(reasoningEffort, forwardedBody, mappedModel)
 
 	// 11. Send request
-	resp, err := apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	resp, err := gatewayHTTPUpstream(s.httpUpstream, s.rateLimitService, account, s.cfg).DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
 	s.rateLimitService.observeQualityResponse(upstreamReq.Context(), account, resp, err)
 	if err != nil {
 		if resp != nil && resp.Body != nil {

@@ -185,7 +185,7 @@ func (s *AntigravityGatewayService) forwardAntigravityCompat(
 		action:          "streamGenerateContent",
 		body:            call.geminiBody,
 		c:               c,
-		httpUpstream:    s.httpUpstream,
+		httpUpstream:    s.guardedHTTPUpstream(account),
 		settingService:  s.settingService,
 		accountRepo:     s.accountRepo,
 		handleError:     s.handleUpstreamError,

@@ -205,7 +205,7 @@ func (s *GatewayService) executeBedrockUpstream(
 			return nil, err
 		}
 
-		resp, err = apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, nil)
+		resp, err = gatewayHTTPUpstream(s.httpUpstream, s.rateLimitService, account, s.cfg).DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, nil)
 		if err != nil {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()
