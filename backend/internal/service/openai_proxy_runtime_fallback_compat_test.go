@@ -62,7 +62,7 @@ func TestRuntimeProxyFallbackRequestSafety(t *testing.T) {
 			primary := proxyForTest(1, "primary.invalid", 8080)
 			primary.FallbackMode, primary.BackupProxyID = tc.mode, i64(2)
 			backup := proxyForTest(2, "backup.invalid", 8080)
-			account := &Account{ID: 1, Type: AccountTypeAPIKey, Concurrency: 3, Proxy: primary}
+			account := &Account{ID: 1, Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Concurrency: 3, Proxy: primary}
 			calls, outerTraceCalls := 0, 0
 			ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GetConn: func(string) { outerTraceCalls++ }})
 			ctx = WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileOpenAI)

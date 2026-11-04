@@ -52,7 +52,7 @@ func (s *GatewayService) ForwardSystemOne(ctx context.Context, c *gin.Context, a
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).Do(req, proxyURL, account.ID, account.Concurrency)
+	resp, err := gatewayHTTPUpstream(s.httpUpstream, s.rateLimitService, account, s.cfg).Do(req, proxyURL, account.ID, account.Concurrency)
 	if err != nil {
 		return nil, s.handleUpstreamTransportError(ctx, c, account, err, OpsUpstreamErrorEvent{
 			Passthrough: true,

@@ -305,6 +305,17 @@ gateway:
   # Opt-in HTTP upload/submission deadline shared across account/proxy retries.
   # accounts.extra.openai_upload_timeout_seconds overrides it (0 disables).
   openai_upload_timeout_seconds: 0
+  # Non-OpenAI shared HTTP forwarding (DeepSeek/Kimi/GLM/Grok, Anthropic/Gemini).
+  # Each upload, including connection establishment, is bounded independently;
+  # existing retry policies still apply. 0 disables the upload deadline.
+  upstream_upload_timeout_seconds: 120
+  # Before response headers, client disconnect cancels immediately. After headers,
+  # detached billing drains may continue at most this many seconds (0=immediate).
+  # Native paths that already propagate cancellation continue to stop immediately.
+  upstream_client_disconnect_grace_seconds: 30
+  # Non-OpenAI shared HTTP paths also use response_header_timeout after upload,
+  # including compatible endpoints whose transport uses the OpenAI profile.
+  # These limits do not cap a connected client's normal streaming response body.
   # Shared HTTP time budget until model output; does not cap normal long SSE.
   openai_pre_output_budget_seconds: 0
   # Optional high/xhigh/max override (seconds, 0=use the standard timeout)

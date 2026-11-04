@@ -169,7 +169,7 @@ func (s *OpenAIGatewayService) doOpenAIProxyAttempt(req *http.Request, account *
 			return markOpenAIResponseEgress(resp, req, target.proxyID), err
 		}
 	}
-	resp, err = apiKeyHealthHTTP(s.httpUpstream, s.rateLimitService, account).Do(req, target.url, account.ID, account.Concurrency)
+	resp, err = gatewayHTTPUpstream(s.httpUpstream, s.rateLimitService, account, s.cfg).Do(req, target.url, account.ID, account.Concurrency)
 	return markOpenAIResponseEgress(resp, req, target.proxyID), err
 }
 
