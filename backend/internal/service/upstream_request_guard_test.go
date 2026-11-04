@@ -87,7 +87,7 @@ func TestUpstreamGuardHeaderWaitAndLongResponse(t *testing.T) {
 				}
 				resp, err := g.finish(req, &http.Response{Body: io.NopCloser(strings.NewReader("ok"))}, nil)
 				require.NoError(t, err)
-				defer resp.Body.Close()
+				defer func() { _ = resp.Body.Close() }()
 				synctest.Wait()
 				time.Sleep(time.Hour)
 				require.NoError(t, req.Context().Err(), "connected response bodies have no total-duration limit")
@@ -130,15 +130,16 @@ func TestUpstreamGuardDetachedDrainAndOwnerCancellation(t *testing.T) {
 				if mode == "after-headers" || mode == "owner-revoked" {
 					resp, err := g.finish(req, &http.Response{Body: io.NopCloser(strings.NewReader("ok"))}, nil)
 					require.NoError(t, err)
-					defer resp.Body.Close()
+					defer func() { _ = resp.Body.Close() }()
 				}
 				synctest.Wait()
-				if mode == "owner-revoked" {
+				switch mode {
+				case "owner-revoked":
 					owner, _ := apiKeyAdmissionOwnerFromContext(owned)
 					owner.cancel(ErrAPIKeySlotLeaseLost)
-				} else if mode == "caller-deadline" {
+				case "caller-deadline":
 					time.Sleep(time.Second)
-				} else {
+				default:
 					cancel()
 				}
 				synctest.Wait()
@@ -275,7 +276,7 @@ func TestUpstreamGuardClosesRealResponseAfterDisconnect(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.WriteHeader(http.StatusOK)
-		w.(http.Flusher).Flush()
+		require.NoError(t, http.NewResponseController(w).Flush())
 		<-r.Context().Done()
 		close(stopped)
 	}))
@@ -289,7 +290,7 @@ func TestUpstreamGuardClosesRealResponseAfterDisconnect(t *testing.T) {
 	upstream := apiKeyHealthTestHTTP{DoFunc: server.Client().Do}
 	resp, err := gatewayHTTPUpstream(upstream, nil, &Account{Platform: PlatformDeepseek}, cfg).Do(req, "", 1, 1)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	cancel()
 	_, err = io.ReadAll(resp.Body)
 	require.ErrorIs(t, err, context.Canceled)
@@ -344,6 +345,7 @@ func TestUpstreamGuardCompatibleProtocols(t *testing.T) {
 func TestUpstreamGuardConcurrentCloseAndCancel(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		caller, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		ctx, release := detachUpstreamContext(caller)
 		release()
 		req, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://upstream.example", nil)
