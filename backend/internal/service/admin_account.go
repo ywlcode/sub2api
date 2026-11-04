@@ -429,6 +429,9 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	if err := ValidateRequestGzipExtra(accountExtra); err != nil {
+		return nil, err
+	}
 	if err := ValidateAPIKeyHealthConfig(input.Credentials); err != nil {
 		return nil, err
 	}
@@ -640,6 +643,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 }
 
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
+	if err := ValidateRequestGzipExtra(input.Extra); err != nil {
+		return nil, err
+	}
 	// This DTO edits account settings, not the scheduling permission. Dedicated
 	// single/bulk switch APIs carry manual intent; an ordinary edit must neither
 	// overwrite a concurrently executed timer nor cancel plans via inherited intent.
@@ -1049,6 +1055,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	if err := ValidateRequestGzipExtra(updates); err != nil {
+		return err
+	}
 	// Ordinary partial saves cannot write server-owned quality isolation.
 	// Dedicated quality restore/runtime paths use their own transaction/UpdateExtra.
 	updates = maps.Clone(updates)
@@ -1106,6 +1115,9 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 // BulkUpdateAccounts updates multiple accounts in one request.
 // It merges credentials/extra keys instead of overwriting the whole object.
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
+	if err := ValidateRequestGzipExtra(input.Extra); err != nil {
+		return nil, err
+	}
 	if err := ValidateAccountCostMultiplierExtra(input.Extra); err != nil {
 		return nil, err
 	}

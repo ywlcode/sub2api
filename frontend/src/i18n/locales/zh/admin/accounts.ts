@@ -1,5 +1,9 @@
 export default {
     accounts: {
+      requestGzip: {
+        title: '请求体 gzip 压缩',
+        hint: '默认关闭。仅在上游支持 gzip 请求体时开启；压缩不小于 1 KiB 且压缩后更小的 JSON HTTP 请求。WebSocket 和文件上传不受影响。'
+      },
       timer: {
         "manage": "定时任务",
         "planType": "任务类型",

@@ -340,6 +340,46 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 }
 
 describe('EditAccountModal', () => {
+  it.each(['openai', 'deepseek'])('saves and explicitly disables request gzip on %s without losing other settings', async (platform) => {
+    const account = buildAccount()
+    account.platform = platform
+    account.credentials = { api_key: 'fixture-key', base_url: 'https://relay.example.com/v1', account_mode: 'payg' }
+    account.extra = { unrelated: 'preserve' }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    const toggle = wrapper.get('[data-testid="request-gzip-toggle"]')
+    expect(toggle.attributes('aria-checked')).toBe('false')
+    await toggle.trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    const extra = updateAccountMock.mock.calls[0]?.[1]?.extra
+    expect(extra).toMatchObject({ request_gzip_enabled: true, unrelated: 'preserve' })
+    wrapper.unmount()
+
+    const restored = mountModal({ ...account, extra })
+    await flushPromises()
+    expect(restored.get('[data-testid="request-gzip-toggle"]').attributes('aria-checked')).toBe('true')
+    await restored.get('[data-testid="request-gzip-toggle"]').trigger('click')
+    await restored.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledTimes(2)
+    expect(updateAccountMock.mock.calls[1]?.[1]?.extra).toMatchObject({ request_gzip_enabled: false, unrelated: 'preserve' })
+  })
+
+  it('loads gzip per account and hides it for non-API-key accounts', async () => {
+    const wrapper = mountModal({ ...buildAccount(), extra: { request_gzip_enabled: true } })
+    expect(wrapper.get('[data-testid="request-gzip-toggle"]').attributes('aria-checked')).toBe('true')
+    await wrapper.setProps({ account: { ...buildAccount(), id: 2 } })
+    expect(wrapper.get('[data-testid="request-gzip-toggle"]').attributes('aria-checked')).toBe('false')
+    for (const type of ['oauth', 'setup-token', 'bedrock', 'service_account']) {
+      await wrapper.setProps({ account: { ...buildAccount(), type } })
+      expect(wrapper.find('[data-testid="request-gzip-toggle"]').exists()).toBe(false)
+    }
+  })
+
   it('loads, edits and explicitly disables API-key health settings while preserving credentials', async () => {
     const account = buildAccount()
     account.credentials.api_key_health_breaker = { enabled: true, window_size: 80, failure_threshold: 8 }

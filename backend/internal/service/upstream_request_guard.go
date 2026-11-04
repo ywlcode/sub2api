@@ -18,6 +18,7 @@ import (
 // polling and other background traffic from client-disconnect policy.
 func gatewayHTTPUpstream(upstream HTTPUpstream, limiter *RateLimitService, account *Account, cfg *config.Config) HTTPUpstream {
 	upstream = apiKeyHealthHTTP(upstream, limiter, account)
+	upstream = accountRequestGzipHTTP(upstream, account)
 	if account == nil || account.Platform == PlatformOpenAI {
 		return upstream
 	}

@@ -139,7 +139,7 @@ func BindOpenAIRequestTimezone(req *http.Request, proxy string) (*http.Request, 
 	if req.GetBody == nil || (req.Header.Get("Content-Type") != "" && !strings.HasPrefix(strings.ToLower(req.Header.Get("Content-Type")), "application/json")) {
 		return clone, nil
 	}
-	reader, err := req.GetBody()
+	reader, compressed, err := upstreamRequestBodyForRewrite(req)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +152,9 @@ func BindOpenAIRequestTimezone(req *http.Request, proxy string) (*http.Request, 
 	clone.Body = &requestTimezoneBody{Reader: bytes.NewReader(body), original: req.Body}
 	clone.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
 	clone.ContentLength = int64(len(body))
+	if compressed {
+		return recompressRewrittenUpstreamRequest(clone)
+	}
 	return clone, nil
 }
 

@@ -256,6 +256,38 @@ function expectWSAcceleration(extra: unknown, enabled: boolean) {
 }
 
 describe('CreateAccountModal OpenAI long-context billing', () => {
+  it('leaves request gzip disabled unless explicitly enabled', async () => {
+    await submitApiKeyAccount('openai')
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.extra).not.toHaveProperty('request_gzip_enabled')
+  })
+
+  it.each(['OpenAI', 'DeepSeek'])('creates a %s API key with request gzip and resets it for the next account', async (platform) => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, platform)
+    if (platform === 'OpenAI') {
+      expect(wrapper.find('[data-testid="request-gzip-toggle"]').exists()).toBe(false)
+      await selectButtonByText(wrapper, 'API Key')
+    }
+    const toggle = wrapper.get('[data-testid="request-gzip-toggle"]')
+    expect(toggle.attributes('aria-checked')).toBe('false')
+    await toggle.trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Gzip relay')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('fixture-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]).toMatchObject({
+      platform: platform.toLowerCase(),
+      type: 'apikey',
+      extra: { request_gzip_enabled: true }
+    })
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await selectButtonByText(wrapper, 'DeepSeek')
+    expect(wrapper.get('[data-testid="request-gzip-toggle"]').attributes('aria-checked')).toBe('false')
+  })
+
   it('leaves upstream response-tier billing disabled by default', async () => {
     await submitApiKeyAccount('openai')
 
