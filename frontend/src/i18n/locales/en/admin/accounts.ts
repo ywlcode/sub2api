@@ -5,6 +5,10 @@ export default {
         resetHint: 'Switching resets model mappings, platform-specific settings and incompatible groups. Review and save the target settings before synchronizing models or refreshing usage.',
         boundCredentials: 'This authorization type or shadow account is bound to its platform. Create and authorize an account on the target platform.'
       },
+      requestGzip: {
+        title: 'Gzip request bodies',
+        hint: 'Off by default. Enable only when the upstream accepts gzip request bodies. Compresses JSON HTTP requests of at least 1 KiB when compression reduces their size. Does not apply to WebSocket or file uploads.'
+      },
       timer: {
         "manage": "Scheduled tasks",
         "planType": "Task type",

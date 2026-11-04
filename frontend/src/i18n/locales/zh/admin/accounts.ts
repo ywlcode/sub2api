@@ -5,6 +5,10 @@ export default {
         resetHint: '切换后将重置模型映射、平台专属设置及不兼容分组。请检查目标平台配置，保存后再同步模型或刷新用量。',
         boundCredentials: '当前授权类型或影子账号与平台绑定。请在目标平台新建账号并完成授权。'
       },
+      requestGzip: {
+        title: '请求体 gzip 压缩',
+        hint: '默认关闭。仅在上游支持 gzip 请求体时开启；压缩不小于 1 KiB 且压缩后更小的 JSON HTTP 请求。WebSocket 和文件上传不受影响。'
+      },
       timer: {
         "manage": "定时任务",
         "planType": "任务类型",
