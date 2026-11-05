@@ -19,6 +19,7 @@ import (
 func gatewayHTTPUpstream(upstream HTTPUpstream, limiter *RateLimitService, account *Account, cfg *config.Config) HTTPUpstream {
 	upstream = apiKeyHealthHTTP(upstream, limiter, account)
 	upstream = accountRequestGzipHTTP(upstream, account)
+	upstream = accountVolcengineHTTP(upstream, account)
 	if account == nil || account.Platform == PlatformOpenAI {
 		return upstream
 	}
