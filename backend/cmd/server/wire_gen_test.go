@@ -56,6 +56,8 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // provider refresh worker
 		nil, // QQ community worker
 		nil, // auto credit email worker
+		nil, // request phase cache
+		nil, // connection byte backfill
 		nil, // default/full runtime configuration
 		nil, // request capture manager
 		nil, // entClient

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -254,14 +255,12 @@ func parseOpsOpenAITokenStatsFilter(c *gin.Context) (*service.OpsOpenAITokenStat
 
 	timeRange := strings.TrimSpace(c.Query("time_range"))
 	if timeRange == "" {
-		timeRange = "30d"
+		timeRange = "today"
 	}
-	dur, ok := parseOpsOpenAITokenStatsDuration(timeRange)
-	if !ok {
-		return nil, fmt.Errorf("invalid time_range")
+	start, end, err := opsOpenAITokenStatsRange(timeRange, c.Query("timezone"), time.Now())
+	if err != nil {
+		return nil, err
 	}
-	end := time.Now().UTC()
-	start := end.Add(-dur)
 
 	filter := &service.OpsOpenAITokenStatsFilter{
 		TimeRange: timeRange,
@@ -314,6 +313,24 @@ func parseOpsOpenAITokenStatsFilter(c *gin.Context) (*service.OpsOpenAITokenStat
 		return nil, fmt.Errorf("invalid page")
 	}
 	return filter, nil
+}
+
+// Preset endpoints align to the same 30-second boundaries as dashboard caches.
+// Resolve the calendar day before rounding so midnight never selects yesterday.
+func opsOpenAITokenStatsRange(preset, userTZ string, now time.Time) (time.Time, time.Time, error) {
+	end := now.UTC().Truncate(30 * time.Second)
+	if preset == "today" {
+		start := timezone.StartOfDayInUserLocation(now, userTZ).UTC()
+		if end.Before(start) {
+			end = start
+		}
+		return start, end, nil
+	}
+	dur, ok := parseOpsOpenAITokenStatsDuration(preset)
+	if !ok {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid time_range")
+	}
+	return end.Add(-dur), end, nil
 }
 
 func parseOpsOpenAITokenStatsDuration(v string) (time.Duration, bool) {
