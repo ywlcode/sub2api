@@ -391,6 +391,12 @@ type ResponsesResponse struct {
 type ResponsesError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// Preserve upstream classification through buffered protocol conversion so
+	// permission errors still match 403 passthrough rules. Relays use both
+	// numeric and string statuses, so keep their original JSON representation.
+	Type       string          `json:"type,omitempty"`
+	Status     json.RawMessage `json:"status,omitempty"`
+	StatusCode json.RawMessage `json:"status_code,omitempty"`
 }
 
 // ResponsesIncompleteDetails explains why a response is incomplete.

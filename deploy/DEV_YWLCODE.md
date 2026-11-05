@@ -15,17 +15,17 @@
 
 rebase 会改变被重放提交的 SHA，已经构建或部署的镜像不会随分支移动而更新。已部署提交应保留独立、不可移动的标签，例如 `deploy-ywlcode-<提交短 SHA>`，并保留对应镜像。不要用 `v*` 标签代替自用部署标记，仓库的 Release 工作流会匹配这类标签。
 
-## OpenAI cyber_policy 错误透传
+## OpenAI 403 与 cyber_policy 错误透传
 
-精确命中 `error.code=cyber_policy` 或 `response.error.code=cyber_policy` 时，按语义状态码 **403** 匹配错误透传规则，包括上游用 HTTP 400 或 HTTP 200 内的 SSE / WebSocket 事件返回的情况。因此「403 + cyber，全部匹配」可自定义内容审计提示，且不会被通用的 400 过载规则覆盖。规则仍按账号平台、启用状态和优先级匹配；没有命中规则时保留原有响应行为。
+所有上游 HTTP **403** 在最终错误出口均匹配错误透传规则，包括普通错误、会话封禁、SIWC 资格拒绝和重试耗尽后的特殊映射。精确命中 `error.code` 或 `response.error.code` 为 `cyber_policy`、`session_blocked_by_cyber_policy` 时，也按语义状态码 **403** 匹配，包括上游用 HTTP 400 / 502 或 HTTP 200 内的 SSE / WebSocket 事件返回的情况。其他流内错误按结构化状态码和权限错误类型推断 403。因此「403 + cyber，全部匹配」也可自定义已封禁会话的提示，且不会被通用的 400 / 502 过载规则覆盖。规则仍按账号平台、启用状态和优先级匹配；没有命中规则时保留原有响应行为。本地鉴权、准入拒绝不属于上游错误透传。
 
-HTTP 响应尚未发送时，使用规则指定的状态码和消息；已经发送的 SSE 或已升级的 WebSocket 保留 HTTP 状态，在错误事件中改写消息。原有 `cyber_policy` 错误码、终止事件和上游审计证据保留，规则改写不触发账号重试或切换。不要将 `session_blocked_by_cyber_policy` 当作一次新的 `cyber_policy` 命中。
+HTTP 响应尚未发送时，使用规则指定的状态码和消息；已经发送的 SSE 或已升级的 WebSocket 保留 HTTP 状态，在错误事件中改写消息。Responses / WebSocket 保留原有错误码和终止事件；审计与账号状态处理继续使用原始上游证据。`session_blocked_by_cyber_policy` 仍不重试、不冷却账号，也不作为一次新的 `cyber_policy` 风控命中；客户端规则匹配与风控分类相互独立。
 
 修改或同步相关代码后，可运行专项回归：
 
 ```bash
 cd backend
-go test -tags=unit ./internal/service -run 'TestCyberPolicy|TestResponsesStreamCyberPolicy|Test.*CyberPolicy' -count=1
+go test -tags=unit ./internal/service ./internal/handler -run 'TestForbidden|TestCyberPolicy|TestUpstreamSessionBlocked|Test.*CyberPolicy|Test.*Passthrough.*Platform' -count=1
 ```
 
 ## 将 dev-ywlcode rebase 到上游 production

@@ -244,7 +244,7 @@ func TestCyberPolicyCompatPassthroughProductionRules(t *testing.T) {
 
 func TestCyberPolicyRuleOptionsAndUnmatchedPreservation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, mode := range []string{"custom_status", "original_message", "disabled", "wrong_platform", "session_blocked"} {
+	for _, mode := range []string{"custom_status", "original_message", "disabled", "wrong_platform"} {
 		t.Run(mode, func(t *testing.T) {
 			c, _ := gin.CreateTestContext(httptest.NewRecorder())
 			rule := bindCyberPolicyProductionRules(c)
@@ -262,11 +262,9 @@ func TestCyberPolicyRuleOptionsAndUnmatchedPreservation(t *testing.T) {
 				rule.Enabled = false
 			case "wrong_platform":
 				account.Platform = PlatformGrok
-			case "session_blocked":
-				payload = []byte(`{"error":{"code":"session_blocked_by_cyber_policy","message":"blocked"}}`)
 			}
 			original := append([]byte(nil), payload...)
-			client, status, matched := rewriteOpenAICyberPolicyForClient(c, account, payload)
+			client, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, payload, 0)
 			require.Equal(t, original, payload, "the evidence buffer must not change")
 			switch mode {
 			case "custom_status":
@@ -301,7 +299,7 @@ func TestCyberPolicyRawChatStreamProductionRules(t *testing.T) {
 			resp := &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}
 			_, err := (&OpenAIGatewayService{}).streamRawChatCompletions(c, resp, &Account{Platform: PlatformOpenAI}, "gpt-5", "gpt-5", "gpt-5", nil, nil, time.Now(), 10)
 			if committed {
-				require.ErrorIs(t, err, errOpenAICyberPolicyForwarded)
+				require.ErrorIs(t, err, errOpenAIErrorPassthroughForwarded)
 				require.Equal(t, http.StatusOK, rec.Code)
 				require.Contains(t, rec.Body.String(), cyberPolicyRuleMessage)
 				require.Contains(t, rec.Body.String(), "data: [DONE]")
