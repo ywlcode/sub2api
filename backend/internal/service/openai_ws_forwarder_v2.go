@@ -666,7 +666,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if clientDisconnected {
 			return
 		}
-		if rewritten, _, matched := rewriteOpenAICyberPolicyForClient(c, account, message); matched {
+		if rewritten, _, matched := rewriteOpenAIForbiddenErrorForClient(c, account, message, 0); matched {
 			message = rewritten
 		}
 		frame := make([]byte, 0, len(message)+8)
@@ -863,10 +863,12 @@ readLoop:
 		if eventType == "error" || eventType == "response.failed" {
 			markOpenAICyberPolicyEvent(c, message, http.StatusOK, usage)
 			if eventType == "response.failed" && reqStream && !c.Writer.Written() {
-				if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, message); matched {
+				if clientPayload, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, message, 0); matched {
+					// The client rule must not hide a structured credential failure.
+					s.handleOpenAIWSFailureAccountSideEffects(ctx, account, mappedModel, lease.HandshakeHeaders(), message)
 					lease.MarkBroken()
-					writeOpenAICyberPolicyClientError(c, status, clientPayload)
-					return nil, errOpenAICyberPolicyForwarded
+					writeOpenAIErrorPassthroughClientError(c, status, clientPayload)
+					return nil, errOpenAIErrorPassthroughForwarded
 				}
 			}
 		}
@@ -937,9 +939,9 @@ readLoop:
 			}
 			statusCode := openAIWSErrorHTTPStatusFromRaw(errCodeRaw, errTypeRaw)
 			setOpsUpstreamError(c, statusCode, errMsg, "")
-			if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, message); matched && !c.Writer.Written() {
-				writeOpenAICyberPolicyClientError(c, status, clientPayload)
-				return nil, errOpenAICyberPolicyForwarded
+			if clientPayload, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, message, 0); matched && !c.Writer.Written() {
+				writeOpenAIErrorPassthroughClientError(c, status, clientPayload)
+				return nil, errOpenAIErrorPassthroughForwarded
 			}
 			if reqStream && !clientDisconnected {
 				flushBufferedStreamEvents("error_event")
@@ -1032,9 +1034,9 @@ readLoop:
 			responseID = strings.TrimSpace(gjson.GetBytes(finalResponse, "id").String())
 		}
 
-		if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, finalResponse); matched {
-			writeOpenAICyberPolicyClientError(c, status, clientPayload)
-			return nil, errOpenAICyberPolicyForwarded
+		if clientPayload, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, finalResponse, 0); matched {
+			writeOpenAIErrorPassthroughClientError(c, status, clientPayload)
+			return nil, errOpenAIErrorPassthroughForwarded
 		}
 		c.Data(http.StatusOK, "application/json", finalResponse)
 	} else {

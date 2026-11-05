@@ -403,16 +403,15 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			if trimmedPayload != "[DONE]" {
 				observer.ObserveOpenAI([]byte(payload), strings.TrimSpace(gjson.Get(payload, "type").String()))
 				usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
-				if markOpenAICyberPolicyEvent(c, []byte(payload), resp.StatusCode, &usage) {
-					if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, []byte(payload)); matched {
-						if !c.Writer.Written() {
-							writeOpenAICyberPolicyClientError(c, status, clientPayload)
-						} else if !clientDisconnected {
-							_, _ = fmt.Fprintf(c.Writer, "data: %s\n\ndata: [DONE]\n\n", clientPayload)
-							c.Writer.Flush()
-						}
-						return nil, errOpenAICyberPolicyForwarded
+				markOpenAICyberPolicyEvent(c, []byte(payload), resp.StatusCode, &usage)
+				if clientPayload, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, []byte(payload), 0); matched {
+					if !c.Writer.Written() {
+						writeOpenAIErrorPassthroughClientError(c, status, clientPayload)
+					} else if !clientDisconnected {
+						_, _ = fmt.Fprintf(c.Writer, "data: %s\n\ndata: [DONE]\n\n", clientPayload)
+						c.Writer.Flush()
 					}
+					return nil, errOpenAIErrorPassthroughForwarded
 				}
 				if firstTokenMs == nil && !usageOnlyChunk {
 					elapsed := int(requesttiming.Now(c.Request.Context()).Sub(startTime).Milliseconds())
@@ -598,11 +597,10 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 	if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
 		usage = parsedUsage
 	}
-	if markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, &usage) {
-		if clientBody, status, matched := rewriteOpenAICyberPolicyForClient(c, account, respBody); matched {
-			writeOpenAICyberPolicyClientError(c, status, clientBody)
-			return nil, errOpenAICyberPolicyForwarded
-		}
+	markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, &usage)
+	if clientBody, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, respBody, 0); matched {
+		writeOpenAIErrorPassthroughClientError(c, status, clientBody)
+		return nil, errOpenAIErrorPassthroughForwarded
 	}
 	responseModel := gjson.GetBytes(respBody, "model").String()
 	if requiresBillableGrokChatUsage(account, billingModel, upstreamModel, responseModel) && !hasBillableGrokChatUsage(usage) {

@@ -978,6 +978,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			truncateOpenAIWSLogValue(err.Error(), openAIWSLogValueMaxLen),
 		)
 		s.handleOpenAIWSDialTransientFailure(ctx, account, capturedSessionModel, dialErr)
+		if clientErr, matched := forwardOpenAIForbiddenWSDialError(c, account, dialErr, func(event []byte) error {
+			writeCtx, cancel := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
+			defer cancel()
+			return WriteCapturedWSClient(writeCtx, clientConn, coderws.MessageText, event)
+		}); matched {
+			return clientErr
+		}
 		if statusCode == http.StatusTooManyRequests {
 			s.persistOpenAIWSRateLimitSignal(ctx, account, handshakeHeaders, nil, "rate_limit_exceeded", "rate_limit_error", strings.TrimSpace(err.Error()), capturedSessionModel)
 			return s.newOpenAIWSRateLimitFailoverError(account, handshakeHeaders, nil, err.Error())
@@ -1072,7 +1079,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			return restoreCodexToolNamesFromContext(c, payload)
 		},
 		rewriteClientError: func(payload []byte) []byte {
-			clientPayload, _, _ := rewriteOpenAICyberPolicyForClient(c, account, payload)
+			clientPayload, _, _ := rewriteOpenAIForbiddenErrorForClient(c, account, payload, 0)
 			return clientPayload
 		},
 	}

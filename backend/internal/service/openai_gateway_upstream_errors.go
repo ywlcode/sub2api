@@ -614,7 +614,11 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		setOpsUpstreamError(c, resp.StatusCode, message, truncateString(string(body), 2048))
 		writeOpenAIPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 		MarkResponseCommitted(c)
-		writeOpenAIUpstreamClientError(c, resp.StatusCode, body, message)
+		if clientBody, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, body, resp.StatusCode); matched {
+			writeOpenAIErrorPassthroughClientError(c, status, clientBody)
+		} else {
+			writeOpenAIUpstreamClientError(c, resp.StatusCode, body, message)
+		}
 		return nil, fmt.Errorf("upstream response failed: %s", message)
 	}
 
@@ -632,8 +636,8 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		if contentType == "" {
 			contentType = "application/json"
 		}
-		if clientBody, status, matched := rewriteOpenAICyberPolicyForClient(c, account, body); matched {
-			writeOpenAICyberPolicyClientError(c, status, clientBody)
+		if clientBody, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, body, 0); matched {
+			writeOpenAIErrorPassthroughClientError(c, status, clientBody)
 		} else {
 			c.Data(resp.StatusCode, contentType, body)
 		}
@@ -887,7 +891,10 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		message := sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(body))
 		setOpsUpstreamError(c, resp.StatusCode, message, truncateString(string(body), 2048))
 		MarkResponseCommitted(c)
-		writeError(c, resp.StatusCode, "permission_error", message)
+		status, errType, clientMessage, _ := applyErrorPassthroughRule(
+			c, account.Platform, http.StatusForbidden, body, resp.StatusCode, "permission_error", message,
+		)
+		writeError(c, status, errType, clientMessage)
 		return nil, fmt.Errorf("upstream response failed: %s", message)
 	}
 

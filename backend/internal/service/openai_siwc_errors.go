@@ -41,7 +41,7 @@ func isSIWCEligibilityRejection(account *Account, status int, body []byte) bool 
 	return status == http.StatusForbidden && strings.EqualFold(strings.TrimSpace(e.Message), "User is not eligible for subscription sharing.")
 }
 
-func writeSIWCEligibilityRejection(c *gin.Context, account *Account, resp *http.Response) error {
+func writeSIWCEligibilityRejection(c *gin.Context, account *Account, resp *http.Response, upstreamBody []byte) error {
 	MarkResponseCommitted(c)
 	setOpsUpstreamError(c, resp.StatusCode, siwcNotEligibleCode, "")
 	// Clear a previous attempt's optional detail, even when body logging is on.
@@ -52,6 +52,14 @@ func writeSIWCEligibilityRejection(c *gin.Context, account *Account, resp *http.
 		UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
 		Passthrough: true, Kind: "siwc_eligibility", Message: siwcNotEligibleCode,
 	})
+	if clientBody, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, upstreamBody, resp.StatusCode); matched {
+		writeOpenAIPassthroughErrorHeaders(c.Writer.Header(), nil)
+		// Keep the normalized eligibility envelope; upstream metadata may
+		// contain credentials and must never be reflected into the response.
+		body, _ := json.Marshal(gin.H{"error": gin.H{"type": "upstream_error", "code": siwcNotEligibleCode, "message": extractUpstreamErrorMessage(clientBody)}})
+		writeOpenAIErrorPassthroughClientError(c, status, body)
+		return errors.New("SIWC eligibility rejected: " + siwcNotEligibleCode)
+	}
 	body, _ := json.Marshal(gin.H{"error": gin.H{"type": "upstream_error", "code": siwcNotEligibleCode, "message": siwcNotEligibleMessage}})
 	if !writeOpenAICompactSSEBridge(c, http.StatusBadGateway, body) {
 		writeOpenAIPassthroughErrorHeaders(c.Writer.Header(), nil)

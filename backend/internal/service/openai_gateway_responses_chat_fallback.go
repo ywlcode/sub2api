@@ -351,14 +351,14 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		writeEvents(events)
 	}, func(payload []byte, status int) {
 		if !c.Writer.Written() {
-			writeOpenAICyberPolicyClientError(c, status, payload)
+			writeOpenAIErrorPassthroughClientError(c, status, payload)
 		} else if !clientDisconnected {
 			_, _ = fmt.Fprint(c.Writer, buildOpenAIResponseFailedSSE(state.ResponseID, originalModel, time.Now().Unix(), payload, ""))
 			c.Writer.Flush()
 		}
 	})
 
-	if errors.Is(scan.Err, errOpenAICyberPolicyForwarded) {
+	if errors.Is(scan.Err, errOpenAIErrorPassthroughForwarded) {
 		return nil, scan.Err
 	}
 	if scan.Err != nil {
