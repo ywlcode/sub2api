@@ -56,6 +56,7 @@ type UsageStats struct {
 
 // UsageService 使用统计服务
 type UsageService struct {
+	phaseCache           *UsageRequestPhaseCache
 	usageRepo            UsageLogRepository
 	userRepo             UserRepository
 	entClient            *dbent.Client

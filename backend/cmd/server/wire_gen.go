@@ -97,6 +97,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	channelMonitorV2Repository := repository.NewChannelMonitorV2Repository(db)
 	pelicanGroupTestRepository := repository.NewPelicanGroupTestRepository(db)
 	usageLogRepository := repository.NewUsageLogRepository(client, db)
+	usageRequestPhaseCache := service.ProvideUsageRequestPhaseCache(usageLogRepository, redisClient, configConfig)
 	usageBillingBatchRepository := repository.NewUsageBillingRepository(client, db)
 	usageBillingLaneCombiner := service.NewUsageBillingLaneCombiner(usageBillingBatchRepository)
 	usageBillingRepository := service.ProvideUsageBillingRepository(usageBillingLaneCombiner)
@@ -242,7 +243,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	authHandler := handler.NewAuthHandler(configConfig, authService, userService, settingService, promoService, redeemService, totpService, userAttributeService)
 	userHandler := handler.NewUserHandler(userService, authService, emailService, emailCache, affiliateService, serviceUserPlatformQuotaRepository)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
-	usageService := service.NewUsageService(usageLogRepository, userRepository, client, apiKeyAuthCacheInvalidator)
+	usageService := service.ProvideUsageService(usageLogRepository, userRepository, client, apiKeyAuthCacheInvalidator, usageRequestPhaseCache)
 	opsRepository := repository.NewOpsRepository(db)
 	geminiMessagesCompatService := service.NewGeminiMessagesCompatService(accountRepository, groupRepository, gatewayCache, schedulerSnapshotService, geminiTokenProvider, rateLimitService, httpUpstream, antigravityGatewayService, configConfig)
 	opsSystemLogSink := service.ProvideOpsSystemLogSink(opsRepository)
@@ -444,6 +445,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		return nil, err
 	}
 	autoCreditEmailWorker := service.ProvideAutoCreditEmailWorker(autoCreditEmailOutboxRepository, notificationEmailService, configConfig)
+	connectionTraceBackfillService := service.ProvideConnectionTraceBackfillService(usageLogRepository, configConfig)
 	opsMetricsCollector := service.ProvideOpsMetricsCollector(opsRepository, settingRepository, accountRepository, concurrencyService, db, redisClient, configConfig)
 	opsAggregationService := service.ProvideOpsAggregationService(opsRepository, settingRepository, db, redisClient, configConfig)
 	opsAlertEvaluatorService := service.ProvideOpsAlertEvaluatorService(opsService, opsRepository, emailService, redisClient, configConfig, proxyRepository)
@@ -508,6 +510,8 @@ func provideCleanup(
 	providerChannels *admin.ChannelHandler,
 	qqBot *qqbot.Service,
 	autoCreditEmail *service.AutoCreditEmailWorker,
+	phaseCache *service.UsageRequestPhaseCache,
+	traceBackfill *service.ConnectionTraceBackfillService,
 	cfg *config.Config,
 	requestCaptures *requestcapture.Manager,
 	entClient *ent.Client,
@@ -846,6 +850,18 @@ func provideCleanup(
 			{"OpenAICodexTicketHarvester", func() error {
 				if openAIGateway != nil {
 					openAIGateway.StopOpenAICodexTicketHarvester()
+				}
+				return nil
+			}},
+			{"UsageRequestPhaseCache", func() error {
+				if phaseCache != nil {
+					phaseCache.Stop()
+				}
+				return nil
+			}},
+			{"ConnectionTraceBackfillService", func() error {
+				if traceBackfill != nil {
+					traceBackfill.Stop()
 				}
 				return nil
 			}},

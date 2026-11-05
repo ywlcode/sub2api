@@ -70,9 +70,9 @@ func (r *usageLogRepository) writeConnectionTrace(ctx context.Context, v service
 		return fmt.Errorf("connection trace exceeds bound")
 	}
 	_, err = r.db.ExecContext(ctx, `INSERT INTO request_connection_traces
-  (trace_id,started_at,request_id,client_request_id,user_id,api_key_id,account_id,group_id,model,path,client_ip,user_agent,stream,detail,source,host,scheme,method,http_version,tls_version,upstream_status,network_error)
-  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18,$19,$20,$21,$22)
-  ON CONFLICT (trace_id) DO NOTHING`, v.TraceID, v.StartedAt, v.RequestID, v.ClientRequestID, v.UserID, v.APIKeyID, v.AccountID, v.GroupID, v.Model, v.Path, v.ClientIP, v.UserAgent, v.Stream, string(raw), v.Source, v.Host, v.Scheme, v.Method, v.HTTPVersion, v.TLSVersion, v.UpstreamStatus, v.NetworkError)
+  (trace_id,started_at,request_id,client_request_id,user_id,api_key_id,account_id,group_id,model,path,client_ip,user_agent,stream,detail,source,host,scheme,method,http_version,tls_version,upstream_status,network_error,body_bytes)
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+  ON CONFLICT (trace_id) DO NOTHING`, v.TraceID, v.StartedAt, v.RequestID, v.ClientRequestID, v.UserID, v.APIKeyID, v.AccountID, v.GroupID, v.Model, v.Path, v.ClientIP, v.UserAgent, v.Stream, string(raw), v.Source, v.Host, v.Scheme, v.Method, v.HTTPVersion, v.TLSVersion, v.UpstreamStatus, v.NetworkError, v.Detail.BodyBytes)
 	return err
 }
 

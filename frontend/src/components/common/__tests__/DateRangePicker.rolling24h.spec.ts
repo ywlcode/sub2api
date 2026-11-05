@@ -22,7 +22,7 @@ describe('DateRangePicker rolling 24 hours', () => {
     // A rolling day remains 24 hours across both DST transitions.
     '2026-03-08T03:30:00.123-04:00',
     '2026-11-01T01:30:00.123-05:00'
-  ])('emits precise instants for [now - 24h, now) at %s', async (instant) => {
+  ])('aligns the rolling 24-hour preset to 30 seconds at %s', async (instant) => {
     const now = new Date(instant)
     vi.setSystemTime(now)
     const wrapper = mountPicker()
@@ -30,8 +30,8 @@ describe('DateRangePicker rolling 24 hours', () => {
     await wrapper.findAll('.date-picker-preset').find(b => b.text() === 'dates.last24Hours')!.trigger('click')
     await wrapper.get('.date-picker-apply').trigger('click')
 
-    const startDate = new Date(now.getTime() - 86_400_000).toISOString()
-    const endDate = now.toISOString()
+    const startDate = new Date(Math.floor(now.getTime() / 30_000) * 30_000 - 86_400_000).toISOString()
+    const endDate = new Date(Math.floor(now.getTime() / 30_000) * 30_000).toISOString()
     expect(wrapper.emitted('change')?.[0]).toEqual([{ startDate, endDate, preset: 'last24Hours' }])
     expect(wrapper.emitted('update:startDate')?.[0]).toEqual([startDate])
     expect(wrapper.emitted('update:endDate')?.[0]).toEqual([endDate])
@@ -47,8 +47,8 @@ describe('DateRangePicker rolling 24 hours', () => {
     vi.setSystemTime(appliedAt)
     await wrapper.get('.date-picker-apply').trigger('click')
     expect(wrapper.emitted('change')?.[0]?.[0]).toEqual({
-      startDate: new Date(appliedAt.getTime() - 86_400_000).toISOString(),
-      endDate: appliedAt.toISOString(),
+      startDate: new Date(Math.floor(appliedAt.getTime() / 30_000) * 30_000 - 86_400_000).toISOString(),
+      endDate: new Date(Math.floor(appliedAt.getTime() / 30_000) * 30_000).toISOString(),
       preset: 'last24Hours'
     })
   })
