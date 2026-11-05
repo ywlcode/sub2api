@@ -221,6 +221,8 @@ export default {
         typesafe: 'TypeSafe / Jev',
       },
       cnProviders: {
+        volcengineCompatibility: 'Volcengine Ark compatibility',
+        volcengineCompatibilityHint: 'Enable for Volcengine Ark or its relays. Adapts request fields and reasoning settings, preserves the requested effort, and keeps historical reasoning separate from answer text.',
         accountMode: {
           title: 'Account Type',
           payg: 'Pay-as-you-go',

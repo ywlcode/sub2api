@@ -231,6 +231,17 @@
           :platform="account.platform"
           :plan="currentOpenCodeOrCNMode()"
         />
+        <div v-if="isCNApiKeyAccount && account.platform === 'deepseek'" class="flex items-center justify-between gap-4">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.cnProviders.volcengineCompatibility') }}</label>
+            <p class="input-hint">{{ t('admin.accounts.cnProviders.volcengineCompatibilityHint') }}</p>
+          </div>
+          <Toggle
+            v-model="deepseekVolcengineCompatibility"
+            data-testid="deepseek-volcengine-compatibility"
+            :aria-label="t('admin.accounts.cnProviders.volcengineCompatibility')"
+          />
+        </div>
         <!-- Zhipu 团队版 Coding Plan：组织/项目 ID（可选，填写后用量查询走团队版端点） -->
         <div v-if="account.platform === 'zhipu' && editAccountMode === 'coding'">
           <div class="flex items-center">
@@ -4069,6 +4080,7 @@ const adaptivePresetPlatform = computed<string>(() => {
   return cnPresetPlatform.value
 })
 const editApiProtocol = ref<CnApiProtocol>('adaptive')
+const deepseekVolcengineCompatibility = ref(false)
 const editOpenCodeGoProtocolRules = ref<OpenCodeGoProtocolRule[]>(cloneOpenCodeGoProtocolRules())
 // 多协议供应商（国产厂商与走通用表单的供应商）的接入模式；OpenCode 用 editOpenCodeAccountMode。
 const editAccountMode = ref<string>('payg')
@@ -5388,6 +5400,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   }
 
   // Initialize API Key fields for apikey type
+  deepseekVolcengineCompatibility.value = newAccount.platform === 'deepseek' &&
+    newAccount.type === 'apikey' && newAccount.credentials?.deepseek_volcengine_compatibility === true
   if (newAccount.type === 'apikey' && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
     // 国产供应商：读取 account_mode 与 api_protocol 作为可编辑初始值
@@ -6264,6 +6278,9 @@ const handleSubmit = async () => {
       const newCredentials: Record<string, unknown> = {
         ...currentCredentials,
         base_url: newBaseUrl
+      }
+      if (props.account.platform === 'deepseek') {
+        newCredentials.deepseek_volcengine_compatibility = deepseekVolcengineCompatibility.value
       }
 
       // 国产供应商：模式与协议写入凭据（决定额度/余额探测与转发端点/格式）。

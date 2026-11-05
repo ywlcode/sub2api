@@ -108,6 +108,18 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		return nil, admissionErr
 	}
 	account = latest
+	// Some clients send a Responses-shaped body to /v1/chat/completions.
+	// Preserve its native reasoning fields during compatibility adaptation too.
+	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
+	inbound := APIProtocolChatCompletions
+	if isResponsesShape {
+		inbound = APIProtocolResponses
+	}
+	if normalized, err := normalizeVolcengineRequestBody(account, body, inbound); err != nil {
+		return nil, err
+	} else {
+		body = normalized
+	}
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
@@ -146,14 +158,6 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
-	// Cursor compatibility: some clients send a Responses-shaped body to the
-	// /v1/chat/completions URL. Detect it before protocol routing so adaptive
-	// accounts never forward the body unchanged to a Chat Completions endpoint.
-	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
-	inbound := APIProtocolChatCompletions
-	if isResponsesShape {
-		inbound = APIProtocolResponses
-	}
 	// 按模型分流与 adaptive 账号按请求体形状处理 Responses 形状入站；其余账号
 	// 维持原样把请求体交给所选路径。
 	convertResponsesShape := isResponsesShape && (account.routesByModel() || account.IsAdaptiveAPIProtocol())
@@ -271,7 +275,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		// Normal path: convert Chat Completions → Responses.
 		// ChatCompletionsToResponses always sets Stream=true (upstream always streams).
 		chatReq.Model = upstreamModel
-		responsesReq, err = chatCompletionsToResponses(s.cfg, &chatReq)
+		responsesReq, err = chatCompletionsToResponsesForAccount(s.cfg, account, &chatReq)
 		if err != nil {
 			return nil, fmt.Errorf("convert chat completions to responses: %w", err)
 		}
