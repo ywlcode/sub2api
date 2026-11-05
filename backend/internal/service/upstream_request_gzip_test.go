@@ -181,7 +181,12 @@ func TestRequestGzipKeepsStreamingResponses(t *testing.T) {
 		_ = gz.Close()
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, "data: first\n\n")
-		w.(http.Flusher).Flush()
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("streaming response must support flushing")
+			return
+		}
+		flusher.Flush()
 		<-r.Context().Done()
 	}))
 	defer server.Close()
@@ -209,7 +214,7 @@ func TestRequestGzipPreservesLateEgressTimezoneRewrite(t *testing.T) {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		defer gz.Close()
+		defer func() { _ = gz.Close() }()
 		decoded, err := io.ReadAll(gz)
 		want := r.URL.Query().Get("timezone")
 		if err != nil || !bytes.Contains(decoded, []byte("<timezone>"+want+"</timezone>")) || r.Header.Get("X-Timezone") != want {
@@ -261,7 +266,7 @@ func TestRequestGzipPreservesLateEgressTimezoneRewrite(t *testing.T) {
 	require.Equal(t, "Asia/Shanghai", original.Header.Get("X-Timezone"))
 	replay, err := original.GetBody()
 	require.NoError(t, err)
-	defer replay.Close()
+	defer func() { _ = replay.Close() }()
 	unchanged, err := io.ReadAll(replay)
 	require.NoError(t, err)
 	require.Equal(t, body, unchanged)
