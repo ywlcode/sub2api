@@ -19,10 +19,15 @@ func AnthropicToResponses(req *AnthropicRequest) (*ResponsesRequest, error) {
 // AnthropicToResponsesWithMinOutputTokens converts an Anthropic request using
 // the supplied max_output_tokens floor.
 func AnthropicToResponsesWithMinOutputTokens(req *AnthropicRequest, minOutputTokens int) (*ResponsesRequest, error) {
+	return AnthropicToResponsesWithOptions(req, ResponsesConversionOptions{MinOutputTokens: minOutputTokens})
+}
+
+func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts ResponsesConversionOptions) (*ResponsesRequest, error) {
+	minOutputTokens := opts.MinOutputTokens
 	if err := openai.ValidateGPT61SolReasoningEffort(req.Model, anthropicReasoningEffort(req)); err != nil {
 		return nil, err
 	}
-	input, err := convertAnthropicToResponsesInput(req.System, req.Messages)
+	input, err := convertAnthropicToResponsesInputWithReasoning(req.System, req.Messages, opts.PreserveReasoningContent)
 	if err != nil {
 		return nil, err
 	}
@@ -68,6 +73,9 @@ func AnthropicToResponsesWithMinOutputTokens(req *AnthropicRequest, minOutputTok
 
 	// An explicit thinking disable takes precedence over output_config.effort.
 	effort := anthropicReasoningEffort(req)
+	if opts.PreserveReasoningEffort && req.OutputConfig != nil && req.OutputConfig.Effort != "" && effort != "none" {
+		effort = req.OutputConfig.Effort
+	}
 	if (openai.IsGPT61SolModelSpelling(req.Model) || openai.IsGPT61TerraModelSpelling(req.Model)) && req.OutputConfig != nil && req.OutputConfig.Effort == "max" && effort != "none" {
 		effort = "max"
 	}
@@ -126,6 +134,10 @@ func convertAnthropicToolChoiceToResponses(raw json.RawMessage) (json.RawMessage
 // convertAnthropicToResponsesInput builds the Responses API input items array
 // from the Anthropic system field and message list.
 func convertAnthropicToResponsesInput(system json.RawMessage, msgs []AnthropicMessage) ([]ResponsesInputItem, error) {
+	return convertAnthropicToResponsesInputWithReasoning(system, msgs, false)
+}
+
+func convertAnthropicToResponsesInputWithReasoning(system json.RawMessage, msgs []AnthropicMessage, preserveReasoning bool) ([]ResponsesInputItem, error) {
 	var out []ResponsesInputItem
 
 	// System prompt → developer role input item. ChatGPT Codex SSE behaves like
@@ -147,7 +159,13 @@ func convertAnthropicToResponsesInput(system json.RawMessage, msgs []AnthropicMe
 	}
 
 	for _, m := range msgs {
-		items, err := anthropicMsgToResponsesItems(m)
+		var items []ResponsesInputItem
+		var err error
+		if preserveReasoning && m.Role == "assistant" {
+			items, err = anthropicAssistantToResponsesWithReasoning(m.Content, true)
+		} else {
+			items, err = anthropicMsgToResponsesItems(m)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -271,6 +289,10 @@ func anthropicUserToResponses(raw json.RawMessage) ([]ResponsesInputItem, error)
 // multi-turn Grok/Codex prompt cache can reuse prior reasoning prefixes.
 // thinking without signature remains ignored (not accepted as plain text input).
 func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, error) {
+	return anthropicAssistantToResponsesWithReasoning(raw, false)
+}
+
+func anthropicAssistantToResponsesWithReasoning(raw json.RawMessage, preserveReasoning bool) ([]ResponsesInputItem, error) {
 	// Try plain string.
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
@@ -297,14 +319,22 @@ func anthropicAssistantToResponses(raw json.RawMessage) ([]ResponsesInputItem, e
 			continue
 		}
 		sig := strings.TrimSpace(b.Signature)
+		var summary []ResponsesSummary
+		if preserveReasoning && b.Thinking != "" {
+			summary = []ResponsesSummary{{Type: "summary_text", Text: b.Thinking}}
+		}
 		// Only replay provider ciphertext. Skip GPT/Codex-style gAAAA blobs and
 		// empty placeholders — xAI returns 400 on decrypt for foreign signatures.
 		if sig == "" || strings.HasPrefix(sig, "gAAAA") {
+			if len(summary) > 0 {
+				items = append(items, ResponsesInputItem{Type: "reasoning", Summary: summary})
+			}
 			continue
 		}
 		items = append(items, ResponsesInputItem{
 			Type:             "reasoning",
 			EncryptedContent: sig,
+			Summary:          summary,
 		})
 	}
 

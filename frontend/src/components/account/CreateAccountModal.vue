@@ -1582,6 +1582,17 @@
           :platform="form.platform"
           :plan="currentOpenCodeOrCNMode()"
         />
+        <div v-if="form.platform === 'deepseek'" class="flex items-center justify-between gap-4">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.cnProviders.volcengineCompatibility') }}</label>
+            <p class="input-hint">{{ t('admin.accounts.cnProviders.volcengineCompatibilityHint') }}</p>
+          </div>
+          <Toggle
+            v-model="deepseekVolcengineCompatibility"
+            data-testid="deepseek-volcengine-compatibility"
+            :aria-label="t('admin.accounts.cnProviders.volcengineCompatibility')"
+          />
+        </div>
         <div>
           <label class="input-label">{{ t('admin.accounts.apiKeyRequired') }}</label>
           <input
@@ -4571,6 +4582,7 @@ const openCodeAccountMode = ref<OpenCodeAccountMode>('zen')
 // API 协议决定转发端点与格式：cc=现有转换链，anthropic=原生直通（Claude Code），
 // responses=deepseek / kimi 原生 Responses 端点（Codex）。与账号类型正交。
 const apiProtocol = ref<CnApiProtocol>('adaptive')
+const deepseekVolcengineCompatibility = ref(false)
 const openCodeGoProtocolRules = ref<OpenCodeGoProtocolRule[]>(
   cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules('zen'))
 )
@@ -5895,6 +5907,7 @@ const resetForm = () => {
   accountMode.value = 'payg'
   openCodeAccountMode.value = 'zen'
   apiProtocol.value = 'adaptive'
+  deepseekVolcengineCompatibility.value = false
   openCodeGoProtocolRules.value = cloneOpenCodeGoProtocolRules(defaultOpenCodeProtocolRules('zen'))
   adaptiveBaseUrls.value = { chat_completions: '', anthropic: '', responses: '' }
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
@@ -6451,6 +6464,9 @@ const handleSubmit = async () => {
   const credentials: Record<string, unknown> = {
     base_url: apiKeyBaseUrl.value.trim() || defaultBaseUrl,
     api_key: apiKeyValue.value.trim()
+  }
+  if (form.platform === 'deepseek') {
+    credentials.deepseek_volcengine_compatibility = deepseekVolcengineCompatibility.value
   }
   if (form.platform === 'gemini' && isOfficialGeminiBaseUrl(apiKeyBaseUrl.value)) {
     credentials.tier_id = geminiTierAIStudio.value

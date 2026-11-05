@@ -24,6 +24,21 @@ func ChatCompletionsToResponses(req *ChatCompletionsRequest) (*ResponsesRequest,
 // ChatCompletionsToResponsesWithMinOutputTokens converts a Chat Completions
 // request using the supplied max_output_tokens floor.
 func ChatCompletionsToResponsesWithMinOutputTokens(req *ChatCompletionsRequest, minOutputTokens int) (*ResponsesRequest, error) {
+	return ChatCompletionsToResponsesWithOptions(req, ResponsesConversionOptions{MinOutputTokens: minOutputTokens})
+}
+
+// ResponsesConversionOptions selects provider-supported replay semantics.
+// Plain reasoning replay is opt-in; other providers retain their existing shape.
+type ResponsesConversionOptions struct {
+	MinOutputTokens          int
+	PreserveReasoningContent bool
+	// Preserve provider effort tiers instead of mapping between OpenAI/Claude
+	// conventions (for example max and xhigh mean different things on Ark).
+	PreserveReasoningEffort bool
+}
+
+func ChatCompletionsToResponsesWithOptions(req *ChatCompletionsRequest, opts ResponsesConversionOptions) (*ResponsesRequest, error) {
+	minOutputTokens := opts.MinOutputTokens
 	// Use one effective effort without changing the caller's field provenance.
 	// Legacy Responses ingress still distinguishes native reasoning from the
 	// flat Chat alias when deciding which top-level fields to replace.
@@ -31,7 +46,7 @@ func ChatCompletionsToResponsesWithMinOutputTokens(req *ChatCompletionsRequest, 
 	if err := openai.ValidateGPT61SolReasoningEffort(req.Model, effort); err != nil {
 		return nil, err
 	}
-	input, err := convertChatMessagesToResponsesInput(req.Messages)
+	input, err := convertChatMessagesToResponsesInputWithReasoning(req.Messages, opts.PreserveReasoningContent)
 	if err != nil {
 		return nil, err
 	}
@@ -117,6 +132,10 @@ func ChatCompletionsToResponsesWithMinOutputTokens(req *ChatCompletionsRequest, 
 // convertChatMessagesToResponsesInput converts the Chat Completions messages
 // array into a Responses API input items array.
 func convertChatMessagesToResponsesInput(msgs []ChatMessage) ([]ResponsesInputItem, error) {
+	return convertChatMessagesToResponsesInputWithReasoning(msgs, false)
+}
+
+func convertChatMessagesToResponsesInputWithReasoning(msgs []ChatMessage, preserveReasoning bool) ([]ResponsesInputItem, error) {
 	var out []ResponsesInputItem
 	legacyIDs := legacyFunctionCallIDs{msgs: msgs}
 	for _, m := range msgs {
@@ -130,13 +149,63 @@ func convertChatMessagesToResponsesInput(msgs []ChatMessage) ([]ResponsesInputIt
 		case m.Role == "function" && m.ToolCallID == "":
 			m.ToolCallID = legacyIDs.claim(m.Name)
 		}
-		items, err := chatMessageToResponsesItems(m)
+		var items []ResponsesInputItem
+		var err error
+		if preserveReasoning && m.Role == "assistant" {
+			items, err = chatAssistantToResponsesWithReasoning(m)
+		} else {
+			items, err = chatMessageToResponsesItems(m)
+		}
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, items...)
 	}
 	return out, nil
+}
+
+// Keep thinking separate from ordinary output_text, including tool-only turns.
+// Never interpret literal <thinking> strings in user/assistant text as markup.
+func chatAssistantToResponsesWithReasoning(m ChatMessage) ([]ResponsesInputItem, error) {
+	var summary []ResponsesSummary
+	appendReasoning := func(text string) {
+		if text != "" {
+			summary = append(summary, ResponsesSummary{Type: "summary_text", Text: text})
+		}
+	}
+	if m.ReasoningContent != "" {
+		appendReasoning(m.ReasoningContent)
+	} else {
+		appendReasoning(m.Reasoning)
+	}
+	m.ReasoningContent = ""
+	m.Reasoning = ""
+	var parts []json.RawMessage
+	if json.Unmarshal(m.Content, &parts) == nil {
+		ordinary := make([]json.RawMessage, 0, len(parts))
+		for _, part := range parts {
+			var block struct {
+				Type     string `json:"type"`
+				Thinking string `json:"thinking"`
+				Text     string `json:"text"`
+			}
+			if json.Unmarshal(part, &block) == nil && (block.Type == "thinking" || block.Type == "reasoning") {
+				if block.Thinking != "" {
+					appendReasoning(block.Thinking)
+				} else {
+					appendReasoning(block.Text)
+				}
+			} else {
+				ordinary = append(ordinary, part)
+			}
+		}
+		m.Content, _ = json.Marshal(ordinary)
+	}
+	items, err := chatAssistantToResponses(m)
+	if err != nil || len(summary) == 0 {
+		return items, err
+	}
+	return append([]ResponsesInputItem{{Type: "reasoning", Summary: summary}}, items...), nil
 }
 
 // legacyFunctionCallIDs pairs legacy function calls with their results. Legacy

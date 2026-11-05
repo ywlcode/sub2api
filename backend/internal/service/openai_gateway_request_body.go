@@ -73,6 +73,9 @@ func shouldPreserveOpenAIResponsesNoneReasoningEffort(account *Account) bool {
 	if account == nil {
 		return false
 	}
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() {
+		return true
+	}
 	if account.Platform == PlatformMistral {
 		return true
 	}
@@ -151,7 +154,8 @@ func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte
 	}
 	applyStateless := account.UsesNativeCNResponses()
 	applyImages := shouldAliasDeepSeekResponsesInputImages(account)
-	if !applyStateless && !applyImages {
+	applyReasoning := account.IsDeepSeekVolcengineCompatibilityEnabled() || usesNativeDeepSeekReasoningProtocol(account, APIProtocolResponses)
+	if !applyStateless && !applyImages && !applyReasoning {
 		return body
 	}
 
@@ -177,6 +181,9 @@ func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte
 	}
 
 	changed := false
+	if applyReasoning {
+		changed = normalizeDeepSeekReasoningInput(input, account.IsDeepSeekVolcengineCompatibilityEnabled())
+	}
 	if liftedInput, lifted := apicompat.LiftResponsesToolOutputMedia(input); lifted {
 		requestBody["input"] = liftedInput
 		input = liftedInput

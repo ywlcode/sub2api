@@ -49,7 +49,7 @@ func accountRequestGzipHTTP(upstream HTTPUpstream, account *Account) HTTPUpstrea
 
 // Admin account probes should exercise the same opt-in as gateway traffic.
 func (s *AccountTestService) accountHTTPUpstream(account *Account) HTTPUpstream {
-	return timedAccountTestUpstream(accountRequestGzipHTTP(s.httpUpstream, account))
+	return timedAccountTestUpstream(accountVolcengineHTTP(accountRequestGzipHTTP(s.httpUpstream, account), account))
 }
 
 type requestGzipUpstream struct{ HTTPUpstream }

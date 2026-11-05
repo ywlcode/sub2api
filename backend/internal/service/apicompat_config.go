@@ -16,8 +16,31 @@ func chatCompletionsToResponses(cfg *config.Config, req *apicompat.ChatCompletio
 	return apicompat.ChatCompletionsToResponsesWithMinOutputTokens(req, configuredMinOutputTokens(cfg))
 }
 
+func chatCompletionsToResponsesForAccount(cfg *config.Config, account *Account, req *apicompat.ChatCompletionsRequest) (*apicompat.ResponsesRequest, error) {
+	return apicompat.ChatCompletionsToResponsesWithOptions(req, apicompat.ResponsesConversionOptions{
+		MinOutputTokens:          configuredMinOutputTokens(cfg),
+		PreserveReasoningContent: shouldPreserveDeepSeekReasoning(account),
+		PreserveReasoningEffort:  account.IsDeepSeekVolcengineCompatibilityEnabled(),
+	})
+}
+
 func anthropicToResponses(cfg *config.Config, req *apicompat.AnthropicRequest) (*apicompat.ResponsesRequest, error) {
 	return apicompat.AnthropicToResponsesWithMinOutputTokens(req, configuredMinOutputTokens(cfg))
+}
+
+func anthropicToResponsesForAccount(cfg *config.Config, account *Account, req *apicompat.AnthropicRequest) (*apicompat.ResponsesRequest, error) {
+	return apicompat.AnthropicToResponsesWithOptions(req, apicompat.ResponsesConversionOptions{
+		MinOutputTokens:          configuredMinOutputTokens(cfg),
+		PreserveReasoningContent: shouldPreserveDeepSeekReasoning(account),
+		PreserveReasoningEffort:  account.IsDeepSeekVolcengineCompatibilityEnabled(),
+	})
+}
+
+func responsesToAnthropicForAccount(account *Account, req *apicompat.ResponsesRequest) (*apicompat.AnthropicRequest, error) {
+	return apicompat.ResponsesToAnthropicRequestWithOptions(req, apicompat.ResponsesConversionOptions{
+		PreserveReasoningContent: shouldPreserveDeepSeekReasoning(account),
+		PreserveReasoningEffort:  account.IsDeepSeekVolcengineCompatibilityEnabled(),
+	})
 }
 
 func settingServiceConfig(settingService *SettingService) *config.Config {

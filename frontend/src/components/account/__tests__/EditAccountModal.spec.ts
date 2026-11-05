@@ -340,6 +340,34 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 }
 
 describe('EditAccountModal', () => {
+  it('loads, saves and disables Volcengine compatibility per DeepSeek account', async () => {
+    const account = buildAccount()
+    account.platform = 'deepseek'
+    account.credentials = { api_key: 'fixture-key', base_url: 'https://relay.example.com/v1', api_protocol: 'responses',
+      deepseek_volcengine_compatibility: true, unrelated: 'preserve' }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="deepseek-volcengine-compatibility"]').attributes('aria-checked')).toBe('true')
+    await wrapper.get('[data-testid="deepseek-volcengine-compatibility"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      deepseek_volcengine_compatibility: false, unrelated: 'preserve'
+    })
+    await wrapper.setProps({ account: { ...account, id: 2, credentials: { api_key: 'fixture-key', base_url: 'https://relay.example.com/v1' } } })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="deepseek-volcengine-compatibility"]').attributes('aria-checked')).toBe('false')
+    await wrapper.get('[data-testid="deepseek-volcengine-compatibility"]').trigger('click')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[1]?.[1]?.credentials.deepseek_volcengine_compatibility).toBe(true)
+    await wrapper.setProps({ account: buildAccount() })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="deepseek-volcengine-compatibility"]').exists()).toBe(false)
+  })
+
   it.each(['openai', 'deepseek'])('saves and explicitly disables request gzip on %s without losing other settings', async (platform) => {
     const account = buildAccount()
     account.platform = platform

@@ -900,6 +900,25 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(probeUpstreamBillingMock).not.toHaveBeenCalled()
   })
 
+  it.each([false, true])('creates a DeepSeek account with Volcengine compatibility %s', async (enabled) => {
+    const wrapper = mountModal()
+    expect(wrapper.find('[data-testid="deepseek-volcengine-compatibility"]').exists()).toBe(false)
+    await selectButtonByText(wrapper, 'DeepSeek')
+    const toggle = wrapper.get('[data-testid="deepseek-volcengine-compatibility"]')
+    expect(toggle.attributes('aria-checked')).toBe('false')
+    if (enabled) await toggle.trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('ark deepseek')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('fixture-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]).toMatchObject({
+      platform: 'deepseek',
+      type: 'apikey',
+      credentials: { deepseek_volcengine_compatibility: enabled }
+    })
+  })
+
   it('submits OpenCode Zen default protocol rules with adaptive endpoints', async () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenCode')

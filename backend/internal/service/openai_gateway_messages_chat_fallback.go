@@ -76,6 +76,9 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	}
 	chatReq.Model = upstreamModel
 	chatReq.ReasoningEffort = openAICompatAnthropicReasoningEffort(&anthropicReq, upstreamModel, chatReq.ReasoningEffort)
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() && chatReq.ReasoningEffort != "none" && anthropicReq.OutputConfig != nil && anthropicReq.OutputConfig.Effort != "" {
+		chatReq.ReasoningEffort = anthropicReq.OutputConfig.Effort
+	}
 	chatReq.Stream = clientStream
 	if clientStream {
 		chatReq.StreamOptions = &apicompat.ChatStreamOptions{IncludeUsage: true}
