@@ -349,6 +349,7 @@
 </template>
 
 <script setup lang="ts">
+import { getRollingRangeDates, getTodayRangeDates } from '@/utils/dateRange'
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -419,21 +420,12 @@ let usersTrendLoadSeq = 0
 let rankingLoadSeq = 0
 const rankingLimit = 12
 
-const getLast24HoursRangeDates = (): { start: string; end: string } => {
-  const end = new Date()
-  const start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
-  return {
-    start: start.toISOString(),
-    end: end.toISOString()
-  }
-}
-
 // Date range
 const granularity = ref<'day' | 'hour'>('hour')
-const defaultRange = getLast24HoursRangeDates()
+const defaultRange = getTodayRangeDates()
 const startDate = ref(defaultRange.start)
 const endDate = ref(defaultRange.end)
-const appliedPreset = ref<string | null>('last24Hours')
+const appliedPreset = ref<string | null>('today')
 
 // Granularity options for Select component
 const granularityOptions = computed(() => [
@@ -751,8 +743,8 @@ const loadUserSpendingRanking = async () => {
 }
 
 const loadDashboardStats = async () => {
-  if (appliedPreset.value === 'last24Hours') {
-    const range = getLast24HoursRangeDates()
+  if (appliedPreset.value === 'last24Hours' || appliedPreset.value === 'today') {
+    const range = appliedPreset.value === 'today' ? getTodayRangeDates() : getRollingRangeDates()
     startDate.value = range.start
     endDate.value = range.end
   }

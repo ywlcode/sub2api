@@ -35,3 +35,21 @@ func (r *usageLogRepository) ReadUsageRequestPhaseAverages(ctx context.Context, 
 	err := scanSingleRow(ctx, r.sql, query, args, &stats.AverageUserUploadMs, &stats.AverageProcessingMs, &stats.TimingSampleCount)
 	return stats, err
 }
+
+// Enumerate users in bounded pages, including users whose cache is still cold.
+func (r *usageLogRepository) ListRequestPhaseUserIDs(ctx context.Context, afterID int64, limit int) ([]int64, error) {
+	rows, err := r.sql.QueryContext(ctx, `SELECT id FROM users WHERE id > $1 AND deleted_at IS NULL ORDER BY id LIMIT $2`, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := make([]int64, 0, limit)
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}

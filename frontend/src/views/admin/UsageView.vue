@@ -211,6 +211,7 @@
 </template>
 
 <script setup lang="ts">
+import { getRollingRangeDates, getTodayRangeDates } from '@/utils/dateRange'
 import { ref, reactive, computed, onMounted, onUnmounted, watch, provide } from 'vue'
 import { observerUsageAPI } from '@/api/observerUsage'
 import { observerUsageContext } from '@/components/admin/usage/observerUsageContext'
@@ -320,26 +321,18 @@ const formatLD = (d: Date) => {
   return `${year}-${month}-${day}`
 }
 const calendarDate = (value: string) => value.includes('T') ? formatLD(new Date(value)) : value
-const getLast24HoursRangeDates = (): { start: string; end: string } => {
-  const end = new Date()
-  const start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
-  return {
-    start: props.observerMode ? formatLD(start) : start.toISOString(),
-    end: props.observerMode ? formatLD(end) : end.toISOString()
-  }
-}
 const getGranularityForRange = (start: string, end: string): 'day' | 'hour' => {
   const startTime = new Date(start.includes('T') ? start : `${start}T00:00:00`).getTime()
   const endTime = new Date(end.includes('T') ? end : `${end}T00:00:00`).getTime()
   const daysDiff = Math.ceil((endTime - startTime) / (1000 * 60 * 60 * 24))
   return daysDiff <= 1 ? 'hour' : 'day'
 }
-const defaultRange = getLast24HoursRangeDates()
+const defaultRange = getTodayRangeDates()
 const startDate = ref(defaultRange.start); const endDate = ref(defaultRange.end)
 const cleanupUsesCalendarDates = computed(() =>
   /^\d{4}-\d{2}-\d{2}$/.test(startDate.value) && /^\d{4}-\d{2}-\d{2}$/.test(endDate.value)
 )
-const datePreset = ref<string | null>('last24Hours')
+const datePreset = ref<string | null>('today')
 const filters = ref<AdminUsageQueryParams>({ user_id: undefined, model: undefined, group_id: undefined, request_type: undefined, native_compaction_v2: null, billing_type: null, start_date: startDate.value, end_date: endDate.value })
 const pagination = reactive({ page: 1, page_size: getPersistedPageSize(), total: 0 })
 const sortState = reactive({
@@ -421,11 +414,18 @@ const onDateRangeChange = (range: { startDate: string; endDate: string; preset: 
   applyFilters()
 }
 
-// Refresh a rolling range once per action so every read shares exactly [now-24h, now).
+// Refresh relative presets once per action so every read shares the same range.
 // Pagination, sorting and export keep the applied snapshot stable.
 const refreshRollingRange = () => {
-  if (props.observerMode || datePreset.value !== 'last24Hours') return
-  const range = getLast24HoursRangeDates()
+  if ((filters.value.start_date && filters.value.start_date !== startDate.value) ||
+      (filters.value.end_date && filters.value.end_date !== endDate.value)) {
+    datePreset.value = null
+    startDate.value = filters.value.start_date || startDate.value
+    endDate.value = filters.value.end_date || endDate.value
+    return
+  }
+  if (datePreset.value !== 'today' && (props.observerMode || datePreset.value !== 'last24Hours')) return
+  const range = datePreset.value === 'today' ? getTodayRangeDates() : getRollingRangeDates()
   startDate.value = range.start
   endDate.value = range.end
   filters.value = { ...filters.value, start_date: range.start, end_date: range.end }
@@ -605,8 +605,8 @@ const refreshData = () => {
   if (rankingMounted.value) rankingRef.value?.reload()
 }
 const resetFilters = () => {
-  datePreset.value = 'last24Hours'
-  const range = getLast24HoursRangeDates()
+  datePreset.value = 'today'
+  const range = getTodayRangeDates()
   startDate.value = range.start
   endDate.value = range.end
   filters.value = { start_date: startDate.value, end_date: endDate.value, request_type: undefined, native_compaction_v2: null, billing_type: null, billing_mode: undefined }

@@ -746,7 +746,7 @@ func parseOpsTimeRange(c *gin.Context, defaultRange string) (time.Time, time.Tim
 		dur, _ = parseOpsDuration(defaultRange)
 	}
 
-	end = time.Now()
+	end = time.Now().UTC().Truncate(30 * time.Second)
 	start = end.Add(-dur)
 	if end.Sub(start) > 30*24*time.Hour {
 		return time.Time{}, time.Time{}, fmt.Errorf("invalid time range: max window is 30 days")

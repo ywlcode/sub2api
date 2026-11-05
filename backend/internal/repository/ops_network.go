@@ -43,9 +43,9 @@ func readNetworkSeries(ctx context.Context, db sqlExecutor, start, end time.Time
 	if err != nil {
 		return nil, err
 	}
-	rows, err = db.QueryContext(ctx, `SELECT date_trunc('minute',started_at),SUM((detail->>'body_bytes')::bigint),COUNT(*)
+	rows, err = db.QueryContext(ctx, `SELECT date_trunc('minute',started_at),SUM(body_bytes),COUNT(*)
  FROM request_connection_traces WHERE source='application' AND started_at >= $1 AND started_at < $2
- AND jsonb_typeof(detail->'body_bytes')='number' GROUP BY 1 ORDER BY 1`, start, end)
+ AND body_bytes IS NOT NULL GROUP BY 1 ORDER BY 1`, start, end)
 	if err != nil {
 		return nil, err
 	}

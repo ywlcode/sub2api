@@ -87,6 +87,8 @@ func providePluginHostInfo(buildInfo handler.BuildInfo) service.PluginHostInfo {
 }
 
 func provideCleanup(
+	phaseCache *service.UsageRequestPhaseCache,
+	traceBackfill *service.ConnectionTraceBackfillService,
 	cfg *config.Config,
 	requestCaptures *requestcapture.Manager,
 	entClient *ent.Client,
@@ -408,6 +410,18 @@ func provideCleanup(
 			{"OpenAICodexTicketHarvester", func() error {
 				if openAIGateway != nil {
 					openAIGateway.StopOpenAICodexTicketHarvester()
+				}
+				return nil
+			}},
+			{"UsageRequestPhaseCache", func() error {
+				if phaseCache != nil {
+					phaseCache.Stop()
+				}
+				return nil
+			}},
+			{"ConnectionTraceBackfillService", func() error {
+				if traceBackfill != nil {
+					traceBackfill.Stop()
 				}
 				return nil
 			}},

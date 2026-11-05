@@ -1032,7 +1032,9 @@ var ProviderSet = wire.NewSet(
 	NewLotteryService,
 	ProvideRedeemService,
 	NewPromoService,
-	NewUsageService,
+	ProvideUsageService,
+	ProvideUsageRequestPhaseCache,
+	ProvideConnectionTraceBackfillService,
 	NewDashboardService,
 	ProvidePricingService,
 	NewBillingService,
@@ -1329,5 +1331,23 @@ func ProvideAccountPerformanceService(repo AccountPerformanceRepository, cfg *co
 	if cfg.RunsBackgroundJobs() {
 		s.Start()
 	}
+	return s
+}
+
+func ProvideUsageService(repo UsageLogRepository, users UserRepository, client *dbent.Client, invalidator APIKeyAuthCacheInvalidator, phaseCache *UsageRequestPhaseCache) *UsageService {
+	s := NewUsageService(repo, users, client, invalidator)
+	s.phaseCache = phaseCache
+	return s
+}
+
+func ProvideUsageRequestPhaseCache(repo UsageLogRepository, rdb *redis.Client, cfg *config.Config) *UsageRequestPhaseCache {
+	s := NewUsageRequestPhaseCache(repo, rdb, cfg)
+	startBackgroundService(cfg, s)
+	return s
+}
+
+func ProvideConnectionTraceBackfillService(repo UsageLogRepository, cfg *config.Config) *ConnectionTraceBackfillService {
+	s := &ConnectionTraceBackfillService{repo: repo}
+	startBackgroundService(cfg, s)
 	return s
 }
