@@ -293,7 +293,7 @@ func (s *OpenAIGatewayService) scanCCStream(
 	requestID string,
 	startTime time.Time,
 	emit func(*apicompat.ChatCompletionsChunk),
-	writeCyberPolicy func([]byte, int),
+	writePassthroughError func([]byte, int),
 ) ccStreamScanState {
 	var st ccStreamScanState
 
@@ -323,12 +323,11 @@ func (s *OpenAIGatewayService) scanCCStream(
 			mergeOpenAIProtectionUsageEvidence(st.Usage, u)
 			st.Usage = *u
 		}
-		if markOpenAICyberPolicyEvent(c, []byte(payload), resp.StatusCode, &st.Usage) {
-			if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, []byte(payload)); matched {
-				writeCyberPolicy(clientPayload, status)
-				st.Err = errOpenAICyberPolicyForwarded
-				return st
-			}
+		markOpenAICyberPolicyEvent(c, []byte(payload), resp.StatusCode, &st.Usage)
+		if clientPayload, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, []byte(payload), 0); matched {
+			writePassthroughError(clientPayload, status)
+			st.Err = errOpenAIErrorPassthroughForwarded
+			return st
 		}
 
 		normalized, err := normalizeMistralChatResponse(account, []byte(payload), true)
@@ -394,12 +393,11 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 	if parsed, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
 		usage = parsed
 	}
-	if markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, &usage) {
-		if clientBody, status, matched := rewriteOpenAICyberPolicyForClient(c, account, respBody); matched {
-			MarkResponseCommitted(c)
-			writeError(c, status, gjson.GetBytes(clientBody, "error.type").String(), gjson.GetBytes(clientBody, "error.message").String())
-			return nil, usage, errOpenAICyberPolicyForwarded
-		}
+	markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, &usage)
+	if clientBody, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, respBody, 0); matched {
+		MarkResponseCommitted(c)
+		writeError(c, status, gjson.GetBytes(clientBody, "error.type").String(), gjson.GetBytes(clientBody, "error.message").String())
+		return nil, usage, errOpenAIErrorPassthroughForwarded
 	}
 	respBody, err = normalizeMistralChatResponse(account, respBody, true)
 	if err != nil {

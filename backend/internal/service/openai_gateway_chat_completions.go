@@ -474,7 +474,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	// 返回哨兵，使 handler 落入 tokens=0 免费用量行（对齐 /v1/responses），不计费、不 failover。
 	if GetOpsCyberPolicy(c) != nil {
 		if handleErr == nil {
-			handleErr = errOpenAICyberPolicyForwarded
+			handleErr = errOpenAIErrorPassthroughForwarded
 		}
 		return nil, handleErr
 	}

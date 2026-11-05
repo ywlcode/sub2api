@@ -247,7 +247,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsAnthropic(
 		}
 	})
 	usage := scan.Usage
-	if errors.Is(scan.Err, errOpenAICyberPolicyForwarded) {
+	if errors.Is(scan.Err, errOpenAIErrorPassthroughForwarded) {
 		return nil, scan.Err
 	}
 

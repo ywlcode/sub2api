@@ -12,5 +12,8 @@ import (
 // again for a session that the upstream already blocked.
 func isOpenAIUpstreamSessionBlocked(body []byte) bool {
 	code := gjson.GetBytes(body, "error.code").String()
+	if code == "" {
+		code = gjson.GetBytes(body, "response.error.code").String()
+	}
 	return strings.EqualFold(strings.TrimSpace(code), "session_blocked_by_cyber_policy")
 }

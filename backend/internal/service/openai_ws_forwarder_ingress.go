@@ -1781,6 +1781,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					acquireErr,
 				)
 			}
+			if clientErr, matched := forwardOpenAIForbiddenWSDialError(c, account, acquireErr, writeClientMessage); matched {
+				return nil, clientErr
+			}
 			return nil, acquireErr
 		}
 		lease.health = newAPIKeyHealthWSTracker(ctx, s.rateLimitService, account)
@@ -1974,16 +1977,19 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					}
 				}
 			}
-			var cyberClientMessage []byte
-			cyberRuleMatched := false
+			var ruleClientMessage []byte
+			clientRuleMatched := false
 			if eventType == "error" || eventType == "response.failed" {
 				markOpenAICyberPolicyEvent(c, upstreamMessage, http.StatusOK, &usage)
-				cyberClientMessage, _, cyberRuleMatched = rewriteOpenAICyberPolicyForClient(c, account, upstreamMessage)
+				ruleClientMessage, _, clientRuleMatched = rewriteOpenAIForbiddenErrorForClient(c, account, upstreamMessage, 0)
 			}
 			if eventType == "response.failed" && isOpenAIInvalidEncryptedContentSSE(upstreamMessage, eventType) {
 				s.markOpenAIWSInvalidEncryptedContentLineageFromPayload(c, payload, "ingress_ws_invalid_encrypted_lineage_mark", account.ID, turn, upstreamMessage)
 			}
-			if eventType == "error" && !cyberRuleMatched {
+			// Rule rewriting must not suppress credential health handling. Only
+			// a matched cyber rule or an already blocked session bypasses them.
+			cyberHit, _, _ := detectOpenAICyberPolicy(upstreamMessage)
+			if eventType == "error" && !(cyberHit && clientRuleMatched) && !isOpenAIUpstreamSessionBlocked(upstreamMessage) {
 				s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
 				errCodeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(upstreamMessage)
 				statusCode := openAIWSRejectedFieldRetryHTTPStatus(upstreamMessage)
@@ -2122,8 +2128,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				// sanitizeOpenAICapacityShedErrorCodeForClient 注释里写明的前提。
 				clientMessage := upstreamMessage
 				if eventType == "error" || eventType == "response.failed" {
-					if cyberRuleMatched {
-						clientMessage = cyberClientMessage
+					if clientRuleMatched {
+						clientMessage = ruleClientMessage
 					}
 					if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 						clientMessage = rewritten

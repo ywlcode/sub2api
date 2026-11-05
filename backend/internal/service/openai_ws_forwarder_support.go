@@ -274,6 +274,9 @@ func markOpenAIWSClientVisibleFailure(c *gin.Context, eventType string, payload 
 }
 
 func openAIWSPayloadTransientStatus(payload []byte) int {
+	if isOpenAIUpstreamSessionBlocked(payload) {
+		return 0
+	}
 	if len(payload) == 0 {
 		return 0
 	}
@@ -683,6 +686,9 @@ func classifyOpenAIWSAcquireError(err error) string {
 
 func isOpenAIWSRateLimitError(codeRaw, errTypeRaw, msgRaw string) bool {
 	code := strings.ToLower(strings.TrimSpace(codeRaw))
+	if code == "session_blocked_by_cyber_policy" {
+		return false
+	}
 	errType := strings.ToLower(strings.TrimSpace(errTypeRaw))
 	msg := strings.ToLower(strings.TrimSpace(msgRaw))
 
@@ -746,6 +752,8 @@ func classifyOpenAIWSErrorEventFromRaw(codeRaw, errTypeRaw, msgRaw string) (stri
 	msg := strings.ToLower(strings.TrimSpace(msgRaw))
 
 	switch code {
+	case "session_blocked_by_cyber_policy":
+		return "event_error", false
 	case "upgrade_required":
 		return "upgrade_required", true
 	case "websocket_not_supported", "websocket_unsupported":

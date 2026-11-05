@@ -1,25 +1,17 @@
 package service
 
 import (
-	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
 )
 
 // opsCyberPolicyKey 在 gin context 中携带 cyber_policy 命中标记。
 // 由 gateway 服务层在检测到上游 error.code=="cyber_policy" 时设置，
 // handler 在 Forward 返回后读取以触发风控记录、邮件与 tokens=0 用量行。
 const opsCyberPolicyKey = "ops_cyber_policy"
-
-// errOpenAICyberPolicyForwarded 表示 cyber_policy 已按当前端点格式透传给客户端
-// （error 已写出/下发）。compat 路径 ForwardAsChatCompletions / ForwardAsAnthropic 出口
-// 据此丢弃 result 并返回该哨兵，使 handler 落入 tokens=0 免费用量行（对齐 /v1/responses），
-// 既不计费、也不 failover、不重复写响应。
-var errOpenAICyberPolicyForwarded = errors.New("openai cyber_policy forwarded to client")
 
 // CyberPolicyMark 记录一次 cyber_policy 硬阻断的上游证据。
 type CyberPolicyMark struct {
@@ -130,49 +122,4 @@ func applyOpenAICyberPolicyPassthroughRule(
 	return applyErrorPassthroughRule(c, platform, http.StatusForbidden,
 		openAIStreamFailedEventPassthroughBody(payload, defaultErrMsg),
 		defaultStatus, defaultErrType, defaultErrMsg)
-}
-
-// rewriteOpenAICyberPolicyForClient returns a client-only copy. It preserves the
-// error code and event envelope so SSE/WS clients still recognize the terminal
-// policy rejection. The returned status can only be used before HTTP is written.
-func rewriteOpenAICyberPolicyForClient(c *gin.Context, account *Account, payload []byte) ([]byte, int, bool) {
-	status, errType, message, matched := applyOpenAICyberPolicyPassthroughRule(
-		c, account, payload, http.StatusForbidden, "invalid_request_error", "",
-	)
-	if !matched {
-		return payload, 0, false
-	}
-	clientPayload := payload
-	for _, path := range []string{"error", "response.error"} {
-		if !strings.EqualFold(strings.TrimSpace(gjson.GetBytes(payload, path+".code").String()), "cyber_policy") {
-			continue
-		}
-		var err error
-		clientPayload, err = sjson.SetBytes(clientPayload, path+".message", message)
-		if err != nil {
-			return payload, 0, false
-		}
-		clientPayload, err = sjson.SetBytes(clientPayload, path+".type", errType)
-		if err != nil {
-			return payload, 0, false
-		}
-	}
-	// Some WS error events carry an explicit numeric status in addition to the
-	// HTTP upgrade status. Keep that field consistent with the matched rule.
-	for _, path := range []string{"status", "status_code", "error.status", "error.status_code"} {
-		if gjson.GetBytes(payload, path).Type == gjson.Number {
-			if rewritten, err := sjson.SetBytes(clientPayload, path, status); err == nil {
-				clientPayload = rewritten
-			}
-		}
-	}
-	return clientPayload, status, true
-}
-
-func writeOpenAICyberPolicyClientError(c *gin.Context, status int, payload []byte) {
-	body := openAIStreamFailedEventPassthroughBody(payload, "")
-	MarkResponseCommitted(c)
-	if !writeOpenAICompactSSEBridge(c, status, body) {
-		c.Data(status, "application/json; charset=utf-8", body)
-	}
 }

@@ -637,7 +637,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, openAIWSHTTPBridgeErrorBodyLimitBytes))
 		_ = resp.Body.Close()
-		cyberHit := markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, nil)
+		markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, nil)
 		if resp.StatusCode == http.StatusBadRequest &&
 			extractUpstreamErrorCode(respBody) == openAIWSFallbackReasonInvalidEncryptedContent {
 			s.markOpenAIWSInvalidEncryptedContentLineageFromPayload(
@@ -678,16 +678,13 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody, actualModel)
 		}
 		clientError := buildOpenAIWSHTTPBridgeErrorEvent(resp.StatusCode, upstreamMsg)
-		if cyberHit {
-			// Match the original HTTP evidence, and preserve the policy code
-			// when converting a matched rejection into a client WS event.
-			if status, errType, message, matched := applyOpenAICyberPolicyPassthroughRule(
-				c, account, respBody, resp.StatusCode, "upstream_error", upstreamMsg,
-			); matched {
-				clientError = buildOpenAIWSHTTPBridgeErrorEvent(status, message)
-				clientError, _ = sjson.SetBytes(clientError, "error.code", "cyber_policy")
-				clientError, _ = sjson.SetBytes(clientError, "error.type", errType)
+		if clientBody, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, respBody, resp.StatusCode); matched {
+			clientBody = openAIStreamFailedEventPassthroughBody(clientBody, "")
+			clientError = buildOpenAIWSHTTPBridgeErrorEvent(status, extractUpstreamErrorMessage(clientBody))
+			if code := gjson.GetBytes(clientBody, "error.code").String(); code != "" {
+				clientError, _ = sjson.SetBytes(clientError, "error.code", code)
 			}
+			clientError, _ = sjson.SetBytes(clientError, "error.type", gjson.GetBytes(clientBody, "error.type").String())
 		}
 		if writeErr := writeClientMessage(clientError); writeErr == nil {
 			markOpenAIWSClientVisibleFailure(c, "error", clientError)
@@ -809,10 +806,11 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if clientDisconnected {
 			return nil
 		}
-		clientMessage := buildOpenAIWSHTTPBridgeFailedEvent(responseID, originalModel, createdAtStamper.Value(), bareErrorPayload, bareErrorMessage)
-		if rewritten, _, matched := rewriteOpenAICyberPolicyForClient(c, account, clientMessage); matched {
-			clientMessage = rewritten
+		clientPayload := bareErrorPayload
+		if rewritten, _, matched := rewriteOpenAIForbiddenErrorForClient(c, account, bareErrorPayload, 0); matched {
+			clientPayload = rewritten
 		}
+		clientMessage := buildOpenAIWSHTTPBridgeFailedEvent(responseID, originalModel, createdAtStamper.Value(), clientPayload, bareErrorMessage)
 		if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {
 			clientMessage = rewritten
 		}
@@ -1000,7 +998,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		// 仍使用未改写的 upstreamMessage。
 		clientMessage := upstreamMessage
 		if eventType == "error" || eventType == "response.failed" {
-			if rewritten, _, matched := rewriteOpenAICyberPolicyForClient(c, account, clientMessage); matched {
+			if rewritten, _, matched := rewriteOpenAIForbiddenErrorForClient(c, account, clientMessage, 0); matched {
 				clientMessage = rewritten
 			}
 			if rewritten, changed := sanitizeOpenAICapacityShedErrorCodeForClient(clientMessage); changed {

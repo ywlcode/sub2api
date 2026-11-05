@@ -423,6 +423,12 @@ func (h *GatewayHandler) handleCCFailoverExhausted(c *gin.Context, lastErr *serv
 	if lastErr != nil {
 		copyFailoverRetryAfter(c, lastErr.ResponseHeaders)
 	}
+	if lastErr != nil && lastErr.StatusCode == http.StatusForbidden {
+		if status, message, matched := matchUpstreamErrorPassthrough(c, h.errorPassthroughService, lastErr.StatusCode, lastErr.ResponseBody); matched {
+			h.chatCompletionsErrorResponse(c, status, "upstream_error", message)
+			return
+		}
+	}
 	if lastErr != nil && lastErr.IsCredentialFailure() {
 		status, message := credentialFailoverClientResponse(lastErr)
 		h.chatCompletionsErrorResponse(c, status, "server_error", message)

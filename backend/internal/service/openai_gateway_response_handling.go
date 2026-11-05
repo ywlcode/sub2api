@@ -461,10 +461,10 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if codexFailureTerminal && sawBareError && !sawResponseFailed && !clientDisconnected {
 			applyAttemptResponseHeaders()
 			clientPayload := bareErrorPayload
-			if rewritten, status, matched := rewriteOpenAICyberPolicyForClient(c, account, bareErrorPayload); matched {
+			if rewritten, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, bareErrorPayload, 0); matched {
 				if !c.Writer.Written() {
-					writeOpenAICyberPolicyClientError(c, status, rewritten)
-					return resultWithUsage(), errOpenAICyberPolicyForwarded
+					writeOpenAIErrorPassthroughClientError(c, status, rewritten)
+					return resultWithUsage(), errOpenAIErrorPassthroughForwarded
 				}
 				clientPayload = rewritten
 			}
@@ -718,7 +718,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 						streamEarlyErr = s.newOpenAIStreamFailoverErrorWithModel(c, account, false, upstreamRequestID, dataBytes, failedMessage, mappedModel, resp.Header)
 						return
 					}
-					if !cyberHit && !sawBareError {
+					if !cyberHit && !sawBareError && !isOpenAIForbiddenPassthrough(dataBytes, 0) {
 						if status, errType, errMsg, matched := applyOpenAIStreamFailedErrorPassthroughRule(c, account.Platform, dataBytes, failedMessage); matched {
 							sawFailedEvent = true
 							// 命中透传规则也要记录 ops 上游错误事件（对齐 CC/Messages 与
@@ -737,11 +737,14 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 						}
 					}
 				}
-				if cyberHit && !suppressCurrentEvent {
-					if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, dataBytes); matched {
+				if !suppressCurrentEvent {
+					if clientPayload, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, dataBytes, 0); matched {
+						if !cyberHit && !outputStarted {
+							s.recordOpenAIStreamUpstreamError(c, account, false, upstreamRequestID, "http_error", dataBytes, failedMessage)
+						}
 						if !c.Writer.Written() {
-							writeOpenAICyberPolicyClientError(c, status, clientPayload)
-							streamEarlyErr = errOpenAICyberPolicyForwarded
+							writeOpenAIErrorPassthroughClientError(c, status, clientPayload)
+							streamEarlyErr = errOpenAIErrorPassthroughForwarded
 							return
 						}
 						dataBytes = clientPayload
@@ -1905,12 +1908,11 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
 	regionalMeterObserveUsage(ctx, body, "json")
-	if markOpenAICyberPolicyEvent(c, body, resp.StatusCode, &usageValue) {
-		if clientBody, status, matched := rewriteOpenAICyberPolicyForClient(c, account, body); matched {
-			responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
-			writeOpenAICyberPolicyClientError(c, status, clientBody)
-			return nil, errOpenAICyberPolicyForwarded
-		}
+	markOpenAICyberPolicyEvent(c, body, resp.StatusCode, &usageValue)
+	if clientBody, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, body, 0); matched {
+		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		writeOpenAIErrorPassthroughClientError(c, status, clientBody)
+		return nil, errOpenAIErrorPassthroughForwarded
 	}
 	if !usageOK {
 		if bodyLooksLikeSSE {
@@ -1994,11 +1996,12 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 	}
 	if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
 		usage := s.parseSSEUsageFromBody(bodyText)
-		if markOpenAICyberPolicyEvent(c, terminalPayload, resp.StatusCode, usage) {
-			if clientPayload, status, matched := rewriteOpenAICyberPolicyForClient(c, account, terminalPayload); matched {
+		markOpenAICyberPolicyEvent(c, terminalPayload, resp.StatusCode, usage)
+		if !openAIStreamFailedEventShouldFailover(terminalPayload, extractOpenAISSEErrorMessage(terminalPayload)) {
+			if clientPayload, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, terminalPayload, 0); matched {
 				responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
-				writeOpenAICyberPolicyClientError(c, status, clientPayload)
-				return nil, errOpenAICyberPolicyForwarded
+				writeOpenAIErrorPassthroughClientError(c, status, clientPayload)
+				return nil, errOpenAIErrorPassthroughForwarded
 			}
 		}
 		msg := extractOpenAISSEErrorMessage(terminalPayload)
