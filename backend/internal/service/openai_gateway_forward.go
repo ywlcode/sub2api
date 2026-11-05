@@ -161,6 +161,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if err := s.checkOpenAIAgentRecoveryDispatch(ctx, c, account, body); err != nil {
 		return nil, err
 	}
+	if normalized, err := normalizeVolcengineRequestBody(account, body, APIProtocolResponses); err != nil {
+		return nil, err
+	} else {
+		body = normalized
+	}
 	ctx = withOpenAITransportRoute(ctx, "http", "native", "", "")
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
@@ -279,7 +284,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if normalized {
 		body = normalizedBody
 	}
-	legacyIngressBody, legacyIngressChanged, legacyIngressErr := normalizeOpenAIResponsesLegacyIngressWithConfig(s.cfg, body)
+	legacyIngressBody, legacyIngressChanged, legacyIngressErr := normalizeOpenAIResponsesLegacyIngressForAccount(s.cfg, account, body)
 	if legacyIngressErr != nil {
 		return nil, legacyIngressErr
 	}

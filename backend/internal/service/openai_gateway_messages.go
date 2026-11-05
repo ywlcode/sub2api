@@ -76,6 +76,11 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 	if err := CheckUpstreamModeration(ctx, c, account); err != nil {
 		return nil, err
 	}
+	if normalized, err := normalizeVolcengineRequestBody(account, body, APIProtocolAnthropic); err != nil {
+		return nil, err
+	} else {
+		body = normalized
+	}
 	// 工具 Schema 清洗必须先于所有分流：下游每条路径（原生 Anthropic 直通、
 	// Chat Completions 转换、Responses 转换）都会把 tools 原样带给上游，而
 	// xAI / Moonshot 等严格校验方会因 input_schema 里的 required:null 或
@@ -200,6 +205,8 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 	responsesReq, err := apicompat.AnthropicToResponsesWithOptions(&anthropicReq, apicompat.AnthropicToResponsesOptions{
 		MinOutputTokens:                configuredMinOutputTokens(s.cfg),
 		DeferReasoningEffortValidation: true,
+		PreserveReasoningContent:       shouldPreserveDeepSeekReasoning(account),
+		PreserveReasoningEffort:        account.IsDeepSeekVolcengineCompatibilityEnabled(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("convert anthropic to responses: %w", err)
@@ -218,6 +225,9 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 	responsesReq.Model = upstreamModel
 	if responsesReq.Reasoning != nil {
 		responsesReq.Reasoning.Effort = openAICompatAnthropicReasoningEffort(&anthropicReq, upstreamModel, responsesReq.Reasoning.Effort)
+		if account.IsDeepSeekVolcengineCompatibilityEnabled() && responsesReq.Reasoning.Effort != "none" && anthropicReq.OutputConfig != nil && anthropicReq.OutputConfig.Effort != "" {
+			responsesReq.Reasoning.Effort = anthropicReq.OutputConfig.Effort
+		}
 	}
 	if previousResponseID != "" {
 		responsesReq.PreviousResponseID = previousResponseID
