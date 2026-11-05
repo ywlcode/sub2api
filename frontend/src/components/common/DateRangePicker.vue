@@ -76,6 +76,7 @@
 </template>
 
 <script setup lang="ts">
+import { getRollingRangeDates } from '@/utils/dateRange'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
@@ -161,12 +162,10 @@ const presets: DatePreset[] = [
     labelKey: 'dates.last24Hours',
     value: 'last24Hours',
     getRange: () => {
+      if (props.rolling24Hours) return getRollingRangeDates()
       const end = new Date()
-      const start = new Date(end.getTime() - 24 * 60 * 60 * 1000)
-      return {
-        start: props.rolling24Hours ? start.toISOString() : formatDateToString(start),
-        end: props.rolling24Hours ? end.toISOString() : formatDateToString(end)
-      }
+      const start = new Date(end.getTime() - 86_400_000)
+      return { start: formatDateToString(start), end: formatDateToString(end) }
     }
   },
   {

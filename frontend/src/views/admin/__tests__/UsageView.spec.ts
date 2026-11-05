@@ -1,3 +1,4 @@
+import { getTodayRangeDates } from '@/utils/dateRange'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, ref } from 'vue'
@@ -497,10 +498,10 @@ describe('admin UsageView distribution metric toggles', () => {
 
     expect(getSnapshotV2).toHaveBeenCalledTimes(1)
     const now = new Date(Date.now() - 120) // The applied snapshot was captured before advancing timers.
-    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    const today = getTodayRangeDates(now)
     expect(getSnapshotV2).toHaveBeenCalledWith(expect.objectContaining({
-      start_date: yesterday.toISOString(),
-      end_date: now.toISOString(),
+      start_date: today.start,
+      end_date: today.end,
       granularity: 'hour'
     }))
 
@@ -979,7 +980,8 @@ describe('admin UsageView rolling 24 hour requests', () => {
     vi.useRealTimers()
   })
 
-  const expectRequests = (end: Date) => {
+  const expectRequests = (instant: Date) => {
+    const end = new Date(Math.floor(instant.getTime() / 30_000) * 30_000)
     const range = { start_date: new Date(end.getTime() - 86_400_000).toISOString(), end_date: end.toISOString() }
     for (const request of [list, getStats, getModelStats, getSnapshotV2]) {
       expect(request.mock.lastCall?.[0]).toMatchObject(range)
@@ -991,7 +993,7 @@ describe('admin UsageView rolling 24 hour requests', () => {
   }
 
   it.each([
-    ['rolling', undefined, undefined],
+    ['rolling', '2026-09-30T00:01:00Z', '2026-10-01T00:01:00Z'],
     ['routed exact', '2026-09-30T00:00:00Z', '2026-10-01T00:00:00Z'],
     ['mixed', '2026-09-30', '2026-10-01T00:00:00Z'],
   ])('blocks %s cleanup until calendar dates are explicitly selected', async (_, start, end) => {
@@ -1034,19 +1036,26 @@ describe('admin UsageView rolling 24 hour requests', () => {
     expect(createCleanupTask).toHaveBeenCalledWith({ start_date: today, end_date: today, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone })
   })
 
-  it('uses the same precise cross-midnight window for list, cards and charts on initial load', async () => {
+  it('defaults list, cards and charts to today', async () => {
     wrapper = mountRouteFilteredUsageView(true)
     vi.advanceTimersByTime(120)
     await flushPromises()
-    expectRequests(now)
-    expect(wrapper.findComponent(DateRangePicker).get('.date-picker-trigger').text()).toContain('dates.last24Hours')
+    const today = getTodayRangeDates(now)
+    for (const request of [list, getStats, getModelStats, getSnapshotV2]) {
+      expect(request.mock.lastCall?.[0]).toMatchObject({ start_date: today.start, end_date: today.end })
+    }
+    expect(wrapper.findComponent(DateRangePicker).get('.date-picker-trigger').text()).toContain('dates.today')
     expect(wrapper.findComponent(UsageStatsCards).props('stats')).toMatchObject({
       total_actual_cost: 3, total_cost: 12, total_account_cost: 5
     })
   })
 
   it('refreshes the rolling window once and keeps pagination/export on that applied snapshot', async () => {
+    routeQuery.start_date = new Date(now.getTime() - 86_400_000).toISOString()
+    routeQuery.end_date = now.toISOString()
     wrapper = mountRouteFilteredUsageView()
+    await flushPromises()
+    ;(wrapper.vm as any).onDateRangeChange({ startDate: routeQuery.start_date, endDate: routeQuery.end_date, preset: 'last24Hours' })
     await flushPromises()
     const refreshedAt = new Date('2026-10-02T00:00:00.456+09:00')
     vi.setSystemTime(refreshedAt)
@@ -1065,7 +1074,7 @@ describe('admin UsageView rolling 24 hour requests', () => {
     expect(listErrorLogs.mock.lastCall?.[0]).toMatchObject({ start_time: range.start_date, end_time: range.end_date })
   })
 
-  it('applies the actual picker selection after midnight and resets back to rolling time', async () => {
+  it('applies the actual picker selection after midnight and resets back to today', async () => {
     routeQuery.start_date = '2026-09-20'
     routeQuery.end_date = '2026-09-25'
     wrapper = mountRouteFilteredUsageView(true)
@@ -1080,7 +1089,10 @@ describe('admin UsageView rolling 24 hour requests', () => {
     vi.setSystemTime(resetAt)
     ;(wrapper.vm as any).resetFilters()
     await flushPromises()
-    expectRequests(resetAt)
+    const today = getTodayRangeDates(resetAt)
+    for (const request of [list, getStats, getModelStats, getSnapshotV2]) {
+      expect(request.mock.lastCall?.[0]).toMatchObject({ start_date: today.start, end_date: today.end })
+    }
   })
 
   it('preserves manual/routed calendar dates on refresh', async () => {

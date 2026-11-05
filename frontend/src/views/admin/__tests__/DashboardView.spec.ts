@@ -182,7 +182,7 @@ describe('admin DashboardView', () => {
     expect(chart.props('data').datasets[0].data).toEqual([5])
   })
 
-  it('requests an exact rolling 24-hour range initially and opts the picker into rolling ranges', async () => {
+  it('defaults to today and allows opting into rolling ranges', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const now = new Date(2026, 9, 1, 0, 15, 30, 123)
     vi.setSystemTime(now)
@@ -190,11 +190,7 @@ describe('admin DashboardView', () => {
     const wrapper = mountDashboard()
     await flushPromises()
 
-    const startDate = new Date(now.getTime() - 86_400_000).toISOString()
-    const endDate = now.toISOString()
-
-    expect(Date.parse(endDate) - Date.parse(startDate)).toBe(86_400_000)
-    expectDashboardRange(startDate, endDate)
+    expectDashboardRange(formatLocalDate(now), formatLocalDate(now))
     expect(wrapper.findComponent(DateRangePicker).props('rolling24Hours')).toBe(true)
   })
 
@@ -214,8 +210,8 @@ describe('admin DashboardView', () => {
     await wrapper.get('.date-picker-apply').trigger('click')
     await flushPromises()
 
-    const startDate = new Date(now.getTime() - 86_400_000).toISOString()
-    const endDate = now.toISOString()
+    const startDate = new Date(Math.floor(now.getTime() / 30_000) * 30_000 - 86_400_000).toISOString()
+    const endDate = new Date(Math.floor(now.getTime() / 30_000) * 30_000).toISOString()
     expect(Date.parse(endDate) - Date.parse(startDate)).toBe(86_400_000)
     expectDashboardRange(startDate, endDate)
   })
@@ -226,6 +222,10 @@ describe('admin DashboardView', () => {
     vi.setSystemTime(initialNow)
 
     const wrapper = mountDashboard()
+    await flushPromises()
+    await wrapper.get('.date-picker-trigger').trigger('click')
+    await wrapper.findAll('.date-picker-preset').find(button => button.text() === 'dates.last24Hours')!.trigger('click')
+    await wrapper.get('.date-picker-apply').trigger('click')
     await flushPromises()
     getSnapshotV2.mockClear()
     getUserUsageTrend.mockClear()
@@ -238,8 +238,8 @@ describe('admin DashboardView', () => {
     await refreshButton!.trigger('click')
     await flushPromises()
 
-    const startDate = new Date(refreshedNow.getTime() - 86_400_000).toISOString()
-    const endDate = refreshedNow.toISOString()
+    const startDate = new Date(Math.floor(refreshedNow.getTime() / 30_000) * 30_000 - 86_400_000).toISOString()
+    const endDate = new Date(Math.floor(refreshedNow.getTime() / 30_000) * 30_000).toISOString()
     expect(Date.parse(endDate) - Date.parse(startDate)).toBe(86_400_000)
     expect(getSnapshotV2).toHaveBeenCalledTimes(1)
     expect(getUserUsageTrend).toHaveBeenCalledTimes(1)

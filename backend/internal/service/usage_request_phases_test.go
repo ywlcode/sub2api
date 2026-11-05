@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/stretchr/testify/require"
@@ -40,7 +41,10 @@ func TestUsageRequestPhasesEnrichStatsWithTheirAuthorizedScope(t *testing.T) {
 	filters := usagestats.UsageLogFilters{UserID: 4, APIKeyID: 5, Model: "public", GroupID: 6}
 	stats, err := s.GetStatsWithFilters(context.Background(), filters)
 	require.NoError(t, err)
-	require.Equal(t, filters, r.filters)
+	require.Equal(t, int64(4), r.filters.UserID)
+	require.Zero(t, r.filters.APIKeyID)
+	require.Empty(t, r.filters.Model)
+	require.Equal(t, 24*time.Hour, r.filters.EndTime.Sub(*r.filters.StartTime))
 	require.EqualValues(t, 10, stats.TotalRequests)
 	require.Equal(t, 7.0, stats.TotalActualCost)
 	require.Equal(t, 2000.0, *stats.AverageUserUploadMs)
@@ -49,11 +53,13 @@ func TestUsageRequestPhasesEnrichStatsWithTheirAuthorizedScope(t *testing.T) {
 
 	user, err := s.GetUserDashboardStats(context.Background(), 7)
 	require.NoError(t, err)
-	require.Equal(t, usagestats.UsageLogFilters{UserID: 7}, r.filters)
+	require.Equal(t, int64(7), r.filters.UserID)
+	require.Zero(t, r.filters.APIKeyID)
 	require.EqualValues(t, 2, user.TimingSampleCount)
 	key, err := s.GetAPIKeyDashboardStats(context.Background(), 8)
 	require.NoError(t, err)
-	require.Equal(t, usagestats.UsageLogFilters{APIKeyID: 8}, r.filters)
+	require.Equal(t, int64(8), r.filters.APIKeyID)
+	require.Zero(t, r.filters.UserID)
 	require.EqualValues(t, 2, key.TimingSampleCount)
 
 	_, err = s.GetStatsWithFilters(context.Background(), usagestats.UsageLogFilters{})

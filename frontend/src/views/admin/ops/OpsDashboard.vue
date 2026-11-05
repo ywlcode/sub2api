@@ -145,6 +145,7 @@
 </template>
 
 <script setup lang="ts">
+import { alignedRangeNow } from '@/utils/dateRange'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useDebounceFn, useIntervalFn } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
@@ -579,7 +580,7 @@ function buildSwitchTrendParams() {
     group_id: groupId.value ?? undefined,
     mode: queryMode.value
   }
-  const endTime = new Date()
+  const endTime = alignedRangeNow()
   const startTime = new Date(endTime.getTime() - switchTrendWindowMs)
   params.start_time = startTime.toISOString()
   params.end_time = endTime.toISOString()
