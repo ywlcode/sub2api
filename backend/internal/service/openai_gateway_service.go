@@ -1104,7 +1104,18 @@ func (s *OpenAIGatewayService) writeOpenAIWSFallbackErrorResponse(c *gin.Context
 	if errors.As(wsErr, &incomplete) {
 		return s.writeOpenAIWSSSEIncomplete(c, account, incomplete)
 	}
-	if c == nil || c.Writer == nil || c.Writer.Written() {
+	if c == nil || c.Writer == nil {
+		return false
+	}
+	var dialErr *openAIWSDialError
+	if !IsResponseCommitted(c) && errors.As(wsErr, &dialErr) && dialErr != nil {
+		if clientBody, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, dialErr.ResponseBody, dialErr.StatusCode); matched {
+			setOpsUpstreamError(c, dialErr.StatusCode, extractUpstreamErrorMessage(dialErr.ResponseBody), "")
+			writeOpenAIErrorPassthroughClientError(c, status, clientBody)
+			return true
+		}
+	}
+	if c.Writer.Written() {
 		return false
 	}
 	statusCode, errType, clientMessage, upstreamMessage, ok := resolveOpenAIWSFallbackErrorResponse(wsErr)

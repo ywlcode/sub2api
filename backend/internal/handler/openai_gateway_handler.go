@@ -2169,6 +2169,12 @@ func (h *OpenAIGatewayHandler) handleAnthropicFailoverExhausted(c *gin.Context, 
 	if failoverErr != nil {
 		copyFailoverRetryAfter(c, failoverErr.ResponseHeaders)
 	}
+	if failoverErr != nil && failoverErr.StatusCode == http.StatusForbidden {
+		if status, message, matched := matchUpstreamErrorPassthrough(c, h.errorPassthroughService, failoverErr.StatusCode, failoverErr.ResponseBody); matched {
+			h.anthropicStreamingAwareError(c, status, "upstream_error", message, streamStarted)
+			return
+		}
+	}
 	if failoverErr != nil && failoverErr.IsCredentialFailure() {
 		status, message := credentialFailoverClientResponse(failoverErr)
 		h.anthropicStreamingAwareError(c, status, "api_error", message, streamStarted)
@@ -3470,7 +3476,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			return false
 		}
 		if !forbiddenBudget.canRetry(failoverErr, switchCount) {
-			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
+			h.closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 			return false
 		}
 		if ctx.Err() != nil {
@@ -3480,12 +3486,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		failedAccountIDs[account.ID] = struct{}{}
 		lastFailoverErr = failoverErr
 		if switchCount >= maxAccountSwitches {
-			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
+			h.closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 			return false
 		}
 		switchCount++
 		if h.gatewayService.ShouldStopOpenAIOAuth429Failover(account, failoverErr.StatusCode, switchCount, &oauth429FailoverState) {
-			closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
+			h.closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 			return false
 		}
 		reqLog.Warn("openai.websocket_upstream_failover_switching",
@@ -3598,7 +3604,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if lastFailoverErr != nil {
-				closeOpenAIWSFailoverExhausted(c, wsConn, lastFailoverErr)
+				h.closeOpenAIWSFailoverExhausted(c, wsConn, lastFailoverErr)
 			} else {
 				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "no available account")
 			}
@@ -3606,7 +3612,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		}
 		if selection == nil || selection.Account == nil {
 			if lastFailoverErr != nil {
-				closeOpenAIWSFailoverExhausted(c, wsConn, lastFailoverErr)
+				h.closeOpenAIWSFailoverExhausted(c, wsConn, lastFailoverErr)
 			} else {
 				closeOpenAIClientWS(wsConn, coderws.StatusTryAgainLater, "no available account")
 			}
@@ -4322,7 +4328,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				retryPayload, retryCurrentTurn := service.OpenAIWSCurrentTurnRetryPayload(err)
 				nextAttemptMessage, retrySafe := openAIWSNextAttemptMessage(wsAttemptMessage, retryPayload, retryCurrentTurn)
 				if !retrySafe {
-					closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
+					h.closeOpenAIWSFailoverExhausted(c, wsConn, failoverErr)
 					return
 				}
 				wsAttemptMessage = nextAttemptMessage
@@ -4665,6 +4671,9 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		h.handleStreamingAwareErrorWithCode(c, failoverErr.ClientStatusCode, errType, string(failoverErr.Reason), failoverErr.ClientMessage, streamStarted, false)
 		return
 	}
+	if failoverErr.StatusCode == http.StatusForbidden && h.writeFailoverPassthroughRule(c, failoverErr.StatusCode, failoverErr.ResponseBody, streamStarted) {
+		return
+	}
 	if failoverErr.IsOpenAIRequestBodyTooLarge() {
 		// An operator-configured passthrough rule wins over the built-in body
 		// limit mapping below. Failover on 413 exists because different
@@ -4674,7 +4683,7 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		// check a 413 rule can never match on the native /responses path,
 		// because the body-limit branch returns before the generic rule
 		// lookup further down.
-		if h.applyOpenAIFailoverPassthroughRule(c, failoverErr.StatusCode, failoverErr.ResponseBody, streamStarted) {
+		if h.writeFailoverPassthroughRule(c, failoverErr.StatusCode, failoverErr.ResponseBody, streamStarted) {
 			return
 		}
 		service.SetOpsUpstreamError(c, http.StatusRequestEntityTooLarge, service.OpenAIRequestBodyTooLargeClientMessage, "")
@@ -4742,8 +4751,7 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		return
 	}
 
-	// 先检查透传规则
-	if h.applyOpenAIFailoverPassthroughRule(c, statusCode, responseBody, streamStarted) {
+	if statusCode != http.StatusForbidden && len(responseBody) > 0 && h.writeFailoverPassthroughRule(c, statusCode, responseBody, streamStarted) {
 		return
 	}
 
@@ -4761,43 +4769,14 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)
 }
 
-// applyOpenAIFailoverPassthroughRule applies a configured error passthrough
-// rule to an exhausted OpenAI failover. It reports whether a rule matched and
-// the client response has been written; callers must return when it does.
-//
-// Rules are operator opt-in overrides, so they take precedence over the
-// gateway's built-in mapping for the same upstream status, including the
-// body-too-large branch that otherwise returns a fixed 413.
-func (h *OpenAIGatewayHandler) applyOpenAIFailoverPassthroughRule(
-	c *gin.Context,
-	statusCode int,
-	responseBody []byte,
-	streamStarted bool,
-) bool {
-	if h.errorPassthroughService == nil || statusCode <= 0 || len(responseBody) == 0 {
-		return false
+// Match final upstream errors before fixed 403 mappings. Retry/account state is
+// already decided from the original attempt; a client message cannot change it.
+func (h *OpenAIGatewayHandler) writeFailoverPassthroughRule(c *gin.Context, statusCode int, responseBody []byte, streamStarted bool) bool {
+	status, message, matched := matchUpstreamErrorPassthrough(c, h.errorPassthroughService, statusCode, responseBody)
+	if matched {
+		h.handleStreamingAwareError(c, status, "upstream_error", message, streamStarted)
 	}
-	rule := h.errorPassthroughService.MatchRule(errorPassthroughPlatform(c), statusCode, responseBody)
-	if rule == nil {
-		return false
-	}
-
-	respCode := statusCode
-	if !rule.PassthroughCode && rule.ResponseCode != nil {
-		respCode = *rule.ResponseCode
-	}
-
-	msg := service.ExtractUpstreamErrorMessage(responseBody)
-	if !rule.PassthroughBody && rule.CustomMessage != nil {
-		msg = *rule.CustomMessage
-	}
-
-	if rule.SkipMonitoring {
-		c.Set(service.OpsSkipPassthroughKey, true)
-	}
-
-	h.handleStreamingAwareError(c, respCode, "upstream_error", msg, streamStarted)
-	return true
+	return matched
 }
 
 func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError) (int, string) {
@@ -5165,7 +5144,7 @@ func openAIWSNextAttemptMessage(current, retryPayload []byte, retryCurrentTurn b
 	return append([]byte(nil), retryPayload...), true
 }
 
-func closeOpenAIWSFailoverExhausted(c *gin.Context, conn *coderws.Conn, failoverErr *service.UpstreamFailoverError) {
+func (h *OpenAIGatewayHandler) closeOpenAIWSFailoverExhausted(c *gin.Context, conn *coderws.Conn, failoverErr *service.UpstreamFailoverError) {
 	intendedStatus := http.StatusBadGateway
 	errorType := "upstream_error"
 	errorCode := "upstream_ws_failover_exhausted"
@@ -5214,7 +5193,17 @@ func closeOpenAIWSFailoverExhausted(c *gin.Context, conn *coderws.Conn, failover
 			writeErrorFrame = true
 		}
 	}
-	if writeErrorFrame {
+	if failoverErr != nil && failoverErr.StatusCode == http.StatusForbidden {
+		if status, clientMessage, matched := matchUpstreamErrorPassthrough(c, h.errorPassthroughService, failoverErr.StatusCode, failoverErr.ResponseBody); matched {
+			intendedStatus, errorType, message = status, "upstream_error", clientMessage
+			if code := gjson.GetBytes(failoverErr.ResponseBody, "error.code").String(); code != "" {
+				errorCode = code
+			}
+			writeErrorFrame = true
+		}
+	}
+
+	if writeErrorFrame && conn != nil {
 		payload, _ := json.Marshal(gin.H{"type": "error", "status": intendedStatus,
 			"error": gin.H{"type": errorType, "code": errorCode, "message": message}})
 		writeCtx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
