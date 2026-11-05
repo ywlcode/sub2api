@@ -71,7 +71,7 @@ func (u *requestGzipUpstream) send(req *http.Request, send func(*http.Request) (
 	// The transport owns the compressed body. Close the displaced original on
 	// every exit, including preparation failures, just as Client.Do would.
 	if (err != nil || prepared != req) && req != nil && req.Body != nil {
-		defer req.Body.Close()
+		defer func() { _ = req.Body.Close() }()
 	}
 	if err != nil {
 		return nil, err
@@ -94,7 +94,7 @@ func gzipUpstreamRequest(req *http.Request) (*http.Request, error) {
 		return req, nil
 	}
 	mediaType, _, err := mime.ParseMediaType(req.Header.Get("Content-Type"))
-	if err != nil || (mediaType != "application/json" && !(strings.HasPrefix(mediaType, "application/") && strings.HasSuffix(mediaType, "+json"))) {
+	if err != nil || (mediaType != "application/json" && (!strings.HasPrefix(mediaType, "application/") || !strings.HasSuffix(mediaType, "+json"))) {
 		return req, nil
 	}
 	if err := context.Cause(req.Context()); err != nil {
@@ -109,7 +109,7 @@ func gzipUpstreamRequest(req *http.Request) (*http.Request, error) {
 	if body == nil {
 		return nil, errors.New("prepare gzip upstream request: GetBody returned no body")
 	}
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 	compressed := &gzipSizeBound{limit: req.ContentLength - 1}
 	writer, err := gzip.NewWriterLevel(compressed, gzip.BestSpeed)
 	if err != nil {
