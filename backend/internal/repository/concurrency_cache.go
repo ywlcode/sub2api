@@ -198,7 +198,8 @@ var (
 	// KEYS: 1=accountRegular, 2=accountLive, 3=userRegular, 4=userLive,
 	//       5=apiRegular, 6=apiLive, 7=fence
 	// ARGV: 1=accountMax, 2=userMax, 3=apiMax, 4=accountSource, 5=userSource,
-	//       6=keySource, 7=leaseID, 8=liveTTL, 9=slotTTL, 10=userPlatformMax
+	//       6=keySource, 7=leaseID, 8=liveTTL, 9=slotTTL, 10=userPlatformMax,
+	//       11=platformSlotTTL
 	// KEYS[8] is the user's ordinary OpenAI platform reservation set.
 	// 返回: 1=LIVE, 2=Key 满, 3=Key 来源丢失, 4=账号满, 5=账号来源丢失,
 	//       6=用户满, 7=用户来源丢失, 8=已中止, 9=部分 Live 状态冲突
@@ -221,6 +222,7 @@ var (
 		local ttl = tonumber(ARGV[8])
 		local slotTTL = tonumber(ARGV[9])
 		local platformMax = tonumber(ARGV[10]) or 0
+		local platformSlotTTL = tonumber(ARGV[11])
 		local platformRegular = KEYS[8]
 		local t = redis.call('TIME')
 		local nowMs = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
@@ -260,7 +262,7 @@ var (
 			end
 		end
 
-		redis.call('ZREMRANGEBYSCORE', platformRegular, '-inf', now - slotTTL)
+		redis.call('ZREMRANGEBYSCORE', platformRegular, '-inf', now - platformSlotTTL)
 		local platformSourceExists = userSource ~= '' and redis.call('ZSCORE', platformRegular, userSource) ~= false
 		if platformMax > 0 then
 			if not platformSourceExists then return 7 end
@@ -1384,6 +1386,7 @@ func (c *concurrencyCache) AcquireLiveLeaseTransferring(ctx context.Context, req
 		// 普通/成员期限不受它影响。
 		c.effectiveAPIKeySlotTTLSeconds(),
 		request.UserPlatformMax,
+		c.slotTTLSeconds,
 	).Int()
 	if err != nil {
 		// The script may have executed even if the reply was lost; the caller
