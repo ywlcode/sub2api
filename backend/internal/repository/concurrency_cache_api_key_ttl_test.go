@@ -331,6 +331,8 @@ func TestProvideConcurrencyCacheRegionalKeepsInheritedAPIKeyTTL(t *testing.T) {
 	cfg.Gateway.APIKeySlotTTLSeconds = 120
 	cfg.Runtime.RegionalConcurrencyFile = configPath
 
+	mock.ExpectQuery("SELECT EXISTS.*platform_concurrency_limits").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectExec("INSERT INTO regional_runtime_members").
 		WithArgs("epoch-1", "instance-1", "primary").
 		WillReturnResult(sqlmock.NewResult(0, 1))

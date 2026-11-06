@@ -151,6 +151,47 @@ func TestUserPlatformConcurrencyLiveTransfer(t *testing.T) {
 	}
 }
 
+func TestUserPlatformConcurrencyLiveTransferKeepsSharedTTL(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		apiKeyTTL   int
+		sourceAge   time.Duration
+		otherAge    time.Duration
+		other       bool
+		wantAllowed bool
+	}{
+		{name: "short key TTL preserves platform source", apiKeyTTL: 30, sourceAge: time.Minute, wantAllowed: true},
+		{name: "short key TTL preserves competing platform slot", apiKeyTTL: 30, other: true, otherAge: time.Minute},
+		{name: "long key TTL does not extend platform slot", apiKeyTTL: 1800, other: true, otherAge: 16 * time.Minute, wantAllowed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := newDedicatedAPIKeyTTLCache(t, tc.apiKeyTTL)
+			ctx := context.Background()
+			now, err := c.redisUnixSeconds(ctx)
+			require.NoError(t, err)
+			platformKey := userPlatformSlotKey(20, "openai")
+			require.NoError(t, c.rdb.ZAdd(ctx, platformKey, redis.Z{Score: float64(now) - tc.sourceAge.Seconds(), Member: "source"}).Err())
+			if tc.other {
+				require.NoError(t, c.rdb.ZAdd(ctx, platformKey, redis.Z{Score: float64(now) - tc.otherAge.Seconds(), Member: "other"}).Err())
+			}
+			ok, err := c.AcquireLiveLeaseTransferring(ctx, service.LiveLeaseTransferRequest{
+				AccountID: 10, UserID: 20, APIKeyID: 30,
+				UserPlatformMax: 1, UserRequestID: "source", LeaseID: "live",
+			})
+			require.Equal(t, tc.wantAllowed, ok)
+			if tc.wantAllowed {
+				require.NoError(t, err)
+				require.NoError(t, c.rdb.ZScore(ctx, liveUserSlotKey(20), "live").Err())
+				require.Zero(t, c.rdb.ZCard(ctx, platformKey).Val())
+			} else {
+				require.ErrorIs(t, err, service.ErrLiveConcurrencyFull)
+				require.EqualValues(t, 2, c.rdb.ZCard(ctx, platformKey).Val())
+				require.Zero(t, c.rdb.ZCard(ctx, liveUserSlotKey(20)).Val())
+			}
+		})
+	}
+}
+
 func TestUserPlatformConcurrencyLiveAbortAndLostSource(t *testing.T) {
 	c, _ := platformTestCache(t)
 	ctx := context.Background()
