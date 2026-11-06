@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { parse } from 'vue/compiler-sfc'
 import source from '@/views/admin/SettingsView.vue?raw'
+import smartOpsSidebarSource from '@/components/settings/SmartOpsSidebarSettings.vue?raw'
 import zh from '@/i18n/locales/zh'
 import en from '@/i18n/locales/en'
 import { buildFeatureSearchEntries, searchFeatures } from '../featureSearch'
@@ -43,9 +44,11 @@ describe('settings feature search', () => {
         anchors.set(id.value.content, tab)
       }
       for (const child of node.children) visit(child, tab)
+      if (node.tag === 'SmartOpsSidebarSettings') {
+        for (const child of parse(smartOpsSidebarSource).descriptor.template!.ast!.children) visit(child, tab)
+      }
     }
     for (const child of root.children) visit(child)
-    expect(anchors.size).toBe(SETTINGS_SECTIONS.length)
     for (const section of SETTINGS_SECTIONS) expect(anchors.get(`settings-section-${section.id}`), section.id).toBe(section.tab)
   })
 

@@ -37,7 +37,7 @@ describe('server latency display without pre-forward wait disclosure', () => {
 
   for (const locale of ['en', 'zh'] as const) {
     for (const audience of ['admin', 'user'] as const) {
-      it(`keeps 2020/18950ms unchanged without 97ms in ${locale} ${audience} table or tooltip`, () => {
+      it(`preserves server first token and TPS without inferring request phases in ${locale} ${audience}`, () => {
         const wrapper = mount(UsageTable, {
           props: {
             data: [serverLatency], columns: [{ key: 'latency', label: 'Latency' }],
@@ -46,15 +46,22 @@ describe('server latency display without pre-forward wait disclosure', () => {
           }, global: global(locale),
         })
         wrappers.push(wrapper)
-        const latency = wrapper.get('[data-testid="latency-bar"]').element.parentElement!
+        const latency = wrapper.get(audience === 'admin'
+          ? '[data-testid="latency-bar"]' : '[data-testid="user-upload-duration"]').element.parentElement!
         expect(latency.textContent).toContain('2.02s')
-        expect(latency.textContent).toContain('18.95s')
+        expect(latency.textContent).not.toContain('18.95s')
         expect(latency.textContent).not.toMatch(/97ms|pre-forward|转发前|queuePortion/)
         const titles = Array.from(latency.querySelectorAll('[title]')).map(node => node.getAttribute('title')).join(' ')
         expect(titles).not.toMatch(/97ms|0\.097|1\.92s|18\.85s|\{queue\}/)
-        expect(titles).toContain(locale === 'zh' ? '服务端' : 'Server')
-        expect(latency.querySelector('.row-start-1.col-start-3')?.textContent?.trim()).toBe('2.02s')
-        expect(latency.querySelector('.row-start-2.col-start-3')?.textContent?.trim()).toBe('18.95s')
+        expect(titles).toMatch(locale === 'zh' ? /服务端/ : /server/i)
+        if (audience === 'admin') {
+          expect(latency.querySelector('.row-start-1.col-start-3')?.textContent?.trim()).toBe('2.02s')
+          expect(wrapper.get('[data-testid="request-phase-duration"]').text()).toBe('— / —')
+        } else {
+          expect(wrapper.get('[data-testid="first-token-duration"]').text()).toBe('2.02s')
+          expect(wrapper.get('[data-testid="user-upload-duration"]').text()).toBe('—')
+          expect(wrapper.get('[data-testid="processing-duration"]').text()).toBe('—')
+        }
         expect(wrapper.get('th').text()).toBe('Latency')
         expect(wrapper.get('[data-testid="latency-tps"]').text()).toBe('10.6 t/s')
       })
@@ -70,7 +77,7 @@ describe('server latency display without pre-forward wait disclosure', () => {
       wrappers.push(wrapper)
       const latency = wrapper.get('[data-testid="latency-bar"]').element.parentElement!
       expect(latency.querySelector('.row-start-1.col-start-3')?.textContent).toBe('-')
-      expect(latency.querySelector('.row-start-2.col-start-3')?.textContent?.trim()).toBe('-')
+      expect(wrapper.get('[data-testid="request-phase-duration"]').text()).toBe('— / —')
       expect(latency.textContent).not.toContain('97ms')
       expect(latency.textContent).toContain(locale === 'zh' ? '旧口径' : 'legacy')
       const empty = mount(UsageTable, { props: { data: [], columns: [{ key: 'latency', label: 'Latency' }] }, global: global(locale) })
