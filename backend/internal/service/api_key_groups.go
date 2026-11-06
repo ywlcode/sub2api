@@ -11,6 +11,10 @@ import (
 
 const maxAPIKeyGroups = 5
 
+// APIKeyGroupKindModelList selects an authorized group for model discovery
+// without requiring a concrete model or a schedulable inference account.
+const APIKeyGroupKindModelList = "model_list"
+
 // APIKeyGroupAvailability describes a snapshot, not a reservation. The selected
 // group's normal admission and account scheduler still own the final checks.
 type APIKeyGroupAvailability struct {
@@ -210,6 +214,9 @@ func (s *APIKeyService) SelectRequestGroup(ctx context.Context, key *APIKey, mod
 		}
 		if !permitted || FirstUserGroupDeniedModel(candidate.DeniedModelsInGroup(), models) != "" || (accepts != nil && !accepts(candidate)) {
 			continue
+		}
+		if kind == APIKeyGroupKindModelList {
+			return candidate, nil
 		}
 		eligible = true
 		model := ""

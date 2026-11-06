@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
 
@@ -43,6 +44,37 @@ type multiGroupRouterStub map[int64]APIKeyGroupAvailability
 
 func (s multiGroupRouterStub) ProbeAPIKeyGroup(_ context.Context, group *Group, _, _ string) (APIKeyGroupAvailability, error) {
 	return s[group.ID], nil
+}
+
+func TestAPIKeyMultiGroupModelListWithCompositeRouter(t *testing.T) {
+	primary := int64(1)
+	groups := map[int64]*Group{
+		1: {ID: 1, Status: StatusActive, Platform: PlatformComposite},
+		2: {ID: 2, Status: StatusActive, Platform: PlatformComposite},
+	}
+	key := &APIKey{UserID: 7, GroupID: &primary, GroupIDs: []int64{1, 2}, Group: groups[1], User: &User{ID: 7}}
+	svc := &APIKeyService{
+		groupRepo:         multiGroupRepoStub{groups: groups},
+		userGroupRateRepo: multiGroupRateStub{denied: map[int64][]string{1: {"gpt-hidden"}}},
+		groupRouter:       &GatewayService{compositeResolver: NewCompositeRouteResolver(nil)},
+	}
+
+	// Exercise the real composite resolver: an empty model cannot be routed,
+	// but it must not prevent an authorized user from fetching the catalogue.
+	_, err := svc.SelectRequestGroup(context.Background(), key, nil, "token", nil, nil, false)
+	require.Equal(t, "NO_AVAILABLE_API_KEY_GROUP", infraerrors.Reason(err))
+
+	selected, err := svc.SelectRequestGroup(context.Background(), key, nil, APIKeyGroupKindModelList, nil, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, primary, *selected.GroupID)
+	require.Same(t, groups[primary], selected.Group)
+	require.Equal(t, []string{"gpt-hidden"}, selected.DeniedModelsInGroup(), "catalogue filtering must retain the selected group's user restrictions")
+	require.Empty(t, key.DeniedModelsInGroup(), "selection must not mutate the shared auth snapshot")
+
+	// An optional model query must still respect per-group model permissions.
+	selected, err = svc.SelectRequestGroup(context.Background(), key, []string{"gpt-hidden"}, APIKeyGroupKindModelList, nil, nil, false)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), *selected.GroupID)
 }
 
 func TestAPIKeyMultiGroupSelectionUsesActualGroupAndDoesNotMutateAuthSnapshot(t *testing.T) {

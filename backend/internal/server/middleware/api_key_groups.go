@@ -67,6 +67,12 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 	if strings.Contains(path, "/videos") {
 		kind = "video"
 	}
+	if c.Request.Method == http.MethodGet {
+		switch c.FullPath() {
+		case "/v1/models", "/models", "/backend-api/codex/models":
+			kind = service.APIKeyGroupKindModelList
+		}
+	}
 	checkBilling := cfg.RunMode != config.RunModeSimple && c.Request.Method != http.MethodGet && !strings.HasSuffix(path, "/count_tokens")
 	penaltyConfig, penaltyErr := keys.SecurityPenaltyConfig(c.Request.Context())
 	if penaltyErr != nil {
