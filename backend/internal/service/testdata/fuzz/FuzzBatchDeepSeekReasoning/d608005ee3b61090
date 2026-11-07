@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"messages\"A[00{\"role\"\"assistant\"0")
