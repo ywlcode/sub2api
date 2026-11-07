@@ -169,7 +169,11 @@ func (c *codexGroupManifestCache) build(ctx context.Context, key [32]byte, build
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return bytes.Clone(result.([]byte)), nil
+	body, ok := result.([]byte)
+	if !ok {
+		return nil, fmt.Errorf("unexpected Codex group manifest result type: %T", result)
+	}
+	return bytes.Clone(body), nil
 }
 
 func (s *GatewayService) cachedCodexGroupManifest(ctx context.Context, platform string, models []string, accounts []Account, group *Group, routes []CompositeModelRoute, routesAvailable bool) ([]byte, error) {
