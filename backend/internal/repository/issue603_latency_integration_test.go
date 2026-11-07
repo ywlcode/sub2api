@@ -112,7 +112,9 @@ func TestIssue603NetworkMinuteStorageAndBodySQL(t *testing.T) {
 		}
 		require.NoError(t, insertNetworkSample(ctx, tx, p))
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO request_connection_traces(trace_id,started_at,request_id,client_request_id,user_id,api_key_id,path,stream,detail) VALUES($1,$2,'synthetic603','',0,0,'/v1/responses',true,'{"body_bytes":1048577,"body_complete":false,"status":499}'::jsonb)`, uuid.NewString(), now)
+	// Application writes persist the measured byte count in the indexed column;
+	// historical JSON-only rows are covered by the separate backfill regression.
+	_, err := tx.ExecContext(ctx, `INSERT INTO request_connection_traces(trace_id,started_at,request_id,client_request_id,user_id,api_key_id,path,stream,body_bytes,detail) VALUES($1,$2,'synthetic603','',0,0,'/v1/responses',true,1048577,'{"body_bytes":1048577,"body_complete":false,"status":499}'::jsonb)`, uuid.NewString(), now)
 	require.NoError(t, err)
 	series, err := readNetworkSeries(ctx, tx, now, now.Add(2*time.Minute))
 	require.NoError(t, err)

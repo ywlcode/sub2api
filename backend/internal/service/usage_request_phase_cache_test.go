@@ -10,7 +10,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9" //nolint:depguard // Exercise the cache adapter against isolated miniredis.
 	"github.com/stretchr/testify/require"
 )
 

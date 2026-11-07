@@ -182,7 +182,7 @@ func (u *volcengineHTTP) send(req *http.Request, send func(*http.Request) (*http
 	default:
 		return send(req)
 	}
-	defer req.Body.Close()
+	defer func() { _ = req.Body.Close() }()
 	if err := context.Cause(req.Context()); err != nil {
 		return nil, err
 	}

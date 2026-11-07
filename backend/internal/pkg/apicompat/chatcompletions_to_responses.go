@@ -129,12 +129,6 @@ func ChatCompletionsToResponsesWithOptions(req *ChatCompletionsRequest, opts Res
 	return out, nil
 }
 
-// convertChatMessagesToResponsesInput converts the Chat Completions messages
-// array into a Responses API input items array.
-func convertChatMessagesToResponsesInput(msgs []ChatMessage) ([]ResponsesInputItem, error) {
-	return convertChatMessagesToResponsesInputWithReasoning(msgs, false)
-}
-
 func convertChatMessagesToResponsesInputWithReasoning(msgs []ChatMessage, preserveReasoning bool) ([]ResponsesInputItem, error) {
 	var out []ResponsesInputItem
 	legacyIDs := legacyFunctionCallIDs{msgs: msgs}
