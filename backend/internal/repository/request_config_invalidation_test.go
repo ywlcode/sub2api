@@ -14,7 +14,7 @@ import (
 func TestSchedulerConfigNotificationUsesAuthSubscription(t *testing.T) {
 	server := miniredis.RunT(t)
 	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
-	defer client.Close()
+	t.Cleanup(func() { require.NoError(t, client.Close()) })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	subscriber := NewAPIKeyCache(client)
@@ -25,7 +25,8 @@ func TestSchedulerConfigNotificationUsesAuthSubscription(t *testing.T) {
 	}()
 	require.Eventually(t, func() bool { return server.PubSubNumSub(authCacheInvalidateChannel)[authCacheInvalidateChannel] == 1 }, time.Second, time.Millisecond)
 	message := service.RequestConfigInvalidationPrefix + "catalog:0"
-	publisher := NewSchedulerCache(client).(*schedulerCache)
+	publisher, ok := NewSchedulerCache(client).(*schedulerCache)
+	require.True(t, ok)
 	require.NoError(t, publisher.NotifyRequestConfigInvalidation(ctx, message))
 	select {
 	case got := <-received:

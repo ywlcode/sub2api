@@ -140,7 +140,11 @@ func (c *requestConfigCache[K, V]) get(ctx context.Context, key K, load func(con
 			if r.Err != nil {
 				return zero, r.Err
 			}
-			return r.Val.(V), nil
+			value, ok := r.Val.(V)
+			if !ok {
+				return zero, fmt.Errorf("unexpected request configuration result type: %T", r.Val)
+			}
+			return value, nil
 		}
 	}
 	return zero, errRequestConfigChanged
