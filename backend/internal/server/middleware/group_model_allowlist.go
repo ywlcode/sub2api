@@ -141,7 +141,7 @@ func groupModelAllowlistModelsFromBody(c *gin.Context) ([]string, bool) {
 	if !ok {
 		return nil, false
 	}
-	return requestmodel.FromBodyCandidates(c.FullPath(), c.GetHeader("Content-Type"), body), true
+	return requestmodel.FromRequestCandidates(c.Request, c.FullPath(), body), true
 }
 
 // readAdmissionRequestBody 供准入中间件读取请求体：读完用 PrereadBody 回填，后续 handler

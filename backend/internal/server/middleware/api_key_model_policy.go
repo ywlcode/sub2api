@@ -28,11 +28,11 @@ func APIKeyModelPolicy() gin.HandlerFunc {
 		if !ok {
 			return
 		}
-		if !gjson.ValidBytes(body) {
+		if !requestmodel.ValidJSON(c.Request, body) {
 			c.Next() // Preserve the endpoint's existing malformed-body response.
 			return
 		}
-		clientModels := requestmodel.FromBodyCandidates(c.FullPath(), c.GetHeader("Content-Type"), body)
+		clientModels := requestmodel.FromRequestCandidates(c.Request, c.FullPath(), body)
 		models := service.APIKeyModelCandidates(key, clientModels)
 		for _, model := range models {
 			if key.Group != nil && key.Group.ModelAllowlistEnabled() && !key.Group.ModelAllowlist.Allows(model) {

@@ -4,6 +4,7 @@ import (
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"net/http"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 	"github.com/gin-gonic/gin"
 )
 
@@ -15,6 +16,7 @@ func RequestBodyLimit(maxBytes int64, budgets ...*pkghttputil.BodyMemoryBudget) 
 			defer release()
 			c.Request = c.Request.WithContext(ctx)
 		}
+		defer func() { requestmodel.Release(c.Request) }()
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
 		c.Next()
 	}

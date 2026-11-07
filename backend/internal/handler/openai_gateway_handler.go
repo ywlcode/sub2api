@@ -772,7 +772,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	defer stopCompactKeepalive()
 
 	// 校验请求体 JSON 合法性
-	if !gjson.ValidBytes(body) {
+	if !requestmodel.ValidJSON(c.Request, body) {
 		logRequestBodyParseFailure(reqLog, body, nil)
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 		return
@@ -802,14 +802,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			zap.String("normalization", "call_output_to_user_message"),
 		)
 	}
-	if normalizedBody, changed := normalizeCodexAutomationBootstrap(body); changed {
-		body = normalizedBody
+	body, automationChanged, delegationChanged := normalizeCodexBootstraps(body)
+	if automationChanged {
 		reqLog.Info("openai.codex_automation_bootstrap_normalized",
 			zap.String("normalization", "call_output_to_user_message"),
 		)
 	}
-	if normalizedBody, changed := normalizeCodexDelegationBootstrap(body); changed {
-		body = normalizedBody
+	if delegationChanged {
 		reqLog.Info("openai.codex_delegation_bootstrap_normalized",
 			zap.String("normalization", "call_output_to_user_message"),
 		)
@@ -1690,7 +1689,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		return
 	}
 
-	if !gjson.ValidBytes(body) {
+	if !requestmodel.ValidJSON(c.Request, body) {
 		logRequestBodyParseFailure(reqLog, body, nil)
 		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
 		return
@@ -2269,15 +2268,28 @@ func normalizeCodexCallOutputBootstrap(body []byte, isCandidate func(map[string]
 	if err := decoder.Decode(&request); err != nil {
 		return body, false
 	}
+	if !normalizeCodexBootstrapObject(request, isCandidate, allowHistoricalContext) {
+		return body, false
+	}
+	normalized, err := json.Marshal(request)
+	if err != nil {
+		return body, false
+	}
+	return normalized, true
+}
+
+// normalizeCodexBootstrapObject validates an entire rule before changing any item.
+// The combined entry point applies automation first, then delegation, as before.
+func normalizeCodexBootstrapObject(request map[string]any, isCandidate func(map[string]any) bool, allowHistoricalContext bool) bool {
 	if previousResponseID, exists := request["previous_response_id"]; exists {
 		value, ok := previousResponseID.(string)
 		if !ok || (!allowHistoricalContext && strings.TrimSpace(value) != "") {
-			return body, false
+			return false
 		}
 	}
 	input, ok := request["input"].([]any)
 	if !ok {
-		return body, false
+		return false
 	}
 
 	// Responses built-ins follow the *_call / *_call_output naming convention,
@@ -2294,7 +2306,7 @@ func normalizeCodexCallOutputBootstrap(body []byte, isCandidate func(map[string]
 			callIDValue, exists := item["call_id"]
 			callID, isString := callIDValue.(string)
 			if exists && (!isString || strings.TrimSpace(callID) != "") {
-				return body, false
+				return false
 			}
 			continue
 		}
@@ -2302,13 +2314,13 @@ func normalizeCodexCallOutputBootstrap(body []byte, isCandidate func(map[string]
 			if allowHistoricalContext && strings.TrimSpace(stringField(item, "id")) != "" {
 				continue
 			}
-			return body, false
+			return false
 		}
 		if strings.HasSuffix(typ, "_call") || isResponsesCallOutputType(typ) {
 			if allowHistoricalContext && strings.TrimSpace(stringField(item, "call_id")) != "" {
 				continue
 			}
-			return body, false
+			return false
 		}
 	}
 
@@ -2332,14 +2344,7 @@ func normalizeCodexCallOutputBootstrap(body []byte, isCandidate func(map[string]
 		}
 		changed = true
 	}
-	if !changed {
-		return body, false
-	}
-	normalized, err := json.Marshal(request)
-	if err != nil {
-		return body, false
-	}
-	return normalized, true
+	return changed
 }
 
 func hasUniqueJSONMembers(body []byte) bool {
