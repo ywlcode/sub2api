@@ -2102,6 +2102,11 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 		}
 		// 配置文件不存在时使用默认值
 	}
+	// Older deployments may explicitly retain usage logs for more than 30 days
+	// while inheriting dedup retention. Keep that implicit default valid without
+	// overriding an explicit dedup setting (which must still pass validation).
+	viper.SetDefault("dashboard_aggregation.retention.usage_billing_dedup_days",
+		max(30, viper.GetInt("dashboard_aggregation.retention.usage_logs_days")))
 	trustedProxiesEnv, trustedProxiesEnvConfigured := os.LookupEnv("SERVER_TRUSTED_PROXIES")
 	forwardedClientIPHeadersEnv, forwardedClientIPHeadersEnvConfigured := os.LookupEnv("SECURITY_FORWARDED_CLIENT_IP_HEADERS")
 	trustedProxiesConfigured := viper.InConfig("server.trusted_proxies") ||
