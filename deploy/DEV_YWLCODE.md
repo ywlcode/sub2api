@@ -1,6 +1,8 @@
 # dev-ywlcode 分支维护与 Docker 发布
 
-本指南用于 `ywlcode/sub2api` 的自用分支 `dev-ywlcode`：在开发机同步上游、测试和构建镜像，再更新 `boscserver:/root/sub2api-deploy` 中的应用容器。PostgreSQL、Redis 继续使用现有 Docker 容器及数据目录。
+本指南用于 `ywlcode/sub2api` 的自用分支 `dev-ywlcode`：在开发机同步上游、测试和构建镜像，向 `ecosserver`、`boscserver` 的 `/root/sub2api-deploy` 上传同一镜像，再先后更新两机应用容器。PostgreSQL、Redis 继续使用现有 Docker 容器及数据目录。
+
+**强制顺序：双机上传并校验 → ecosserver 切换 → 真实用户请求完整响应验收 → boscserver 切换 → 验收。** Codex 的模型服务依赖 boscserver，禁止双机同时切换，也禁止在 ecosserver 验收完成前切换 boscserver。详见 [部署顺序要求](README.md#强制部署顺序双机上传先-ecosserver后-boscserver)。
 
 ## 仓库、分支与发布边界
 
@@ -180,9 +182,9 @@ docker image inspect "$ywlcode_image" \
 
 确认输出是 `linux/amd64`，程序 commit 和 revision 都与本次构建 SHA 一致。`-version` 只验证程序和镜像启动入口，不代表已经在生产数据库上完成升级或业务验收。
 
-## 阶段 A：导入镜像并准备服务器配置
+## 阶段 A：双机导入镜像
 
-以下步骤会加载镜像、修改配置，但不会切换运行中的应用。
+以下步骤只上传、校验和加载镜像，不修改运行配置，不切换应用。任何部署都必须完成两台服务器的镜像准备。
 
 ### 导出、传输和校验
 
@@ -199,13 +201,33 @@ docker image save --platform linux/amd64 "$ywlcode_image" | gzip -1 > "$ywlcode_
   sha256sum "sub2api-ywlcode-${ywlcode_sha}.tar.gz" \
     > "sub2api-ywlcode-${ywlcode_sha}.tar.gz.sha256"
 )
-scp "$ywlcode_archive" "${ywlcode_archive}.sha256" boscserver:/root/sub2api-deploy/
-ssh boscserver "cd /root/sub2api-deploy && sha256sum -c sub2api-ywlcode-${ywlcode_sha}.tar.gz.sha256 && docker load -i sub2api-ywlcode-${ywlcode_sha}.tar.gz && docker run --rm --network none sub2api-ywlcode:${ywlcode_sha} -version"
+scp "$ywlcode_archive" "${ywlcode_archive}.sha256" ecosserver:/root/sub2api-deploy/ &
+ywlcode_ecos_upload=$!
+scp "$ywlcode_archive" "${ywlcode_archive}.sha256" boscserver:/root/sub2api-deploy/ &
+ywlcode_bosc_upload=$!
+ywlcode_upload_status=0
+wait "$ywlcode_ecos_upload" || ywlcode_upload_status=1
+wait "$ywlcode_bosc_upload" || ywlcode_upload_status=1
+test "$ywlcode_upload_status" -eq 0
 ```
 
-文件校验、镜像加载、服务器端程序版本必须都成功。镜像名是服务器本地已加载的标签，不需要先上传公共镜像仓库；`SUB2API_IMAGE` 也不能填写 GitHub 分支地址。
+两次上传都成功后，在两机分别执行校验及导入；任一步失败都不得进入应用切换：
 
-### 修改 .env
+```bash
+(
+  for ywlcode_host in ecosserver boscserver; do
+    ssh "$ywlcode_host" "cd /root/sub2api-deploy && sha256sum -c sub2api-ywlcode-${ywlcode_sha}.tar.gz.sha256 && docker load -i sub2api-ywlcode-${ywlcode_sha}.tar.gz && docker run --rm --network none sub2api-ywlcode:${ywlcode_sha} -version && docker image inspect sub2api-ywlcode:${ywlcode_sha} --format '{{.Id}} revision={{index .Config.Labels \"org.opencontainers.image.revision\"}}'" || exit 1
+  done
+)
+```
+
+两机文件校验、镜像加载和程序版本必须全部成功，镜像 ID、commit、revision 必须一致并与本地产物相符。镜像名是服务器本地已加载的标签，不需要先上传公共镜像仓库；`SUB2API_IMAGE` 也不能填写 GitHub 分支地址。
+
+## 阶段 B：先切换 ecosserver
+
+先登录 `ecosserver`；本阶段不得在 `boscserver` 修改 `.env` 或重建应用。
+
+### 修改当前服务器的 .env
 
 只修改服务器 `/root/sub2api-deploy/.env` 中的 `SUB2API_IMAGE`，值必须与本次加载的镜像标签一致。例如已经构建过的功能提交：
 
@@ -219,7 +241,7 @@ SUB2API_IMAGE=sub2api-ywlcode:3f751ce65
 
 仅修改 `.env` 不会改变现有容器。`docker compose restart sub2api` 也不能替换镜像或应用新的容器环境变量，需要下一阶段的重新创建。
 
-## 阶段 B：真正切换应用
+### 切换当前服务器的应用
 
 这一阶段与准备镜像、修改 `.env` 是独立操作。执行前确认将进行应用切换，可能短暂中断请求，现有流式和 WebSocket 连接也可能断开。本流程不自动备份 PostgreSQL 或 Redis；本次操作已明确选择不备份它们。
 
@@ -251,6 +273,20 @@ docker inspect --format '{{.Name}} {{.Id}} {{.State.StartedAt}}' sub2api-postgre
 ```
 
 等待应用达到 healthy，确认健康接口成功、实际 commit 与目标镜像一致、数据库迁移成功，并与更新前记录比较 PostgreSQL/Redis 的容器 ID 和启动时间。`compose up -d` 返回成功不等于这些检查已经通过。需要日志时查看 `docker compose logs --tail 100 sub2api`，分享前先脱敏。
+
+### ecosserver 的真实用户请求验收
+
+服务检查通过后，还必须观察至少一个**新版启动后进入的真实用户模型请求**，确认上游处理和下游响应均正常结束。可以观察已有生产流量；主动发起请求时使用已获授权的测试用户／Key，不创建新凭据或修改账号策略来绕过验收。
+
+发布记录至少包含：目标 commit、容器启动时间、请求 ID、请求开始及完成时间、模型、最终状态，以及能证明响应正常完成的日志／诊断证据。流式请求应有正常终止证据，且没有流中断、客户端取消或下游写入错误。记录证据时不保存 API Key、提示词或用户内容。
+
+只有 `/health` 成功、模型列表可访问、首字已输出或用量已入库，都不算完整响应验收。没有用户请求、请求尚未结束或证据不足时继续等待，**不得进入阶段 C**；发现故障时先修复或回退 ecosserver，保持 boscserver 继续服务。
+
+## 阶段 C：ecosserver 验收后再切换 boscserver
+
+核对并保存阶段 B 的服务和用户请求验收证据后，才登录 `boscserver`，按阶段 B 的步骤修改其 `SUB2API_IMAGE`、dry-run 并只重建应用容器，再验证版本、健康、迁移及真实用户请求。
+
+切换命令、健康检查及失败回退应通过独立 SSH／服务器端脚本执行，避免在 boscserver 模型 API 短暂不可用时依赖 Codex 再生成恢复命令。始终保留已验收的 ecosserver 和各机旧镜像；两台应用不得同时切换。
 
 内容审查的“仅 OpenAI”需要在「内容审查 → 设置 → 命中通知 → 封禁范围」手动选择；升级不会自动改变旧配置或解除历史整号禁用。详细行为见 [内容审查用户管理](../docs/content-moderation-user-allowlists.md#内容审查封禁范围)。
 
