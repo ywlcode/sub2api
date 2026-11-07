@@ -114,10 +114,6 @@ type convertedLegacyResponsesMessages struct {
 	hasReasoningEffort bool
 }
 
-func convertLegacyResponsesMessages(cfg *config.Config, body []byte) (convertedLegacyResponsesMessages, error) {
-	return convertLegacyResponsesMessagesForAccount(cfg, nil, body)
-}
-
 func convertLegacyResponsesMessagesForAccount(cfg *config.Config, account *Account, body []byte) (convertedLegacyResponsesMessages, error) {
 	var converted convertedLegacyResponsesMessages
 	var chatRequest apicompat.ChatCompletionsRequest

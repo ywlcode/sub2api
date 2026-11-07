@@ -24,10 +24,6 @@ func chatCompletionsToResponsesForAccount(cfg *config.Config, account *Account, 
 	})
 }
 
-func anthropicToResponses(cfg *config.Config, req *apicompat.AnthropicRequest) (*apicompat.ResponsesRequest, error) {
-	return apicompat.AnthropicToResponsesWithMinOutputTokens(req, configuredMinOutputTokens(cfg))
-}
-
 func anthropicToResponsesForAccount(cfg *config.Config, account *Account, req *apicompat.AnthropicRequest) (*apicompat.ResponsesRequest, error) {
 	return apicompat.AnthropicToResponsesWithOptions(req, apicompat.ResponsesConversionOptions{
 		MinOutputTokens:          configuredMinOutputTokens(cfg),
