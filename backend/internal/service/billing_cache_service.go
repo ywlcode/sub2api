@@ -115,6 +115,7 @@ type BillingCacheService struct {
 	apiKeyRateLimitLoader    apiKeyRateLimitLoader
 	userRPMCache             UserRPMCache
 	userGroupRateRepo        UserGroupRateRepository
+	requestRPMOverride       func(context.Context, int64, int64) (*int, error)
 	cfg                      *config.Config
 	circuitBreaker           *billingCircuitBreaker
 	userPlatformQuotaRepo    UserPlatformQuotaRepository
@@ -960,7 +961,7 @@ func (s *BillingCacheService) checkRPM(ctx context.Context, user *User, group *G
 		if user.UserGroupRPMOverride != nil {
 			override = user.UserGroupRPMOverride
 		} else if s.userGroupRateRepo != nil {
-			dbOverride, err := s.userGroupRateRepo.GetRPMOverrideByUserAndGroup(ctx, user.ID, group.ID)
+			dbOverride, err := s.loadRPMOverride(ctx, user.ID, group.ID)
 			if err != nil {
 				logger.LegacyPrintf(
 					"service.billing_cache",

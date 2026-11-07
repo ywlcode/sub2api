@@ -4,17 +4,16 @@
  */
 
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, onScopeDispose } from 'vue'
+import { startVisiblePolling } from '@/utils/visiblePolling'
 import subscriptionsAPI from '@/api/subscriptions'
 import type { UserSubscription } from '@/types'
 
 // Cache TTL: 60 seconds
 const CACHE_TTL_MS = 60_000
 
-// Request generation counter to invalidate stale in-flight responses
-let requestGeneration = 0
-
 export const useSubscriptionStore = defineStore('subscriptions', () => {
+  let requestGeneration = 0
   // State
   const activeSubscriptions = ref<UserSubscription[]>([])
   const loading = ref(false)
@@ -25,7 +24,8 @@ export const useSubscriptionStore = defineStore('subscriptions', () => {
   let activePromise: Promise<UserSubscription[]> | null = null
 
   // Auto-refresh interval
-  let pollerInterval: ReturnType<typeof setInterval> | null = null
+  let stopSubscriptionPolling: (() => void) | null = null
+  onScopeDispose(clear)
 
   // Computed
   const hasActiveSubscriptions = computed(() => activeSubscriptions.value.length > 0)
@@ -86,10 +86,11 @@ export const useSubscriptionStore = defineStore('subscriptions', () => {
    * Start auto-refresh polling 
    */
   function startPolling() {
-    if (pollerInterval) return
+    if (stopSubscriptionPolling) return
 
-    pollerInterval = setInterval(() => {
-      fetchActiveSubscriptions(true).catch((error) => {
+    stopSubscriptionPolling = startVisiblePolling(() => {
+      // A background tick must not supersede an in-flight explicit refresh.
+      fetchActiveSubscriptions().catch((error) => {
         console.error('Subscription polling failed:', error)
       })
     }, 5 * 60 * 1000)
@@ -99,10 +100,8 @@ export const useSubscriptionStore = defineStore('subscriptions', () => {
    * Stop auto-refresh polling
    */
   function stopPolling() {
-    if (pollerInterval) {
-      clearInterval(pollerInterval)
-      pollerInterval = null
-    }
+    stopSubscriptionPolling?.()
+    stopSubscriptionPolling = null
   }
 
   /**

@@ -52,6 +52,8 @@ describe('useSubscriptionStore', () => {
   })
 
   afterEach(() => {
+    useSubscriptionStore().$dispose()
+    vi.restoreAllMocks()
     vi.useRealTimers()
   })
 
@@ -211,6 +213,30 @@ describe('useSubscriptionStore', () => {
   // --- polling ---
 
   describe('startPolling / stopPolling', () => {
+    it('background polling joins an ongoing request', async () => {
+      let resolve!: (value: unknown) => void
+      mockGetActiveSubscriptions.mockImplementationOnce(() => new Promise(r => { resolve = r }))
+      const store = useSubscriptionStore()
+      const pending = store.fetchActiveSubscriptions(true)
+      store.startPolling()
+      vi.advanceTimersByTime(5 * 60 * 1000)
+      expect(mockGetActiveSubscriptions).toHaveBeenCalledTimes(1)
+      resolve(fakeSubscriptions)
+      await pending
+    })
+
+    it('pauses hidden polling and refreshes overdue subscriptions on return', async () => {
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      mockGetActiveSubscriptions.mockResolvedValue(fakeSubscriptions)
+      const store = useSubscriptionStore()
+      store.startPolling()
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000)
+      expect(mockGetActiveSubscriptions).not.toHaveBeenCalled()
+      visibility.mockReturnValue('visible')
+      document.dispatchEvent(new Event('visibilitychange'))
+      expect(mockGetActiveSubscriptions).toHaveBeenCalledTimes(1)
+    })
+
     it('startPolling 不会创建重复 interval', () => {
       const store = useSubscriptionStore()
       mockGetActiveSubscriptions.mockResolvedValue([])
