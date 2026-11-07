@@ -1,0 +1,34 @@
+name: Relay
+on:
+  push:
+    branches: [dev-ywlcode-relay]
+  pull_request:
+    paths:
+      - backend/internal/relay/**
+      - backend/internal/pkg/volcengine/**
+      - backend/cmd/relay/**
+      - Dockerfile.relay
+      - .github/workflows/relay.yml
+permissions:
+  contents: read
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Test relay and transport cancellation
+        working-directory: backend
+        run: go test -race ./internal/relay ./internal/pkg/volcengine ./cmd/relay
+      - name: Verify dependency isolation and build
+        working-directory: backend
+        run: |
+          go list -deps ./cmd/relay > /tmp/relay-deps.txt
+          if grep -E '^(database/sql|github.com/redis/|github.com/gin-gonic/|github.com/Wei-Shaw/sub2api/internal/service$)' /tmp/relay-deps.txt; then
+            exit 1
+          fi
+          CGO_ENABLED=0 go build -trimpath -o /tmp/sub2api-relay ./cmd/relay
+          /tmp/sub2api-relay -version

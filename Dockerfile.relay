@@ -1,0 +1,24 @@
+# Independent build: no frontend, database clients or full gateway dependencies.
+ARG GOLANG_IMAGE=golang:1.27.3-alpine
+FROM --platform=$BUILDPLATFORM ${GOLANG_IMAGE} AS build
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ARG VERSION=dev
+ARG COMMIT=unknown
+ARG DATE=unknown
+WORKDIR /src/backend
+COPY backend/go.mod ./
+COPY backend/cmd/relay ./cmd/relay
+COPY backend/internal/relay ./internal/relay
+COPY backend/internal/pkg/volcengine ./internal/pkg/volcengine
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath \
+    -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT} -X main.Date=${DATE}" \
+    -o /relay ./cmd/relay
+
+FROM scratch
+COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+COPY --from=build /relay /app/relay
+USER 1000:1000
+EXPOSE 8080
+HEALTHCHECK --interval=15s --timeout=5s --start-period=5s --retries=3 CMD ["/app/relay", "-healthcheck"]
+ENTRYPOINT ["/app/relay"]

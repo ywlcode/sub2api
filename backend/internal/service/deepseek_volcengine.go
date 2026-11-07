@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/volcengine"
 )
 
 // DeepSeekVolcengineCompatibilityCredential is explicit because DeepSeek accounts
@@ -23,122 +24,12 @@ func (a *Account) IsDeepSeekVolcengineCompatibilityEnabled() bool {
 	return enabled
 }
 
-// normalizeVolcengineRequestBody only translates known compatibility aliases.
-// Unknown fields, tool arguments, literal tags and user text are not scrubbed.
+// normalizeVolcengineRequestBody keeps the compatibility opt-in account-scoped.
 func normalizeVolcengineRequestBody(account *Account, body []byte, protocol string) ([]byte, error) {
-	if !account.IsDeepSeekVolcengineCompatibilityEnabled() || len(body) == 0 {
+	if !account.IsDeepSeekVolcengineCompatibilityEnabled() {
 		return body, nil
 	}
-	var request map[string]any
-	if err := decodeOpenAIJSONUseNumber(body, &request); err != nil {
-		return nil, fmt.Errorf("normalize Volcengine request: %w", err)
-	}
-	if request == nil {
-		return body, nil
-	}
-	normalizeVolcengineReasoning(request, protocol)
-	normalizeDeepSeekReasoningInput(request["input"], true)
-	for _, field := range []string{"input", "messages"} {
-		items, _ := request[field].([]any)
-		for _, value := range items {
-			item, ok := value.(map[string]any)
-			if !ok {
-				continue
-			}
-			delete(item, "internal_chat_message_metadata_passthrough")
-			if field == "input" {
-				if volcengineUntypedMessage(item) {
-					item["type"] = "message"
-				}
-				parts, _ := item["content"].([]any)
-				for _, value := range parts {
-					if part, ok := value.(map[string]any); ok && part["type"] == "output_text" {
-						delete(part, "logprobs")
-					}
-				}
-			}
-		}
-	}
-	return marshalOpenAIUpstreamJSON(request)
-}
-
-func volcengineUntypedMessage(item map[string]any) bool {
-	if typ, exists := item["type"]; exists && typ != nil && typ != "" {
-		return false
-	}
-	// Do not relabel tool/reasoning items that happen to carry role/content.
-	for _, key := range []string{"call_id", "tool_call_id", "tool_calls", "function_call", "arguments", "output", "encrypted_content"} {
-		if _, exists := item[key]; exists {
-			return false
-		}
-	}
-	switch item["role"] {
-	case "system", "developer", "user", "assistant":
-	default:
-		return false
-	}
-	switch item["content"].(type) {
-	case string, []any:
-		return true
-	}
-	return false
-}
-
-func volcengineEffort(value any) string {
-	effort, _ := value.(string)
-	effort = strings.ToLower(strings.TrimSpace(effort))
-	switch effort {
-	case "off", "disabled":
-		return "none"
-	default:
-		return effort
-	}
-}
-
-func normalizeVolcengineReasoning(request map[string]any, protocol string) {
-	thinking, _ := request["thinking"].(map[string]any)
-	mode := volcengineEffort(thinking["type"])
-	if protocol == APIProtocolAnthropic {
-		output, _ := request["output_config"].(map[string]any)
-		effort := volcengineEffort(output["effort"])
-		if mode == "none" || effort == "none" {
-			request["thinking"] = map[string]any{"type": "disabled"}
-			delete(output, "effort")
-			if len(output) == 0 {
-				delete(request, "output_config")
-			}
-		} else if effort != "" {
-			output["effort"] = effort
-		}
-		return
-	}
-	// Native nested effort wins over the legacy flat alias, as in the bridges.
-	reasoning, _ := request["reasoning"].(map[string]any)
-	effort := volcengineEffort(reasoning["effort"])
-	if effort == "" {
-		effort = volcengineEffort(request["reasoning_effort"])
-	}
-	if mode == "none" {
-		effort = "none"
-	}
-	if effort == "" {
-		return
-	}
-	// Use a single control so Ark never sees disabled + high, or enabled + none.
-	if mode == "none" || mode == "enabled" {
-		delete(request, "thinking")
-	}
-	if protocol == APIProtocolChatCompletions {
-		request["reasoning_effort"] = effort
-		delete(request, "reasoning")
-	} else {
-		if reasoning == nil {
-			reasoning = make(map[string]any)
-		}
-		reasoning["effort"] = effort
-		request["reasoning"] = reasoning
-		delete(request, "reasoning_effort")
-	}
+	return volcengine.NormalizeRequest(body, protocol)
 }
 
 // Apply the final wire adaptation before gzip, for every HTTP ingress bridge
