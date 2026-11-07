@@ -25,11 +25,11 @@ import (
 )
 
 type Handler struct {
-	config  Config
-	keyHash [32]byte
-	proxy   *httputil.ReverseProxy
-	logger  *slog.Logger
-	Timings Timings
+	config    Config
+	keyHashes [][32]byte
+	proxy     *httputil.ReverseProxy
+	logger    *slog.Logger
+	Timings   Timings
 }
 
 type traceState struct {
@@ -51,7 +51,10 @@ func NewHandler(config Config, logger *slog.Logger) (*Handler, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	h := &Handler{config: config, keyHash: sha256.Sum256([]byte(config.Key)), logger: logger}
+	h := &Handler{config: config, keyHashes: [][32]byte{sha256.Sum256([]byte(config.Key))}, logger: logger}
+	for _, key := range config.AdditionalKeys {
+		h.keyHashes = append(h.keyHashes, sha256.Sum256([]byte(key)))
+	}
 	transport := &http.Transport{Proxy: http.ProxyFromEnvironment,
 		DialContext:       (&net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
 		ForceAttemptHTTP2: true, MaxIdleConns: 4096, MaxIdleConnsPerHost: 2048,
@@ -104,7 +107,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	provided := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	digest := sha256.Sum256([]byte(provided))
-	if subtle.ConstantTimeCompare(digest[:], h.keyHash[:]) != 1 || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+	matched := 0
+	for _, keyHash := range h.keyHashes {
+		matched |= subtle.ConstantTimeCompare(digest[:], keyHash[:])
+	}
+	if matched != 1 || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 		writeError(w, http.StatusUnauthorized, "invalid_relay_key")
 		return
 	}

@@ -276,6 +276,45 @@ func TestRelayStatsRequireKey(t *testing.T) {
 	}
 }
 
+func TestRelayMultipleFixedKeys(t *testing.T) {
+	var calls atomic.Int32
+	_, s := fixture(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Header.Get("Authorization") != "Bearer upstream-fixture" {
+			t.Error("relay key leaked to upstream")
+		}
+		w.WriteHeader(http.StatusOK)
+	}, func(c *Config) { c.AdditionalKeys = []string{"ecos-fixture", "third-fixture"} })
+	for _, test := range []struct {
+		auth string
+		want int
+	}{
+		{"Bearer relay-fixture", 200},
+		{"Bearer ecos-fixture", 200},
+		{"Bearer third-fixture", 200},
+		{"Bearer unknown", 401},
+		{"ecos-fixture", 401},
+		{"", 401},
+	} {
+		r, err := http.NewRequest(http.MethodGet, s.URL+"/v1/models", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.Header.Set("Authorization", test.auth)
+		res, err := http.DefaultClient.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+		if res.StatusCode != test.want {
+			t.Errorf("auth status = %d, want %d", res.StatusCode, test.want)
+		}
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("upstream received %d requests, want 3", calls.Load())
+	}
+}
+
 func waitCompleted(t *testing.T, h *Handler, count uint64) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)

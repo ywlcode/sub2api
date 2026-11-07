@@ -19,6 +19,7 @@
 |---|---|
 | `RELAY_LISTEN` | `0.0.0.0:8080` |
 | `RELAY_KEY_FILE` | 固定中转 Key 文件，必填；也可用 `RELAY_KEY` |
+| `RELAY_ADDITIONAL_KEYS_FILE` | 可选的其他固定中转 Key，每行一个；只在启动时读取，最多 63 个，用于保留不同调用方已有的 Key |
 | `RELAY_UPSTREAM_KEY_FILE` | 方舟 Key 文件，必填；也可用 `RELAY_UPSTREAM_KEY` |
 | `RELAY_UPSTREAM_URL` | `https://ark.cn-beijing.volces.com/api/v3` |
 | `RELAY_VOLCENGINE_COMPATIBILITY` | `true` |
@@ -59,7 +60,7 @@ docker build -f Dockerfile.relay \
 
 该镜像只用于用户指定的国内中转，不能用于替换 boscserver、ecosserver 的完整网关服务。发布前运行中转测试、原火山兼容回归及适用 CI，保留准确提交和镜像校验和。镜像可同步归档到两台美国服务器，但它们继续运行完整网关。
 
-接管旧中转时，将原中转 API Key 和方舟 Key 在服务器本地写入只读文件；只替换应用容器，保留原数据库、Redis、数据目录及旧镜像用于回退。中转不执行数据库迁移。先在本机备用端口验证 gzip/非 gzip 与完整流式响应，再切换原端口。
+接管旧中转时，将原中转 API Key 和方舟 Key 在服务器本地写入只读文件；若不同调用方使用不同 Key，先核对每个调用方与旧中转有效 Key 的对应关系，并把额外 Key 配入 `RELAY_ADDITIONAL_KEYS_FILE`。运行中不查询数据库，后续 Key 变更需要更新文件并重启。只替换应用容器，保留原数据库、Redis、数据目录及旧镜像用于回退。中转不执行数据库迁移。先在本机备用端口验证每个调用方的 Key、gzip/非 gzip 与完整流式响应，再切换原端口。
 
 健康检查：`/app/relay -healthcheck`；版本检查：`/app/relay -version`。
 

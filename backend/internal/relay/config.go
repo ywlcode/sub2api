@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Listen                string
 	Key                   string
+	AdditionalKeys        []string
 	UpstreamKey           string
 	UpstreamURL           string
 	Compatibility         bool
@@ -37,6 +38,15 @@ func LoadConfig() (Config, error) {
 	}
 	if c.UpstreamKey, err = loadSecret("RELAY_UPSTREAM_KEY"); err != nil {
 		return c, err
+	}
+	additional, err := loadSecret("RELAY_ADDITIONAL_KEYS")
+	if err != nil {
+		return c, err
+	}
+	for _, line := range strings.Split(additional, "\n") {
+		if key := strings.TrimSpace(line); key != "" {
+			c.AdditionalKeys = append(c.AdditionalKeys, key)
+		}
 	}
 	if v := os.Getenv("RELAY_VOLCENGINE_COMPATIBILITY"); v != "" {
 		c.Compatibility, err = strconv.ParseBool(v)
@@ -78,6 +88,14 @@ func (c Config) Validate() error {
 	}
 	if strings.ContainsAny(c.Key+c.UpstreamKey, "\r\n") {
 		return errors.New("relay keys must be single-line values")
+	}
+	if len(c.AdditionalKeys) > 63 {
+		return errors.New("at most 63 additional relay keys are supported")
+	}
+	for _, key := range c.AdditionalKeys {
+		if strings.TrimSpace(key) == "" || strings.ContainsAny(key, "\r\n") {
+			return errors.New("additional relay keys must be nonempty single-line values")
+		}
 	}
 	u, err := url.Parse(c.UpstreamURL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
