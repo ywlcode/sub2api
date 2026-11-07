@@ -523,6 +523,8 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	defer s.invalidateRequestCatalog() // Also invalidate after partial writes.
+
 	if err := ValidateAccountCostMultiplierExtra(input.Extra); err != nil {
 		return nil, err
 	}
@@ -654,6 +656,8 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 }
 
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
+	defer s.invalidateRequestCatalog() // Also invalidate after partial writes.
+
 	if input.Platform != "" && s.entClient != nil && dbent.TxFromContext(ctx) == nil {
 		return s.scopedAdminTransaction(ctx, id, false, func(txctx context.Context) (*Account, error) {
 			return s.UpdateAccount(txctx, id, input)
@@ -1093,6 +1097,8 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	defer s.invalidateRequestCatalog() // Also invalidate after partial writes.
+
 	if err := ValidateRequestGzipExtra(updates); err != nil {
 		return err
 	}
@@ -1163,6 +1169,8 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 // BulkUpdateAccounts updates multiple accounts in one request.
 // It merges credentials/extra keys instead of overwriting the whole object.
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
+	defer s.invalidateRequestCatalog() // Also invalidate after partial writes.
+
 	if err := ValidateRequestGzipExtra(input.Extra); err != nil {
 		return nil, err
 	}
@@ -1606,6 +1614,8 @@ func (s *adminServiceImpl) resolveBulkUpdateTargetIDs(ctx context.Context, filte
 }
 
 func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
+	defer s.invalidateRequestCatalog() // Also invalidate after partial writes.
+
 	// 级联删除 spark 影子账号（先删影子，再删母账号）
 	shadows, err := s.accountRepo.ListShadowsByParent(ctx, id)
 	if err != nil {

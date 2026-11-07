@@ -302,6 +302,9 @@ type RateLimitCacheInvalidator interface {
 }
 
 type APIKeyService struct {
+	requestGroups             requestConfigCache[int64, []byte]
+	requestPolicies           requestConfigCache[userGroupPolicyKey, userGroupPolicy]
+	requestConfigGateway      atomic.Pointer[GatewayService]
 	groupAntiDistillation     *GroupAntiDistillationService
 	autoCredit                AutoCreditRepository
 	autoCreditBilling         *BillingCacheService
