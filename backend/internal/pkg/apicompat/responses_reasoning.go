@@ -28,7 +28,7 @@ func responsesOutputReasoningText(item ResponsesOutput) string {
 	var text strings.Builder
 	for _, part := range item.Content {
 		if part.Type == "reasoning_text" {
-			text.WriteString(part.Text)
+			_, _ = text.WriteString(part.Text)
 		}
 	}
 	if text.Len() > 0 {
@@ -36,7 +36,7 @@ func responsesOutputReasoningText(item ResponsesOutput) string {
 	}
 	for _, part := range item.Summary {
 		if part.Type == "summary_text" {
-			text.WriteString(part.Text)
+			_, _ = text.WriteString(part.Text)
 		}
 	}
 	return text.String()
