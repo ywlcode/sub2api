@@ -16,7 +16,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
@@ -692,7 +691,10 @@ func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver)
 		// Live 入口按 session.model 分发并改写（与白名单准入、Live handler 的
 		// 解析保持一致），避免顶层 model 别名与 session 模型不一致时改错对象。
 		routePath := c.FullPath()
-		model := requestmodel.FromBodyForRoute(routePath, c.GetHeader("Content-Type"), body)
+		model := ""
+		if candidates := requestmodel.FromRequestCandidates(c.Request, routePath, body); len(candidates) > 0 {
+			model = candidates[0]
+		}
 		if model != "" {
 			decision, err := resolver.Resolve(c.Request.Context(), apiKey.Group.ID, model, compositeRouteEndpointForPath(c.Request.URL.Path))
 			if err != nil {
@@ -710,7 +712,7 @@ func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver)
 			}
 			if decision.Matched {
 				c.Request = c.Request.WithContext(service.WithCompositeRouteDecision(c.Request.Context(), decision))
-				if upstreamModel := strings.TrimSpace(decision.UpstreamModel); upstreamModel != "" && upstreamModel != model && gjson.ValidBytes(body) {
+				if upstreamModel := strings.TrimSpace(decision.UpstreamModel); upstreamModel != "" && upstreamModel != model && requestmodel.ValidJSON(c.Request, body) {
 					if _, modelPath := requestmodel.JSONModelPathForRoute(routePath, body); modelPath != "" {
 						if rewritten, rewriteErr := sjson.SetBytes(body, modelPath, upstreamModel); rewriteErr == nil {
 							body = rewritten

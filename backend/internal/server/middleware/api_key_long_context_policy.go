@@ -32,7 +32,7 @@ func APIKeyLongContextPolicy(check APIKeyLongContextChecker) gin.HandlerFunc {
 		if !ok {
 			return
 		}
-		models := requestmodel.FromBodyCandidates(c.FullPath(), c.GetHeader("Content-Type"), body)
+		models := requestmodel.FromRequestCandidates(c.Request, c.FullPath(), body)
 		if model := groupModelAllowlistModelFromParams(c); model != "" {
 			models = append(models, model)
 		}

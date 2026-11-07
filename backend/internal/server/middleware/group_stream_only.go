@@ -5,10 +5,10 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/gemini"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requestmodel"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 
 	"github.com/gin-gonic/gin"
-	"github.com/tidwall/gjson"
 )
 
 // streamOnlyJSONRoutes 是请求体里用 `stream` 选择流式的对话生成入口（路由模板）。
@@ -66,7 +66,7 @@ func GroupStreamOnly() gin.HandlerFunc {
 				// 请求体读取失败（如超限 413）已写出响应。
 				return
 			}
-			if !jsonBodyRequestsStream(body) {
+			if !requestmodel.RequestsStream(c.Request, body) {
 				rejectNonStreamRequest(c, route)
 				return
 			}
@@ -83,26 +83,7 @@ func GroupStreamOnly() gin.HandlerFunc {
 
 // jsonBodyRequestsStream 报告请求体是否明确要求流式（规则见 GroupStreamOnly）。
 func jsonBodyRequestsStream(body []byte) bool {
-	if !gjson.ValidBytes(body) {
-		return false
-	}
-	root := gjson.ParseBytes(body)
-	if !root.IsObject() {
-		return false
-	}
-	found, streaming := false, true
-	root.ForEach(func(key, value gjson.Result) bool {
-		if !strings.EqualFold(key.String(), "stream") {
-			return true
-		}
-		found = true
-		if value.Type != gjson.True {
-			streaming = false
-			return false
-		}
-		return true
-	})
-	return found && streaming
+	return requestmodel.RequestsStream(nil, body)
 }
 
 // rejectNonStreamRequest 按入口协议返回 400：Gemini 用 Google 格式，Messages 用 Anthropic 格式，

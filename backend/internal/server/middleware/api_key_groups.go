@@ -50,7 +50,7 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 			return nil, nil
 		}
 		if len(models) == 0 {
-			models = requestmodel.FromBodyCandidates(c.FullPath(), c.GetHeader("Content-Type"), body)
+			models = requestmodel.FromRequestCandidates(c.Request, c.FullPath(), body)
 		}
 	}
 	if len(models) == 0 && c.Query("model") != "" {

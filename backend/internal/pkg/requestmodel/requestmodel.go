@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/jsonview"
 	"github.com/tidwall/gjson"
 )
 
@@ -51,8 +52,7 @@ func FromBodyCandidates(routePath, contentType string, body []byte) []string {
 		topLevel = models
 		session = sessionModelCandidates(sessions)
 	} else {
-		topLevel = jsonModelCandidates(body)
-		session = jsonSessionModelCandidates(body)
+		topLevel, session = jsonAllModelCandidates(body)
 	}
 
 	if IsLiveRequestRoute(routePath) {
@@ -116,6 +116,47 @@ func jsonModelWithPaths(body []byte, paths []string) (string, string) {
 		}
 	}
 	return "", ""
+}
+
+// jsonAllModelCandidates walks top-level fields once, retaining every duplicate
+// and case variant. Small model strings are cloned out of the borrowed body view.
+type jsonBodyFields struct {
+	topLevel, session                 []string
+	object, streamFound, allStreaming bool
+}
+
+func jsonAllModelCandidates(body []byte) (topLevel, session []string) {
+	fields := parseJSONBodyFields(body)
+	return fields.topLevel, fields.session
+}
+
+func parseJSONBodyFields(body []byte) jsonBodyFields {
+	root := jsonview.Parse(body)
+	fields := jsonBodyFields{object: root.IsObject(), allStreaming: true}
+	root.ForEach(func(key, value gjson.Result) bool {
+		name := key.String()
+		if strings.EqualFold(name, "stream") {
+			fields.streamFound = true
+			fields.allStreaming = fields.allStreaming && value.Type == gjson.True
+		}
+		if value.Type == gjson.String && strings.EqualFold(name, "model") {
+			if model := strings.TrimSpace(value.String()); model != "" {
+				fields.topLevel = append(fields.topLevel, strings.Clone(model))
+			}
+		}
+		if strings.EqualFold(name, "session") {
+			value.ForEach(func(key, value gjson.Result) bool {
+				if value.Type == gjson.String && strings.EqualFold(key.String(), "model") {
+					if model := strings.TrimSpace(value.String()); model != "" {
+						fields.session = append(fields.session, strings.Clone(model))
+					}
+				}
+				return true
+			})
+		}
+		return true
+	})
+	return fields
 }
 
 // jsonModelCandidates 返回顶层所有键名大小写不敏感等于 "model" 的字符串值，
