@@ -17,3 +17,12 @@ func Parse(body []byte) gjson.Result {
 	}
 	return gjson.Parse(unsafe.String(unsafe.SliceData(body), len(body)))
 }
+
+// Get has gjson.GetBytes lookup semantics without copying the selected subtree.
+// The same immutable-body lifetime rules as Parse apply to its result.
+func Get(body []byte, path string) gjson.Result {
+	if len(body) == 0 {
+		return gjson.Result{}
+	}
+	return gjson.Get(unsafe.String(unsafe.SliceData(body), len(body)), path)
+}

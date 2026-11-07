@@ -666,6 +666,14 @@ func ensureDeepSeekChatReasoningPlaceholders(account *Account, body []byte) []by
 	if !requiresDeepSeekChatReasoning(account, body) {
 		return body
 	}
+	if updated, ok := batchDeepSeekReasoningPlaceholders(body); ok {
+		return updated
+	}
+	return ensureDeepSeekChatReasoningPlaceholdersSequential(body)
+}
+
+// Keep the original behavior for ambiguous JSON and as a differential oracle.
+func ensureDeepSeekChatReasoningPlaceholdersSequential(body []byte) []byte {
 	messages := gjson.GetBytes(body, "messages")
 	if !messages.IsArray() {
 		return body
