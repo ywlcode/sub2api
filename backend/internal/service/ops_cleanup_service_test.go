@@ -1,8 +1,12 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/stretchr/testify/require"
 )
 
 func TestOpsCleanupPlan(t *testing.T) {
@@ -62,3 +66,32 @@ func TestIsMissingRelationError(t *testing.T) {
 type fakeErr string
 
 func (e fakeErr) Error() string { return string(e) }
+
+func TestDeleteOldRowsByCTIDProtectsUnfinishedBillingEvents(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	pattern := `(?s)WITH batch AS \(.*state IN \('complete','legacy'\).*DELETE FROM usage_billing_events`
+	mock.ExpectExec(pattern).WithArgs(sqlmock.AnyArg(), 5000).WillReturnResult(sqlmock.NewResult(0, 1))
+
+	deleted, err := deleteOldRowsByCTID(context.Background(), db, "usage_billing_events", "completed_at", time.Now(), "state IN ('complete','legacy')", 5000)
+	require.NoError(t, err)
+	require.EqualValues(t, 1, deleted)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestArchiveOldUsageBillingDedupBatchesUntilDrained(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+
+	pattern := `(?s)WITH victims AS \(.*INSERT INTO usage_billing_dedup_archive.*DELETE FROM usage_billing_dedup`
+	mock.ExpectExec(pattern).WithArgs(sqlmock.AnyArg(), 5000).WillReturnResult(sqlmock.NewResult(0, 5000))
+	mock.ExpectExec(pattern).WithArgs(sqlmock.AnyArg(), 5000).WillReturnResult(sqlmock.NewResult(0, 12))
+
+	archived, err := archiveOldUsageBillingDedup(context.Background(), db, time.Now(), 5000)
+	require.NoError(t, err)
+	require.EqualValues(t, 5012, archived)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

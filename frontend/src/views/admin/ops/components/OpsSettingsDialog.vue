@@ -52,6 +52,15 @@ async function loadAllSettings() {
     runtimeSettings.value = runtime
     emailConfig.value = email
     advancedSettings.value = advanced
+    if (advancedSettings.value?.data_retention) {
+      const retention = advancedSettings.value.data_retention
+      retention.request_connection_retention_days ??= 3
+      retention.request_timing_retention_days ??= 3
+      retention.completed_billing_event_retention_days ??= 7
+      retention.billing_dedup_hot_retention_days ??= 15
+      retention.billing_dedup_archive_retention_days ??= 15
+      retention.user_traffic_retention_days ??= 7
+    }
     // 兼容旧 payload：后端未返回该字段时补默认值，保证表单可绑定
     if (advancedSettings.value && !advancedSettings.value.openai_account_quota_auto_pause) {
       advancedSettings.value.openai_account_quota_auto_pause = { default_threshold_5h: 0, default_threshold_7d: 0 }
@@ -164,7 +173,17 @@ const validation = computed(() => {
 
   // 验证高级设置
   if (advancedSettings.value) {
-    const { error_log_retention_days, minute_metrics_retention_days, hourly_metrics_retention_days } = advancedSettings.value.data_retention
+    const {
+      error_log_retention_days,
+      minute_metrics_retention_days,
+      hourly_metrics_retention_days,
+      request_connection_retention_days,
+      request_timing_retention_days,
+      completed_billing_event_retention_days,
+      billing_dedup_hot_retention_days,
+      billing_dedup_archive_retention_days,
+      user_traffic_retention_days
+    } = advancedSettings.value.data_retention
     if (error_log_retention_days < 0 || error_log_retention_days > 365) {
       errors.push(t('admin.ops.settings.validation.retentionDaysRange'))
     }
@@ -173,6 +192,12 @@ const validation = computed(() => {
     }
     if (hourly_metrics_retention_days < 0 || hourly_metrics_retention_days > 365) {
       errors.push(t('admin.ops.settings.validation.retentionDaysRange'))
+    }
+    for (const days of [request_connection_retention_days, request_timing_retention_days, completed_billing_event_retention_days, billing_dedup_hot_retention_days, billing_dedup_archive_retention_days, user_traffic_retention_days]) {
+      if (!Number.isInteger(days) || days < 1 || days > 365) {
+        errors.push(t('admin.ops.settings.validation.retentionDaysRange'))
+        break
+      }
     }
 
     const { default_threshold_5h, default_threshold_7d } = advancedSettings.value.openai_account_quota_auto_pause
@@ -490,6 +515,32 @@ async function saveAllSettings() {
                   max="365"
                   class="input"
                 />
+              </div>
+            </div>
+            <div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div>
+                <label class="input-label">{{ t('admin.ops.settings.requestConnectionRetentionDays') }}</label>
+                <input v-model.number="advancedSettings.data_retention.request_connection_retention_days" type="number" min="1" max="365" class="input" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.ops.settings.requestTimingRetentionDays') }}</label>
+                <input v-model.number="advancedSettings.data_retention.request_timing_retention_days" type="number" min="1" max="365" class="input" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.ops.settings.completedBillingEventRetentionDays') }}</label>
+                <input v-model.number="advancedSettings.data_retention.completed_billing_event_retention_days" type="number" min="1" max="365" class="input" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.ops.settings.billingDedupHotRetentionDays') }}</label>
+                <input v-model.number="advancedSettings.data_retention.billing_dedup_hot_retention_days" type="number" min="1" max="365" class="input" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.ops.settings.billingDedupArchiveRetentionDays') }}</label>
+                <input v-model.number="advancedSettings.data_retention.billing_dedup_archive_retention_days" type="number" min="1" max="365" class="input" />
+              </div>
+              <div>
+                <label class="input-label">{{ t('admin.ops.settings.userTrafficRetentionDays') }}</label>
+                <input v-model.number="advancedSettings.data_retention.user_traffic_retention_days" type="number" min="1" max="365" class="input" />
               </div>
             </div>
             <p class="text-xs text-gray-500">{{ t('admin.ops.settings.retentionDaysHint') }}</p>

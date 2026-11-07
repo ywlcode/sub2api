@@ -74,7 +74,12 @@ func (s *UsageService) ListConnectionTraces(ctx context.Context, filter Connecti
 	}); ok {
 		return repo.ListConnectionTraces(ctx, filter)
 	}
-	return &ConnectionTraceList{Items: []ConnectionTrace{}, Page: filter.Page, PageSize: filter.PageSize, RetentionDays: 30}, nil
+	return &ConnectionTraceList{
+		Items:         []ConnectionTrace{},
+		Page:          filter.Page,
+		PageSize:      filter.PageSize,
+		RetentionDays: defaultOpsAdvancedSettings().DataRetention.RequestConnectionRetentionDays,
+	}, nil
 }
 
 // Keep a useful URL path without query/fragment or known capability tokens.

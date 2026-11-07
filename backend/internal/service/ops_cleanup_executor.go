@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	opsCleanupDefaultSchedule  = "0 2 * * *"
+	opsCleanupDefaultSchedule  = "0 1 * * *"
 	opsCleanupBatchSize        = 5000
 	opsCleanupCronStopTimeout  = 3 * time.Second
 	opsCleanupRunTimeout       = 30 * time.Minute
@@ -25,20 +25,26 @@ type opsCleanupTarget struct {
 }
 
 type opsCleanupDeletedCounts struct {
-	errorLogs      int64
-	ingressRejects int64
-	alertEvents    int64
-	systemLogs     int64
-	logAudits      int64
-	systemMetrics  int64
-	networkMetrics int64
-	hourlyPreagg   int64
-	dailyPreagg    int64
+	errorLogs            int64
+	ingressRejects       int64
+	alertEvents          int64
+	systemLogs           int64
+	logAudits            int64
+	systemMetrics        int64
+	networkMetrics       int64
+	hourlyPreagg         int64
+	dailyPreagg          int64
+	requestConnections   int64
+	requestTimings       int64
+	billingEvents        int64
+	userTraffic          int64
+	billingDedupArchived int64
+	billingDedupDeleted  int64
 }
 
 func (c opsCleanupDeletedCounts) String() string {
 	return fmt.Sprintf(
-		"error_logs=%d ingress_rejects=%d alert_events=%d system_logs=%d log_audits=%d system_metrics=%d network_metrics=%d hourly_preagg=%d daily_preagg=%d",
+		"error_logs=%d ingress_rejects=%d alert_events=%d system_logs=%d log_audits=%d system_metrics=%d network_metrics=%d hourly_preagg=%d daily_preagg=%d request_connections=%d request_timings=%d billing_events=%d user_traffic=%d billing_dedup_archived=%d billing_dedup_deleted=%d",
 		c.errorLogs,
 		c.ingressRejects,
 		c.alertEvents,
@@ -48,7 +54,84 @@ func (c opsCleanupDeletedCounts) String() string {
 		c.networkMetrics,
 		c.hourlyPreagg,
 		c.dailyPreagg,
+		c.requestConnections,
+		c.requestTimings,
+		c.billingEvents,
+		c.userTraffic,
+		c.billingDedupArchived,
+		c.billingDedupDeleted,
 	)
+}
+
+func deleteOldRowsByCTID(ctx context.Context, db *sql.DB, table, timeColumn string, cutoff time.Time, extraPredicate string, batchSize int) (int64, error) {
+	if db == nil {
+		return 0, nil
+	}
+	if batchSize <= 0 {
+		batchSize = opsCleanupBatchSize
+	}
+	where := fmt.Sprintf("%s < $1", timeColumn)
+	if strings.TrimSpace(extraPredicate) != "" {
+		where += " AND (" + extraPredicate + ")"
+	}
+	query := fmt.Sprintf(`WITH batch AS (
+  SELECT ctid FROM %s WHERE %s LIMIT $2
+)
+DELETE FROM %s WHERE ctid IN (SELECT ctid FROM batch)`, table, where, table)
+	var total int64
+	for {
+		result, err := db.ExecContext(ctx, query, cutoff, batchSize)
+		if err != nil {
+			if isMissingRelationError(err) {
+				return total, nil
+			}
+			return total, err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += affected
+		if affected < int64(batchSize) {
+			return total, nil
+		}
+	}
+}
+
+func archiveOldUsageBillingDedup(ctx context.Context, db *sql.DB, cutoff time.Time, batchSize int) (int64, error) {
+	if db == nil {
+		return 0, nil
+	}
+	if batchSize <= 0 {
+		batchSize = opsCleanupBatchSize
+	}
+	const query = `WITH victims AS (
+  SELECT ctid,request_id,api_key_id,request_fingerprint,created_at
+  FROM usage_billing_dedup WHERE created_at < $1 LIMIT $2
+), archived AS (
+  INSERT INTO usage_billing_dedup_archive(request_id,api_key_id,request_fingerprint,created_at)
+  SELECT request_id,api_key_id,request_fingerprint,created_at FROM victims
+  ON CONFLICT(request_id,api_key_id) DO NOTHING
+)
+DELETE FROM usage_billing_dedup WHERE ctid IN (SELECT ctid FROM victims)`
+	var total int64
+	for {
+		result, err := db.ExecContext(ctx, query, cutoff, batchSize)
+		if err != nil {
+			if isMissingRelationError(err) {
+				return total, nil
+			}
+			return total, err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += affected
+		if affected < int64(batchSize) {
+			return total, nil
+		}
+	}
 }
 
 // opsCleanupPlan 把"保留天数"翻译成具体的清理动作。

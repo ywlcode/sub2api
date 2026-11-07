@@ -106,5 +106,6 @@ func (h *UsageHandler) Connections(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	result.RetentionDays = h.opsService.DataRetentionSettingsSnapshot().RequestConnectionRetentionDays
 	response.Success(c, result)
 }

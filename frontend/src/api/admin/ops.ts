@@ -815,6 +815,12 @@ export interface OpsDataRetentionSettings {
   error_log_retention_days: number
   minute_metrics_retention_days: number
   hourly_metrics_retention_days: number
+  request_connection_retention_days: number
+  request_timing_retention_days: number
+  completed_billing_event_retention_days: number
+  billing_dedup_hot_retention_days: number
+  billing_dedup_archive_retention_days: number
+  user_traffic_retention_days: number
 }
 
 export interface OpsAggregationSettings {

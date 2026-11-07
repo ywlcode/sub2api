@@ -45,7 +45,12 @@ func TestComputeEffective_FallbackToCfgWhenSettingsAbsent(t *testing.T) {
 
 	svc.computeEffectiveLocked(context.Background())
 
-	want := opsCleanupEffectiveConfig{OpsCleanupConfig: base, SystemLogRetentionDays: 30}
+	want := opsCleanupEffectiveConfig{
+		OpsCleanupConfig: base, SystemLogRetentionDays: 30,
+		RequestConnectionRetentionDays: 3, RequestTimingRetentionDays: 3,
+		CompletedBillingEventRetentionDays: 7, BillingDedupHotRetentionDays: 15,
+		BillingDedupArchiveRetentionDays: 15, UserTrafficRetentionDays: 7,
+	}
 	if svc.effective != want {
 		t.Fatalf("expected effective == cfg base, got %#v", svc.effective)
 	}
@@ -54,11 +59,17 @@ func TestComputeEffective_FallbackToCfgWhenSettingsAbsent(t *testing.T) {
 func TestComputeEffective_SettingsOverridesAll(t *testing.T) {
 	repo := newRuntimeSettingRepoStub()
 	writeAdvancedSettings(t, repo, OpsDataRetentionSettings{
-		CleanupEnabled:             true,
-		CleanupSchedule:            "0 * * * *",
-		ErrorLogRetentionDays:      0,
-		MinuteMetricsRetentionDays: 7,
-		HourlyMetricsRetentionDays: 14,
+		CleanupEnabled:                     true,
+		CleanupSchedule:                    "0 * * * *",
+		ErrorLogRetentionDays:              0,
+		MinuteMetricsRetentionDays:         7,
+		HourlyMetricsRetentionDays:         14,
+		RequestConnectionRetentionDays:     4,
+		RequestTimingRetentionDays:         5,
+		CompletedBillingEventRetentionDays: 8,
+		BillingDedupHotRetentionDays:       16,
+		BillingDedupArchiveRetentionDays:   17,
+		UserTrafficRetentionDays:           9,
 	})
 	base := config.OpsCleanupConfig{
 		Enabled:                    false,
@@ -79,7 +90,13 @@ func TestComputeEffective_SettingsOverridesAll(t *testing.T) {
 			MinuteMetricsRetentionDays: 7,
 			HourlyMetricsRetentionDays: 14,
 		},
-		SystemLogRetentionDays: 30,
+		SystemLogRetentionDays:             30,
+		RequestConnectionRetentionDays:     4,
+		RequestTimingRetentionDays:         5,
+		CompletedBillingEventRetentionDays: 8,
+		BillingDedupHotRetentionDays:       16,
+		BillingDedupArchiveRetentionDays:   17,
+		UserTrafficRetentionDays:           9,
 	}
 	if svc.effective != want {
 		t.Fatalf("effective mismatch:\nwant %#v\n got %#v", want, svc.effective)
@@ -160,7 +177,12 @@ func TestComputeEffective_BadJSONFallsBackToCfg(t *testing.T) {
 
 	svc.computeEffectiveLocked(context.Background())
 
-	want := opsCleanupEffectiveConfig{OpsCleanupConfig: base, SystemLogRetentionDays: 30}
+	want := opsCleanupEffectiveConfig{
+		OpsCleanupConfig: base, SystemLogRetentionDays: 30,
+		RequestConnectionRetentionDays: 3, RequestTimingRetentionDays: 3,
+		CompletedBillingEventRetentionDays: 7, BillingDedupHotRetentionDays: 15,
+		BillingDedupArchiveRetentionDays: 15, UserTrafficRetentionDays: 7,
+	}
 	if svc.effective != want {
 		t.Fatalf("expected fallback to cfg on bad JSON, got %#v", svc.effective)
 	}
@@ -219,7 +241,7 @@ func TestComputeEffective_PartialAdvancedSettingsUseSafeDefaults(t *testing.T) {
 	svc.computeEffectiveLocked(context.Background())
 
 	if svc.effective.Schedule != opsCleanupDefaultSchedule ||
-		svc.effective.ErrorLogRetentionDays != 30 ||
+		svc.effective.ErrorLogRetentionDays != 7 ||
 		svc.effective.MinuteMetricsRetentionDays != 30 ||
 		svc.effective.HourlyMetricsRetentionDays != 30 {
 		t.Fatalf("partial settings did not use safe defaults: %#v", svc.effective)

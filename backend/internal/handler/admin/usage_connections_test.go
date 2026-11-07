@@ -25,7 +25,7 @@ func (r *connectionListStub) ListConnectionTraces(_ context.Context, f service.C
 
 func TestConnectionFiltersAndBounds(t *testing.T) {
 	stub := &connectionListStub{}
-	h := NewUsageHandler(service.NewUsageService(stub, nil, nil, nil), nil, nil, nil)
+	h := NewUsageHandler(service.NewUsageService(stub, nil, nil, nil), nil, nil, nil, nil)
 	r := gin.New()
 	r.GET("/connections", h.Connections)
 	for _, query := range []string{"page=-1", "page=501", "page_size=51", "user_id=-1", "source=evil", "state=success", "client_ip=invalid", "start_time=invalid", "start_time=2026-01-01T00:00:00Z&end_time=2026-03-01T00:00:00Z"} {

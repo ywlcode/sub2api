@@ -34,7 +34,7 @@ func TestScopedAdminUsageListDoesNotGrantNestedResourceRead(t *testing.T) {
 	for _, scoped := range []bool{true, false} {
 		t.Run(map[bool]string{true: "受限用量读取", false: "完整管理员保留响应"}[scoped], func(t *testing.T) {
 			repo := &scopedUsageResponseRepo{records: []service.UsageLog{{ID: 12, UserID: 7, APIKeyID: 8, AccountID: 11, RequestID: "request-public", RequestedModel: "requested-model", Model: "effective-model", InputTokens: 123, OutputTokens: 456, TotalCost: 1.25, ActualCost: 1, User: privateUser, APIKey: privateKey, Group: privateGroup, Subscription: privateSub, Account: privateAccount}}}
-			h := NewUsageHandler(service.NewUsageService(repo, nil, nil, nil), nil, nil, nil)
+			h := NewUsageHandler(service.NewUsageService(repo, nil, nil, nil), nil, nil, nil, nil)
 			r := gin.New()
 			r.Use(func(c *gin.Context) {
 				if scoped {
@@ -79,7 +79,7 @@ func TestScopedAdminUsageListDoesNotGrantNestedResourceRead(t *testing.T) {
 }
 func TestScopedAdminUsageListEmptyRemainsArray(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	h := NewUsageHandler(service.NewUsageService(&scopedUsageResponseRepo{}, nil, nil, nil), nil, nil, nil)
+	h := NewUsageHandler(service.NewUsageService(&scopedUsageResponseRepo{}, nil, nil, nil), nil, nil, nil, nil)
 	r := gin.New()
 	r.Use(func(c *gin.Context) {
 		c.Request = c.Request.WithContext(adminaccess.WithPrincipal(c.Request.Context(), &adminaccess.Principal{}))

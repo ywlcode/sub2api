@@ -33,29 +33,17 @@ func (r *usageLogRepository) startConnectionWriter() {
 }
 
 func (r *usageLogRepository) runConnectionWriter() {
-	ticker := time.NewTicker(time.Hour)
-	defer ticker.Stop()
 	for {
-		select {
-		case record := <-r.connectionQueue:
-			for attempt := 0; attempt < 3; attempt++ {
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				err := r.writeConnectionTrace(ctx, record)
-				cancel()
-				if err == nil {
-					break
-				}
-				if attempt == 2 {
-					logger.LegacyPrintf("connection_diagnostics", "trace persistence failed")
-				}
-			}
-		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_, err := r.db.ExecContext(ctx, `DELETE FROM request_connection_traces WHERE trace_id IN
-    (SELECT trace_id FROM request_connection_traces WHERE started_at < NOW()-INTERVAL '30 days' LIMIT 10000)`)
+		record := <-r.connectionQueue
+		for attempt := 0; attempt < 3; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			err := r.writeConnectionTrace(ctx, record)
 			cancel()
-			if err != nil {
-				logger.LegacyPrintf("connection_diagnostics", "retention failed")
+			if err == nil {
+				break
+			}
+			if attempt == 2 {
+				logger.LegacyPrintf("connection_diagnostics", "trace persistence failed")
 			}
 		}
 	}
