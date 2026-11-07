@@ -220,7 +220,7 @@ function refreshUserBalanceForSuccessfulOrder(nextOrder: ResolvedOrder | null): 
 
   userBalanceRefreshStarted = true
   void lottery.refresh(true)
-  void authStore.refreshUser().catch(() => {
+  void authStore.refreshUser(true).catch(() => {
     // The order result remains authoritative even if refreshing profile data fails.
   })
 }

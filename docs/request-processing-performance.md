@@ -128,3 +128,12 @@ go test -tags=unit ./internal/service -run '^$' -bench '^BenchmarkDeepSeekReason
 主要实现放在 `request_config_*`、`api_key_group_config_cache*`、`composite_route_cache*`、`codex_catalog_config_cache*` 独立文件；原有服务只增加入口及失效调用，不调整构造函数或 Wire 依赖，便于后续 rebase。
 
 本地验证：`go test -tags=unit ./internal/service ./internal/repository ./internal/handler/... ./internal/server/...` 全部通过（服务层约 333 秒）。新增缓存、权限隔离、通知传播及鉴权订阅恢复测试通过 `go test -race`。失效版本按缓存键隔离，避免其他用户修改配置时打断当前用户正在进行的加载；版本元数据同样有数量上限。运行日志保存在忽略目录 `output/request-config-cache-tests/`。
+
+## 用户资料与空 RPM 配置读取
+
+- JWT 中间件完成状态、TokenVersion 和会话校验后，在当前 HTTP 请求中保留已加载用户。`/auth/me` 复用这个只读快照；无快照或身份不匹配时按原路径读取。下一次 HTTP 请求仍重新鉴权和读取用户，没有跨请求缓存余额或身份。
+- 普通单分组请求的 RPM 回退查询也接入 30 秒有界配置缓存，键为 `(user_id, group_id)`。nil（无覆盖）与显式 0（免除分组限制）分别保留；数据库错误不缓存。用户/分组变更和订阅重连沿用现有失效通知，通知连接不健康时绕过缓存。Redis 的实际 RPM 计数不缓存。
+- 前端同会话的资料刷新合并并发请求。充值、兑换等更新后的刷新显式使用 `refreshUser(true)`；旧请求不能覆盖更新后的结果，也不能清除后来登录的账号。用户资料和订阅轮询在标签页隐藏时暂停，返回时刷新已过期数据；token 续期仍按原逻辑运行。
+- 逻辑放在 `jwt_user_snapshot.go`、`billing_rpm_config_cache.go`、`visiblePolling.ts` 等独立文件；计费落账和金额缓存同步未修改，其后续方案见 `billing-cache-optimization-plan.md`。
+
+验证：JWT/当前用户资料/RPM 配置缓存定向测试、全部 middleware 和 handler 单元测试通过；新增缓存与身份复用相关 race 测试通过。前端 auth/subscriptions/visiblePolling 共 45 个测试通过，TypeScript 检查和修改文件 ESLint 检查通过。
