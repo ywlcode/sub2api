@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -364,11 +365,17 @@ func defaultOpsAdvancedSettings() *OpsAdvancedSettings {
 		DataRetention: OpsDataRetentionSettings{
 			// Keep the DB-backed default aligned with ops.cleanup.enabled so a
 			// first settings read cannot silently disable configured retention.
-			CleanupEnabled:             true,
-			CleanupSchedule:            opsCleanupDefaultSchedule,
-			ErrorLogRetentionDays:      30,
-			MinuteMetricsRetentionDays: 30,
-			HourlyMetricsRetentionDays: 30,
+			CleanupEnabled:                     true,
+			CleanupSchedule:                    opsCleanupDefaultSchedule,
+			ErrorLogRetentionDays:              7,
+			MinuteMetricsRetentionDays:         30,
+			HourlyMetricsRetentionDays:         30,
+			RequestConnectionRetentionDays:     3,
+			RequestTimingRetentionDays:         3,
+			CompletedBillingEventRetentionDays: 7,
+			BillingDedupHotRetentionDays:       15,
+			BillingDedupArchiveRetentionDays:   15,
+			UserTrafficRetentionDays:           7,
 		},
 		Aggregation: OpsAggregationSettings{
 			AggregationEnabled: false,
@@ -408,16 +415,35 @@ func normalizeOpsAdvancedSettings(cfg *OpsAdvancedSettings) {
 	if cfg.DataRetention.CleanupSchedule == "" {
 		cfg.DataRetention.CleanupSchedule = opsCleanupDefaultSchedule
 	}
-	// 保留天数：0 表示每次定时清理全部（清空所有），> 0 表示按天数保留；
-	// 仅在拿到非法的负数时回填默认值，避免覆盖用户主动设的 0。
+	// 旧的运维指标项保留 0=清空语义；下方请求/计费明细项不允许 0，
+	// 避免旧客户端缺少新字段时把高价值数据误清空。
 	if cfg.DataRetention.ErrorLogRetentionDays < 0 {
-		cfg.DataRetention.ErrorLogRetentionDays = 30
+		cfg.DataRetention.ErrorLogRetentionDays = 7
 	}
 	if cfg.DataRetention.MinuteMetricsRetentionDays < 0 {
 		cfg.DataRetention.MinuteMetricsRetentionDays = 30
 	}
 	if cfg.DataRetention.HourlyMetricsRetentionDays < 0 {
 		cfg.DataRetention.HourlyMetricsRetentionDays = 30
+	}
+	defaults := defaultOpsAdvancedSettings().DataRetention
+	if cfg.DataRetention.RequestConnectionRetentionDays <= 0 {
+		cfg.DataRetention.RequestConnectionRetentionDays = defaults.RequestConnectionRetentionDays
+	}
+	if cfg.DataRetention.RequestTimingRetentionDays <= 0 {
+		cfg.DataRetention.RequestTimingRetentionDays = defaults.RequestTimingRetentionDays
+	}
+	if cfg.DataRetention.CompletedBillingEventRetentionDays <= 0 {
+		cfg.DataRetention.CompletedBillingEventRetentionDays = defaults.CompletedBillingEventRetentionDays
+	}
+	if cfg.DataRetention.BillingDedupHotRetentionDays <= 0 {
+		cfg.DataRetention.BillingDedupHotRetentionDays = defaults.BillingDedupHotRetentionDays
+	}
+	if cfg.DataRetention.BillingDedupArchiveRetentionDays <= 0 {
+		cfg.DataRetention.BillingDedupArchiveRetentionDays = defaults.BillingDedupArchiveRetentionDays
+	}
+	if cfg.DataRetention.UserTrafficRetentionDays <= 0 {
+		cfg.DataRetention.UserTrafficRetentionDays = defaults.UserTrafficRetentionDays
 	}
 	// Normalize auto refresh interval (default 30 seconds)
 	if cfg.AutoRefreshIntervalSec <= 0 {
@@ -449,10 +475,34 @@ func validateOpsAdvancedSettings(cfg *OpsAdvancedSettings) error {
 	if cfg.DataRetention.HourlyMetricsRetentionDays < 0 || cfg.DataRetention.HourlyMetricsRetentionDays > 365 {
 		return errors.New("hourly_metrics_retention_days must be between 0 and 365")
 	}
+	for _, field := range []struct {
+		name string
+		days int
+	}{
+		{"request_connection_retention_days", cfg.DataRetention.RequestConnectionRetentionDays},
+		{"request_timing_retention_days", cfg.DataRetention.RequestTimingRetentionDays},
+		{"completed_billing_event_retention_days", cfg.DataRetention.CompletedBillingEventRetentionDays},
+		{"billing_dedup_hot_retention_days", cfg.DataRetention.BillingDedupHotRetentionDays},
+		{"billing_dedup_archive_retention_days", cfg.DataRetention.BillingDedupArchiveRetentionDays},
+		{"user_traffic_retention_days", cfg.DataRetention.UserTrafficRetentionDays},
+	} {
+		if field.days < 0 || field.days > 365 {
+			return fmt.Errorf("%s must be between 0 and 365", field.name)
+		}
+	}
 	if cfg.AutoRefreshIntervalSec < 15 || cfg.AutoRefreshIntervalSec > 300 {
 		return errors.New("auto_refresh_interval_seconds must be between 15 and 300")
 	}
 	return nil
+}
+
+// DataRetentionSettingsSnapshot returns the currently active runtime policy.
+// A nil service uses the same safe defaults as a fresh installation.
+func (s *OpsService) DataRetentionSettingsSnapshot() OpsDataRetentionSettings {
+	if s == nil {
+		return defaultOpsAdvancedSettings().DataRetention
+	}
+	return s.OpsAdvancedSettingsSnapshot().DataRetention
 }
 
 func (s *OpsService) GetOpsAdvancedSettings(ctx context.Context) (*OpsAdvancedSettings, error) {

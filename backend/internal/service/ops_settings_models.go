@@ -118,11 +118,17 @@ type OpsOpenAIAccountQuotaAutoPauseSettings struct {
 }
 
 type OpsDataRetentionSettings struct {
-	CleanupEnabled             bool   `json:"cleanup_enabled"`
-	CleanupSchedule            string `json:"cleanup_schedule"`
-	ErrorLogRetentionDays      int    `json:"error_log_retention_days"`
-	MinuteMetricsRetentionDays int    `json:"minute_metrics_retention_days"`
-	HourlyMetricsRetentionDays int    `json:"hourly_metrics_retention_days"`
+	CleanupEnabled                     bool   `json:"cleanup_enabled"`
+	CleanupSchedule                    string `json:"cleanup_schedule"`
+	ErrorLogRetentionDays              int    `json:"error_log_retention_days"`
+	MinuteMetricsRetentionDays         int    `json:"minute_metrics_retention_days"`
+	HourlyMetricsRetentionDays         int    `json:"hourly_metrics_retention_days"`
+	RequestConnectionRetentionDays     int    `json:"request_connection_retention_days"`
+	RequestTimingRetentionDays         int    `json:"request_timing_retention_days"`
+	CompletedBillingEventRetentionDays int    `json:"completed_billing_event_retention_days"`
+	BillingDedupHotRetentionDays       int    `json:"billing_dedup_hot_retention_days"`
+	BillingDedupArchiveRetentionDays   int    `json:"billing_dedup_archive_retention_days"`
+	UserTrafficRetentionDays           int    `json:"user_traffic_retention_days"`
 }
 
 type OpsAggregationSettings struct {

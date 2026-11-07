@@ -14,7 +14,7 @@ import (
 )
 
 func defaultOpsRuntimeLogConfig(cfg *config.Config) *OpsRuntimeLogConfig {
-	requestRetentionDays := 90
+	requestRetentionDays := 30
 	if cfg != nil {
 		requestRetentionDays = cfg.DashboardAgg.Retention.UsageLogsDays
 		if !cfg.DashboardAgg.Enabled {

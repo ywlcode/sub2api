@@ -56,7 +56,7 @@ func (r *usageLogRepository) runTimingWriter() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			_, err := r.db.ExecContext(ctx, `DELETE FROM request_timing_details WHERE (usage_log_id,trace_id) IN (
    SELECT d.usage_log_id,d.trace_id FROM request_timing_details d
-   WHERE d.created_at < NOW() - INTERVAL '30 days' OR NOT EXISTS (SELECT 1 FROM usage_logs u WHERE u.id=d.usage_log_id)
+   WHERE NOT EXISTS (SELECT 1 FROM usage_logs u WHERE u.id=d.usage_log_id)
    LIMIT 10000)`)
 			cancel()
 			if err != nil {
