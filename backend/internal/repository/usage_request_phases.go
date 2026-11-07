@@ -42,7 +42,7 @@ func (r *usageLogRepository) ListRequestPhaseUserIDs(ctx context.Context, afterI
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	ids := make([]int64, 0, limit)
 	for rows.Next() {
 		var id int64

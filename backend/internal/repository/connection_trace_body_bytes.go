@@ -15,7 +15,7 @@ func (r *usageLogRepository) BackfillConnectionTraceBodyBytes(ctx context.Contex
 	if err != nil {
 		return false, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var before, oldest time.Time
 	var after string
 	var completed bool

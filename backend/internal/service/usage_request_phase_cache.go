@@ -13,7 +13,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
 	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9" //nolint:depguard // This cache adapter owns Redis leases and storage, like the ops cache services.
 	"golang.org/x/sync/singleflight"
 )
 
@@ -108,7 +108,11 @@ func (s *UsageRequestPhaseCache) Get(ctx context.Context, filters usagestats.Usa
 		if r.Err != nil {
 			return usagestats.RequestPhaseAverages{}
 		}
-		return r.Val.(requestPhaseCacheEntry).Stats
+		entry, ok := r.Val.(requestPhaseCacheEntry)
+		if !ok {
+			return usagestats.RequestPhaseAverages{}
+		}
+		return entry.Stats
 	}
 }
 
