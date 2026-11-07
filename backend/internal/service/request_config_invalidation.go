@@ -30,11 +30,14 @@ func (s *APIKeyService) applyRequestConfigInvalidation(message string) bool {
 	case "all":
 		s.requestGroups.invalidate(nil)
 		s.requestPolicies.invalidate(nil)
+		s.requestRPMOverrides.invalidate(nil)
 	case "group":
 		s.requestGroups.invalidate(func(key int64) bool { return key == id })
 		s.requestPolicies.invalidate(func(key userGroupPolicyKey) bool { return key.groupID == id })
+		s.requestRPMOverrides.invalidate(func(key userGroupPolicyKey) bool { return key.groupID == id })
 	case "user":
 		s.requestPolicies.invalidate(func(key userGroupPolicyKey) bool { return key.userID == id })
+		s.requestRPMOverrides.invalidate(func(key userGroupPolicyKey) bool { return key.userID == id })
 	case "catalog":
 	default:
 		return true

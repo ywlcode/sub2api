@@ -60,6 +60,8 @@ describe('useAuthStore', () => {
   })
 
   afterEach(() => {
+    useAuthStore().$dispose()
+    vi.restoreAllMocks()
     vi.useRealTimers()
   })
 
@@ -422,6 +424,68 @@ describe('useAuthStore', () => {
   // --- refreshUser ---
 
   describe('refreshUser', () => {
+    it('coalesces concurrent refreshes within one session', async () => {
+      mockLogin.mockResolvedValue(fakeAuthResponse)
+      const store = useAuthStore()
+      await store.login({ email: fakeUser.email, password: '123456' })
+      let resolve!: (value: unknown) => void
+      mockGetCurrentUser.mockImplementation(() => new Promise(r => { resolve = r }))
+      const first = store.refreshUser()
+      const second = store.refreshUser()
+      expect(mockGetCurrentUser).toHaveBeenCalledTimes(1)
+      resolve({ data: { ...fakeUser, balance: 80 } })
+      await Promise.all([first, second])
+      expect(store.user?.balance).toBe(80)
+    })
+
+    it('lets a post-mutation refresh supersede an older pending response', async () => {
+      mockLogin.mockResolvedValue(fakeAuthResponse)
+      const store = useAuthStore()
+      await store.login({ email: fakeUser.email, password: '123456' })
+      let resolveOld!: (value: unknown) => void
+      mockGetCurrentUser.mockImplementationOnce(() => new Promise(r => { resolveOld = r }))
+      const old = store.refreshUser()
+      mockGetCurrentUser.mockResolvedValueOnce({ data: { ...fakeUser, balance: 150 } })
+      await store.refreshUser(true)
+      resolveOld({ data: { ...fakeUser, balance: 90 } })
+      await old
+      expect(store.user?.balance).toBe(150)
+      expect(JSON.parse(localStorage.getItem('auth_user')!).balance).toBe(150)
+    })
+
+    it.each(['success', 'unauthorized'])('ignores a late %s from the previous login', async (outcome) => {
+      mockLogin.mockResolvedValueOnce(fakeAuthResponse)
+      const store = useAuthStore()
+      await store.login({ email: fakeUser.email, password: '123456' })
+      let resolve!: (value: unknown) => void
+      let reject!: (reason: unknown) => void
+      mockGetCurrentUser.mockImplementationOnce(() => new Promise((a, b) => { resolve = a; reject = b }))
+      const pending = store.refreshUser().catch(error => error)
+      mockLogin.mockResolvedValueOnce({ ...fakeAuthResponse, access_token: 'new-token', user: fakeAdminUser })
+      await store.login({ email: fakeAdminUser.email, password: '123456' })
+      if (outcome === 'success') resolve({ data: fakeUser })
+      else reject({ status: 401 })
+      await pending
+      expect(store.user?.id).toBe(fakeAdminUser.id)
+      expect(store.token).toBe('new-token')
+    })
+
+    it('pauses background refresh when hidden but permits explicit refresh', async () => {
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      mockLogin.mockResolvedValue(fakeAuthResponse)
+      mockGetCurrentUser.mockResolvedValue({ data: fakeUser })
+      const store = useAuthStore()
+      await store.login({ email: fakeUser.email, password: '123456' })
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(mockGetCurrentUser).not.toHaveBeenCalled()
+      await store.refreshUser(true)
+      expect(mockGetCurrentUser).toHaveBeenCalledTimes(1)
+      visibility.mockReturnValue('visible')
+      document.dispatchEvent(new Event('visibilitychange'))
+      await Promise.resolve()
+      expect(mockGetCurrentUser).toHaveBeenCalledTimes(2)
+    })
+
     it('刷新用户数据并更新 localStorage', async () => {
       mockLogin.mockResolvedValue(fakeAuthResponse)
       const store = useAuthStore()

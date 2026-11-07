@@ -993,6 +993,7 @@ func ProvideAPIKeyService(
 ) (*APIKeyService, error) {
 	svc := NewAPIKeyService(apiKeyRepo, userRepo, groupRepo, userSubRepo, userGroupRateRepo, cache, cfg)
 	svc.SetRateLimitCacheInvalidator(billingCacheService)
+	svc.connectBillingRPMCache(billingCacheService)
 	if billingCacheService != nil {
 		svc.SetBalanceRejectionNotifier(billingCacheService.balanceRejectionNotifier)
 	}

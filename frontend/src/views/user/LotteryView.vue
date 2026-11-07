@@ -399,7 +399,7 @@ async function draw() {
     }
     try {
       if (completed.length) {
-        await auth.refreshUser()
+        await auth.refreshUser(true)
         if (completed.some(record => record.prize.kind === 'subscription'))
           await subscriptions.fetchActiveSubscriptions(true)
       }
