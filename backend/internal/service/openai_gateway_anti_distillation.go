@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -19,11 +20,10 @@ func (s *OpenAIGatewayService) SetGroupAntiDistillationService(protection *Group
 // a saturated usage worker pool must not silently skip protection evidence.
 // Call once after a successful HTTP request or websocket turn, never on retry.
 func (s *OpenAIGatewayService) ObserveGroupAntiDistillationUsage(ctx context.Context, key *APIKey, account *Account, result *OpenAIForwardResult, startedAt time.Time, requestBody []byte) {
-	if s == nil || s.groupAntiDistillation == nil || key == nil || account == nil || account.Platform != PlatformOpenAI || result == nil {
+	if s == nil || s.groupAntiDistillation == nil || key == nil || account == nil || account.Platform != PlatformOpenAI || result == nil || key.UserID <= 0 || key.Group == nil || key.Group.Platform != PlatformOpenAI {
 		return
 	}
-	if !openAIGroupAntiDistillationUsageEligible(result) || !gjson.ValidBytes(requestBody) ||
-		openAIGroupAntiDistillationRequestHasOpaqueHistory(requestBody) || openAIGroupAntiDistillationRequestHasMedia(requestBody) {
+	if !openAIGroupAntiDistillationUsageEligible(result) {
 		return
 	}
 	if ctx == nil {
@@ -38,6 +38,20 @@ func (s *OpenAIGatewayService) ObserveGroupAntiDistillationUsage(ctx context.Con
 	}
 	sampleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
+	// Config is already cached by the protection service. Disabled/inapplicable
+	// groups must not scan multi-megabyte bodies after every successful request.
+	cfg, err := s.groupAntiDistillation.GetConfig(sampleCtx, key.Group.ID)
+	if err != nil {
+		slog.Warn("group zero-cache protection config unavailable", "group_id", key.Group.ID)
+		return
+	}
+	if !cfg.Enabled || s.groupAntiDistillation.cache == nil {
+		return
+	}
+	if !gjson.ValidBytes(requestBody) || openAIGroupAntiDistillationRequestHasOpaqueHistory(requestBody) || openAIGroupAntiDistillationRequestHasMedia(requestBody) {
+		return
+	}
+	// Observe rechecks config, so disabling protection during the scan still wins.
 	sampleCtx = WithGroupAntiDistillationRequestStart(sampleCtx, startedAt)
 	// Never trust caller-controlled request IDs for sample deduplication.
 	if result.antiDistillationRequestID == "" {

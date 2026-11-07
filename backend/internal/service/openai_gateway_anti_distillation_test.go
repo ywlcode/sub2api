@@ -5,6 +5,8 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -282,4 +284,60 @@ func TestOpenAIUsageProtectionWSPoolRetainsProgressiveMediaEvidence(t *testing.T
 	require.True(t, usage.cacheReadMediaObserved)
 	require.False(t, usage.CacheReadKnown)
 	require.Zero(t, usage.ImageInputTokens)
+}
+
+func TestOpenAIUsageProtectionDisabledErrorsAndConfigChanges(t *testing.T) {
+	for _, ws := range []bool{false, true} {
+		t.Run(fmt.Sprint(ws), func(t *testing.T) {
+			protection, cache := antiDistillationTestService(t)
+			svc := &OpenAIGatewayService{groupAntiDistillation: protection}
+			key := &APIKey{UserID: 7, Group: &Group{ID: 1, Platform: PlatformOpenAI}}
+			account := &Account{Platform: PlatformOpenAI}
+			result := func() *OpenAIForwardResult {
+				return &OpenAIForwardResult{Usage: OpenAIUsage{InputTokens: 2000, CacheReadKnown: true}, OpenAIWSMode: ws, UpstreamTerminalEvent: "response.completed"}
+			}
+			observe := func() {
+				svc.ObserveGroupAntiDistillationUsage(context.Background(), key, account, result(), time.Now(), []byte(`{"input":"hello"}`))
+			}
+			observe()
+			require.Empty(t, cache.Observations())
+			require.NoError(t, protection.SaveConfig(context.Background(), 1, GroupAntiDistillationConfig{Enabled: true, PauseMinutes: 5}))
+			observe()
+			require.Len(t, cache.Observations(), 1)
+			require.NoError(t, protection.SaveConfig(context.Background(), 1, GroupAntiDistillationConfig{Enabled: false, PauseMinutes: 5}))
+			observe()
+			require.Len(t, cache.Observations(), 1)
+			protection.mu.Lock()
+			protection.configs = nil
+			protection.mu.Unlock()
+			settings := protection.settings.(*antiDistillationSettings)
+			settings.mu.Lock()
+			settings.err = errors.New("unavailable")
+			settings.mu.Unlock()
+			observe()
+			require.Len(t, cache.Observations(), 1, "config errors keep the existing fail-open observation behavior")
+			key.Group.Platform = PlatformComposite
+			observe()
+			require.Len(t, cache.Observations(), 1)
+		})
+	}
+}
+
+func BenchmarkOpenAIUsageProtectionDisabled(b *testing.B) {
+	svc := &OpenAIGatewayService{groupAntiDistillation: NewGroupAntiDistillationService(
+		&antiDistillationSettings{values: map[string]string{}},
+		&antiDistillationGroups{groups: map[int64]*Group{1: {ID: 1, Platform: PlatformOpenAI}}},
+		&antiDistillationCacheFake{}, nil, nil)}
+	key := &APIKey{UserID: 7, Group: &Group{ID: 1, Platform: PlatformOpenAI}}
+	account := &Account{Platform: PlatformOpenAI}
+	result := &OpenAIForwardResult{Usage: OpenAIUsage{InputTokens: 2000, CacheReadKnown: true}}
+	for _, size := range []int{1, 5, 20} {
+		body := []byte(`{"input":"` + strings.Repeat("x", size<<20) + `"}`)
+		b.Run(fmt.Sprintf("%dMB", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				svc.ObserveGroupAntiDistillationUsage(context.Background(), key, account, result, time.Time{}, body)
+			}
+		})
+	}
 }
