@@ -828,6 +828,8 @@ type GatewayService struct {
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+
+	codexGroupManifestCache codexGroupManifestCache
 }
 
 // NewGatewayService creates a new GatewayService
@@ -1629,7 +1631,11 @@ func (s *GatewayService) GetSchedulablePlatforms(ctx context.Context, groupID *i
 }
 
 func (s *GatewayService) InvalidateAvailableModelsCache(groupID *int64, platform string) {
-	if s == nil || s.modelsListCache == nil {
+	if s == nil {
+		return
+	}
+	s.codexGroupManifestCache.clear()
+	if s.modelsListCache == nil {
 		return
 	}
 	s.invalidateCompositeModelOwnershipCache(groupID)
