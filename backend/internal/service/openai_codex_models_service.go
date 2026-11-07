@@ -945,7 +945,8 @@ func (s *GatewayService) BuildCodexModelsManifestForGroup(
 			compositeRoutesAvailable = false
 		}
 	}
-	return buildCodexModelsManifestForAccounts(
+	return s.cachedCodexGroupManifest(
+		ctx,
 		effectivePlatform,
 		modelIDs,
 		catalog,
