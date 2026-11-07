@@ -6,6 +6,20 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 
 自用分支同步上游、构建镜像和更新服务器的流程见 [dev-ywlcode 分支维护与 Docker 发布](DEV_YWLCODE.md)。
 
+## 强制部署顺序：双机上传，先 ecosserver，后 boscserver
+
+**任何部署都必须将同一份镜像及校验文件上传到 `ecosserver` 和 `boscserver`。两机上传可以并行，应用切换必须串行：先在 `ecosserver` 部署并完成真实用户请求验收，再部署 `boscserver`。**
+
+Codex 使用的模型服务依赖 `boscserver` 上的 Sub2API。提前或同时切换 `boscserver`，可能中断执行部署的 Codex 自身，失去继续排障和恢复服务的能力。因此每次发布必须执行：
+
+1. 两台服务器都上传并导入同一镜像，核对归档 SHA256、镜像 ID、程序 commit 和 revision 一致；保留各机旧镜像及回退配置。
+2. 仅切换 `ecosserver` 的应用容器。此时 `boscserver` 只接收镜像，不修改运行配置、不重启或重建应用。
+3. 确认 `ecosserver` 为 healthy、版本正确、迁移完成，并确认**至少一个在新版启动后进入的真实用户模型请求已正常完成响应**。记录请求 ID、时间、模型、最终状态及响应完成证据；流式请求需确认正常结束，不能只看到 HTTP 200 或已发送首字。
+4. `/health`、版本输出、模型列表、单纯产生用量记录均不能代替用户请求完整响应验收。没有流量、请求仍在处理中或证据不足时继续等待；不得提前切换 `boscserver`。验收失败时先处理或回退 `ecosserver`。
+5. 以上全部通过并记录证据后，才切换 `boscserver`，随后完成同样的服务及请求验收。切换和健康检查使用独立 SSH／服务器端命令执行，避免依赖切换期间的模型 API；提前准备可独立执行的应用回退命令。
+
+这项顺序要求与下方 CI 条件同时生效。详细上传、切换和验证步骤见 [双机发布流程](DEV_YWLCODE.md#阶段-a双机导入镜像)。
+
 ## 部署前置条件：全部 CI 通过
 
 **部署镜像前，必须确认镜像对应提交的全部适用 CI 工作流和检查均已通过。** 此要求同样适用于手动部署到 `ecosserver`、`boscserver`；本地测试通过不能代替远端 CI 通过。
