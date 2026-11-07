@@ -187,6 +187,7 @@ docs/*
 !docs/scheduler-publication-contention.md
 !docs/api-key-health-breaker.md
 !docs/account-request-gzip.md
+!docs/request-processing-performance.md
 !docs/astra-account-scheduling.md
 !docs/legal/
 !docs/legal/*.md
