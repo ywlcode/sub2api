@@ -138,11 +138,12 @@ func TestCachedGroupManifestMatchesBuilderAfterConfigurationChanges(t *testing.T
 
 func BenchmarkCodexGroupManifestCache(b *testing.B) {
 	group := &Group{ID: 1, Platform: PlatformComposite}
-	accounts := []Account{{ID: 1, Platform: PlatformDeepseek, Type: AccountTypeAPIKey, Credentials: map[string]any{"model_mapping": map[string]any{}}}}
+	mapping := make(map[string]any)
+	accounts := []Account{{ID: 1, Platform: PlatformDeepseek, Type: AccountTypeAPIKey, Credentials: map[string]any{"model_mapping": mapping}}}
 	models := make([]string, 50)
 	for i := range models {
 		models[i] = fmt.Sprintf("deepseek-alias-%d", i)
-		accounts[0].Credentials["model_mapping"].(map[string]any)[models[i]] = "deepseek-chat"
+		mapping[models[i]] = "deepseek-chat"
 	}
 	svc := &GatewayService{}
 	for _, mode := range []string{"before", "after"} {

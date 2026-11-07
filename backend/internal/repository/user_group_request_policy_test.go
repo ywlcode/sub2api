@@ -26,7 +26,10 @@ func TestUserGroupRequestPolicyCombinedRead(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
+			t.Cleanup(func() {
+				mock.ExpectClose()
+				require.NoError(t, db.Close())
+			})
 			query := mock.ExpectQuery(regexp.QuoteMeta(`SELECT rpm_override, denied_models FROM user_group_rate_multipliers WHERE user_id = $1 AND group_id = $2`)).WithArgs(int64(7), int64(2))
 			if tc.err != nil {
 				query.WillReturnError(tc.err)
