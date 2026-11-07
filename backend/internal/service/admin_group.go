@@ -164,6 +164,7 @@ func (s *adminServiceImpl) CreateCompositeRoute(ctx context.Context, groupID int
 	if err := s.compositeRouteRepo.Create(ctx, route); err != nil {
 		return nil, err
 	}
+	s.invalidateCompositeRoutes(ctx, groupID)
 	return route, nil
 }
 
@@ -190,6 +191,7 @@ func (s *adminServiceImpl) UpdateCompositeRoute(ctx context.Context, groupID, ro
 	if err := s.compositeRouteRepo.Update(ctx, route); err != nil {
 		return nil, err
 	}
+	s.invalidateCompositeRoutes(ctx, groupID)
 	return route, nil
 }
 
@@ -208,7 +210,11 @@ func (s *adminServiceImpl) DeleteCompositeRoute(ctx context.Context, groupID, ro
 	} else if !ok {
 		return ErrCompositeRouteNotFound
 	}
-	return s.compositeRouteRepo.Delete(ctx, routeID)
+	if err := s.compositeRouteRepo.Delete(ctx, routeID); err != nil {
+		return err
+	}
+	s.invalidateCompositeRoutes(ctx, groupID)
+	return nil
 }
 
 func (s *adminServiceImpl) PreviewCompositeRoute(ctx context.Context, groupID int64, input CompositeRoutePreviewRequest) (*CompositeRouteDecision, error) {
@@ -774,6 +780,7 @@ func (s *adminServiceImpl) validateFallbackGroupOnInvalidRequest(ctx context.Con
 }
 
 func (s *adminServiceImpl) UpdateGroup(ctx context.Context, id int64, input *UpdateGroupInput) (*Group, error) {
+	defer s.invalidateRequestCatalog() // Account bindings may change after group settings.
 	group, err := s.groupRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -1254,6 +1261,7 @@ func (s *adminServiceImpl) deleteGroup(ctx context.Context, id int64, requireEmp
 		return err
 	}
 	// 注意：user_group_rate_multipliers 表通过外键 ON DELETE CASCADE 自动清理
+	s.invalidateRequestGroup(id)
 
 	// 事务成功后，异步失效受影响用户的订阅缓存
 	if len(affectedUserIDs) > 0 && s.billingCacheService != nil {
@@ -1303,7 +1311,12 @@ func (s *adminServiceImpl) ClearGroupRateMultipliers(ctx context.Context, groupI
 	if s.userGroupRateRepo == nil {
 		return nil
 	}
-	return s.userGroupRateRepo.DeleteByGroupID(ctx, groupID)
+	if err := s.userGroupRateRepo.DeleteByGroupID(ctx, groupID); err != nil {
+		return err
+	}
+	// Deleting the row also removes RPM overrides and denied-model policy.
+	s.invalidateRequestGroup(groupID)
+	return nil
 }
 
 func (s *adminServiceImpl) BatchSetGroupRateMultipliers(ctx context.Context, groupID int64, entries []GroupRateMultiplierInput) error {

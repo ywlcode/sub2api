@@ -34,6 +34,8 @@ func (d CompositeRouteDecision) AmbiguousMessage() string {
 }
 
 type CompositeRouteResolver struct {
+	routeCache             requestConfigCache[int64, *compositeRouteTable]
+	configCacheReady       func() bool
 	repo                   CompositeModelRouteRepository
 	modelOwnershipResolver CompositeModelOwnershipResolver
 }
@@ -53,12 +55,12 @@ func (r *CompositeRouteResolver) ListExactPublicModels(ctx context.Context, grou
 	if r == nil || r.repo == nil || groupID <= 0 {
 		return nil, nil
 	}
-	routes, err := r.repo.ListByGroup(ctx, groupID, false)
+	table, err := r.cachedRouteTable(ctx, groupID)
 	if err != nil {
 		return nil, err
 	}
-	models := make([]string, 0, len(routes))
-	for _, route := range routes {
+	models := make([]string, 0, len(table.routes))
+	for _, route := range table.routes {
 		// TypeSafe routes serve only System One, including legacy any routes.
 		if route.TargetPlatform == PlatformTypeSafe && endpoint != "" {
 			continue
@@ -87,11 +89,11 @@ func (r *CompositeRouteResolver) Resolve(ctx context.Context, groupID int64, mod
 	}
 
 	if r != nil && r.repo != nil && groupID > 0 {
-		routes, err := r.repo.ListByGroup(ctx, groupID, false)
+		table, err := r.cachedRouteTable(ctx, groupID)
 		if err != nil {
 			return decision, fmt.Errorf("list composite routes: %w", err)
 		}
-		if route, ok := matchCompositeRoute(routes, model, endpoint); ok {
+		if route, ok := table.match(model, endpoint); ok {
 			upstreamModel := strings.TrimSpace(route.UpstreamModel)
 			if upstreamModel == "" {
 				upstreamModel = model

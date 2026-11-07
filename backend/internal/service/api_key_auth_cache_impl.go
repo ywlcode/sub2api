@@ -116,7 +116,7 @@ func (s *APIKeyService) StartAuthCacheInvalidationSubscriber(ctx context.Context
 	if s.localAuth != nil {
 		return
 	}
-	if s.cache == nil || (s.authCacheL1 == nil && s.authNegativeCacheL1 == nil) {
+	if s.cache == nil {
 		return
 	}
 	s.authInvalidationStart.Do(func() {
@@ -125,6 +125,7 @@ func (s *APIKeyService) StartAuthCacheInvalidationSubscriber(ctx context.Context
 			// Pub/Sub has no replay. A reconnect may have missed revocations.
 			// Avoid Cache.Clear(), which is unsafe with concurrent Set/Get.
 			s.authCacheL1Epoch.Add(1)
+			s.applyRequestConfigInvalidation(RequestConfigInvalidationPrefix + "all:0")
 			s.authInvalidationConnected.Store(true)
 		})
 		s.authInvalidationCancel = cancel
@@ -137,6 +138,7 @@ func (s *APIKeyService) StartAuthCacheInvalidationSubscriber(ctx context.Context
 					s.invalidateLocalAuthCache(cacheKey)
 				})
 				wasConnected := s.authInvalidationConnected.Swap(false)
+				s.applyRequestConfigInvalidation(RequestConfigInvalidationPrefix + "all:0")
 				if subscriberCtx.Err() != nil {
 					return
 				}
@@ -167,6 +169,9 @@ func (s *APIKeyService) StartAuthCacheInvalidationSubscriber(ctx context.Context
 }
 
 func (s *APIKeyService) invalidateLocalAuthCache(cacheKey string) {
+	if s != nil && s.applyRequestConfigInvalidation(cacheKey) {
+		return
+	}
 	if s == nil {
 		return
 	}

@@ -25,10 +25,10 @@ type groupManifestEntry struct {
 	expires time.Time
 }
 
-// Cache only the expensive descriptor construction. Repositories and the
-// caller's effective model permissions are still read on every request. Hashing
-// those inputs invalidates the result on configuration changes, including changes
-// made by other replicas, without introducing another authorization cache.
+// Cache descriptor construction when the caller supplies fresh configuration.
+// The outer catalog response cache can also avoid configuration reads when the
+// invalidation subscription is healthy. This content-based cache remains the
+// fallback for callers without that subscription and for degraded catalog reads.
 type codexGroupManifestCache struct {
 	mu      sync.Mutex
 	entries map[[32]byte]groupManifestEntry

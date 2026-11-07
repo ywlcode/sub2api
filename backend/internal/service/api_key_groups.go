@@ -28,7 +28,16 @@ type APIKeyGroupRouter interface {
 }
 
 // SetGroupRouter is called once during gateway route registration.
-func (s *APIKeyService) SetGroupRouter(router APIKeyGroupRouter) { s.groupRouter = router }
+func (s *APIKeyService) SetGroupRouter(router APIKeyGroupRouter) {
+	s.groupRouter = router
+	if gateway, ok := router.(*GatewayService); ok {
+		gateway.configCacheReady = s.requestConfigCacheReady
+		if gateway.compositeResolver != nil {
+			gateway.compositeResolver.configCacheReady = s.requestConfigCacheReady
+		}
+		s.requestConfigGateway.Store(gateway)
+	}
+}
 
 func (k *APIKey) ConfiguredGroupIDs() []int64 {
 	if k == nil {
@@ -157,7 +166,7 @@ func (s *APIKeyService) SelectRequestGroup(ctx context.Context, key *APIKey, mod
 	eligible := false
 	var lastErr error
 	for _, id := range key.ConfiguredGroupIDs() {
-		group, err := s.groupRepo.GetByIDLite(ctx, id)
+		group, err := s.requestGroup(ctx, id)
 		if err != nil {
 			if !errors.Is(err, ErrGroupNotFound) {
 				return nil, err
@@ -201,7 +210,7 @@ func (s *APIKeyService) SelectRequestGroup(ctx context.Context, key *APIKey, mod
 				continue
 			}
 		}
-		candidate, err := s.apiKeyWithGroup(ctx, key, group)
+		candidate, err := s.apiKeyWithCachedGroup(ctx, key, group)
 		if err != nil {
 			return nil, err
 		}

@@ -249,24 +249,7 @@ func loadCodexGroupCatalogAccounts(ctx context.Context, repo AccountRepository, 
 		return nil, nil, err
 	}
 	catalog = visible
-	groupAccounts, listErr := repo.ListModelAvailabilityCandidates(
-		ctx,
-		&groupID,
-		[]string{
-			PlatformAnthropic,
-			PlatformOpenAI,
-			PlatformGemini,
-			PlatformAntigravity,
-			PlatformGrok,
-			PlatformKimi,
-			PlatformZhipu,
-			PlatformDeepseek,
-			PlatformMiniMax,
-			PlatformOpenCodeGo,
-			PlatformMistral,
-		},
-		false,
-	)
+	groupAccounts, listErr := loadCodexCatalogCandidates(ctx, repo, groupID)
 	if listErr != nil {
 		return visible, catalog, nil
 	}
@@ -915,6 +898,14 @@ func (s *GatewayService) BuildCodexModelsManifestForGroup(
 	}
 	if effectivePlatform != PlatformComposite && !isConcreteRequestPlatform(effectivePlatform) {
 		return BuildCodexModelsManifest(modelIDs)
+	}
+
+	if s.configCacheReady != nil && s.configCacheReady() {
+		body, err := s.cachedCodexCatalogResponse(ctx, group, effectivePlatform, modelIDs)
+		if !errors.Is(err, errCodexCatalogIncomplete) {
+			return body, err
+		}
+		// Preserve the existing fallback, but never retain a degraded catalog.
 	}
 
 	_, catalog, err := loadCodexGroupCatalogAccounts(ctx, s.accountRepo, group.ID)

@@ -829,7 +829,10 @@ type GatewayService struct {
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
 
-	codexGroupManifestCache codexGroupManifestCache
+	codexGroupManifestCache   codexGroupManifestCache
+	codexCatalogResponseCache requestConfigCache[[32]byte, []byte]
+	catalogPlatformsCache     requestConfigCache[int64, []string]
+	configCacheReady          func() bool
 }
 
 // NewGatewayService creates a new GatewayService
@@ -1610,6 +1613,14 @@ func (s *GatewayService) GetSchedulablePlatforms(ctx context.Context, groupID *i
 		return platforms
 	}
 
+	if groupID != nil && s.configCacheReady != nil && s.configCacheReady() {
+		result, err := s.cachedCatalogPlatforms(ctx, *groupID)
+		if err != nil {
+			return platforms
+		}
+		return result
+	}
+
 	var accounts []Account
 	var err error
 	if groupID != nil {
@@ -1635,6 +1646,8 @@ func (s *GatewayService) InvalidateAvailableModelsCache(groupID *int64, platform
 		return
 	}
 	s.codexGroupManifestCache.clear()
+	s.codexCatalogResponseCache.invalidate(nil)
+	s.catalogPlatformsCache.invalidate(nil)
 	if s.modelsListCache == nil {
 		return
 	}

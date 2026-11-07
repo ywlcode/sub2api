@@ -16,6 +16,7 @@ func (s *APIKeyService) InvalidateAuthCacheByUserID(ctx context.Context, userID 
 	if userID <= 0 {
 		return
 	}
+	s.invalidateRequestConfig("user", userID)
 	keys, err := s.apiKeyRepo.ListKeysByUserID(ctx, userID)
 	if err != nil {
 		return
@@ -28,6 +29,7 @@ func (s *APIKeyService) InvalidateAuthCacheByGroupID(ctx context.Context, groupI
 	if groupID <= 0 {
 		return
 	}
+	s.invalidateRequestConfig("group", groupID)
 	keys, err := s.apiKeyRepo.ListKeysByGroupID(ctx, groupID)
 	if err != nil {
 		return
@@ -50,6 +52,7 @@ func (s *APIKeyService) deleteAuthCacheByKeys(ctx context.Context, keys []string
 // InvalidateAuthCacheByUserIDChecked reports failures to administrative recovery
 // callers: a committed status change must not be presented as cache-confirmed.
 func (s *APIKeyService) InvalidateAuthCacheByUserIDChecked(ctx context.Context, userID int64) error {
+	s.invalidateRequestConfig("user", userID)
 	keys, err := s.apiKeyRepo.ListKeysByUserID(ctx, userID)
 	if err != nil {
 		return err
