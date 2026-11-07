@@ -30,7 +30,7 @@ func (r *issue603LatencyRepo) ReadNetworkSeries(context.Context, time.Time, time
 
 func TestIssue603RealUsageAndOpsHandlers(t *testing.T) {
 	stub := &issue603LatencyRepo{}
-	usage := NewUsageHandler(service.NewUsageService(stub, nil, nil, nil), nil, nil, nil)
+	usage := NewUsageHandler(service.NewUsageService(stub, nil, nil, nil), nil, nil, nil, nil)
 	ops := NewOpsHandler(service.NewOpsService(stub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
 	r := gin.New()
 	r.GET("/usage/latency-report", usage.LatencyReport)

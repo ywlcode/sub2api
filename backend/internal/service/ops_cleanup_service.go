@@ -65,7 +65,13 @@ type OpsCleanupService struct {
 
 type opsCleanupEffectiveConfig struct {
 	config.OpsCleanupConfig
-	SystemLogRetentionDays int
+	SystemLogRetentionDays             int
+	RequestConnectionRetentionDays     int
+	RequestTimingRetentionDays         int
+	CompletedBillingEventRetentionDays int
+	BillingDedupHotRetentionDays       int
+	BillingDedupArchiveRetentionDays   int
+	UserTrafficRetentionDays           int
 }
 
 func NewOpsCleanupService(
@@ -170,12 +176,18 @@ func (s *OpsCleanupService) applyScheduleLocked(ctx context.Context) error {
 	c.Start()
 	s.cron = c
 	logger.LegacyPrintf("service.ops_cleanup",
-		"[OpsCleanup] scheduled (schedule=%q tz=%s retention_days=err:%d/system:%d/min:%d/hour:%d)",
+		"[OpsCleanup] scheduled (schedule=%q tz=%s retention_days=err:%d/system:%d/min:%d/hour:%d/connection:%d/timing:%d/billing_event:%d/dedup_hot:%d/dedup_archive:%d/traffic:%d)",
 		schedule, loc.String(),
 		s.effective.ErrorLogRetentionDays,
 		s.effective.SystemLogRetentionDays,
 		s.effective.MinuteMetricsRetentionDays,
 		s.effective.HourlyMetricsRetentionDays,
+		s.effective.RequestConnectionRetentionDays,
+		s.effective.RequestTimingRetentionDays,
+		s.effective.CompletedBillingEventRetentionDays,
+		s.effective.BillingDedupHotRetentionDays,
+		s.effective.BillingDedupArchiveRetentionDays,
+		s.effective.UserTrafficRetentionDays,
 	)
 	return nil
 }
@@ -206,8 +218,15 @@ func (s *OpsCleanupService) Reload(ctx context.Context) error {
 // System log retention has a separate owner: settings.ops_runtime_log_config.retention_days.
 // Missing or invalid settings fall back independently instead of disabling all cleanup overlays.
 func (s *OpsCleanupService) computeEffectiveLocked(ctx context.Context) {
+	defaults := defaultOpsAdvancedSettings().DataRetention
 	base := opsCleanupEffectiveConfig{
-		SystemLogRetentionDays: defaultOpsRuntimeLogConfig(s.cfg).RetentionDays,
+		SystemLogRetentionDays:             defaultOpsRuntimeLogConfig(s.cfg).RetentionDays,
+		RequestConnectionRetentionDays:     defaults.RequestConnectionRetentionDays,
+		RequestTimingRetentionDays:         defaults.RequestTimingRetentionDays,
+		CompletedBillingEventRetentionDays: defaults.CompletedBillingEventRetentionDays,
+		BillingDedupHotRetentionDays:       defaults.BillingDedupHotRetentionDays,
+		BillingDedupArchiveRetentionDays:   defaults.BillingDedupArchiveRetentionDays,
+		UserTrafficRetentionDays:           defaults.UserTrafficRetentionDays,
 	}
 	if s.cfg != nil {
 		base.OpsCleanupConfig = s.cfg.Ops.Cleanup
@@ -236,6 +255,27 @@ func (s *OpsCleanupService) computeEffectiveLocked(ctx context.Context) {
 				"[OpsCleanup] parse advanced settings failed, using cfg: %v", err)
 		} else {
 			dr := adv.DataRetention
+			// The extended datasets do not support zero-day truncation. API writes
+			// normalize zero/missing values, and this duplicate guard protects the
+			// cleanup worker from hand-edited legacy settings as well.
+			if dr.RequestConnectionRetentionDays <= 0 {
+				dr.RequestConnectionRetentionDays = defaults.RequestConnectionRetentionDays
+			}
+			if dr.RequestTimingRetentionDays <= 0 {
+				dr.RequestTimingRetentionDays = defaults.RequestTimingRetentionDays
+			}
+			if dr.CompletedBillingEventRetentionDays <= 0 {
+				dr.CompletedBillingEventRetentionDays = defaults.CompletedBillingEventRetentionDays
+			}
+			if dr.BillingDedupHotRetentionDays <= 0 {
+				dr.BillingDedupHotRetentionDays = defaults.BillingDedupHotRetentionDays
+			}
+			if dr.BillingDedupArchiveRetentionDays <= 0 {
+				dr.BillingDedupArchiveRetentionDays = defaults.BillingDedupArchiveRetentionDays
+			}
+			if dr.UserTrafficRetentionDays <= 0 {
+				dr.UserTrafficRetentionDays = defaults.UserTrafficRetentionDays
+			}
 			base.Enabled = dr.CleanupEnabled
 			if sched := strings.TrimSpace(dr.CleanupSchedule); sched != "" {
 				base.Schedule = sched
@@ -249,6 +289,12 @@ func (s *OpsCleanupService) computeEffectiveLocked(ctx context.Context) {
 			if dr.HourlyMetricsRetentionDays >= 0 {
 				base.HourlyMetricsRetentionDays = dr.HourlyMetricsRetentionDays
 			}
+			base.RequestConnectionRetentionDays = dr.RequestConnectionRetentionDays
+			base.RequestTimingRetentionDays = dr.RequestTimingRetentionDays
+			base.CompletedBillingEventRetentionDays = dr.CompletedBillingEventRetentionDays
+			base.BillingDedupHotRetentionDays = dr.BillingDedupHotRetentionDays
+			base.BillingDedupArchiveRetentionDays = dr.BillingDedupArchiveRetentionDays
+			base.UserTrafficRetentionDays = dr.UserTrafficRetentionDays
 		}
 	}
 	if raw, ok := values[SettingKeyOpsRuntimeLogConfig]; ok {
@@ -347,6 +393,33 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 			return out, err
 		}
 		*t.counter = n
+	}
+
+	var err error
+	out.requestConnections, err = deleteOldRowsByCTID(ctx, s.db, "request_connection_traces", "started_at", now.AddDate(0, 0, -effective.RequestConnectionRetentionDays), "", opsCleanupBatchSize)
+	if err != nil {
+		return out, err
+	}
+	out.requestTimings, err = deleteOldRowsByCTID(ctx, s.db, "request_timing_details", "created_at", now.AddDate(0, 0, -effective.RequestTimingRetentionDays), "", opsCleanupBatchSize)
+	if err != nil {
+		return out, err
+	}
+	out.billingEvents, err = deleteOldRowsByCTID(ctx, s.db, "usage_billing_events", "completed_at", now.AddDate(0, 0, -effective.CompletedBillingEventRetentionDays), "state IN ('complete','legacy')", opsCleanupBatchSize)
+	if err != nil {
+		return out, err
+	}
+	out.userTraffic, err = deleteOldRowsByCTID(ctx, s.db, "user_traffic_events", "started_at", now.AddDate(0, 0, -effective.UserTrafficRetentionDays), "", opsCleanupBatchSize)
+	if err != nil {
+		return out, err
+	}
+	out.billingDedupArchived, err = archiveOldUsageBillingDedup(ctx, s.db, now.AddDate(0, 0, -effective.BillingDedupHotRetentionDays), opsCleanupBatchSize)
+	if err != nil {
+		return out, err
+	}
+	dedupTotalDays := effective.BillingDedupHotRetentionDays + effective.BillingDedupArchiveRetentionDays
+	out.billingDedupDeleted, err = deleteOldRowsByCTID(ctx, s.db, "usage_billing_dedup_archive", "created_at", now.AddDate(0, 0, -dedupTotalDays), "", opsCleanupBatchSize)
+	if err != nil {
+		return out, err
 	}
 
 	// Channel monitor 每日维护（聚合昨日明细 + 软删过期明细/聚合）。

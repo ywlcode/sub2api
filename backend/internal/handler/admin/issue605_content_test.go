@@ -31,7 +31,7 @@ func (r *issue605ContentRepo) ReadUsageContentTimings(_ context.Context, ids []i
 
 func TestIssue605ActualAdminUsageListContentDTO(t *testing.T) {
 	r := &issue605ContentRepo{}
-	h := NewUsageHandler(service.NewUsageService(r, nil, nil, nil), nil, nil, nil)
+	h := NewUsageHandler(service.NewUsageService(r, nil, nil, nil), nil, nil, nil, nil)
 	engine := gin.New()
 	engine.GET("/usage", h.List)
 	w := httptest.NewRecorder()

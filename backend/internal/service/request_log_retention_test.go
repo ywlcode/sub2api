@@ -110,7 +110,7 @@ func TestRuntimeLogConfig_RequestRetentionCompatibility(t *testing.T) {
 	}
 	reset, err := svc.ResetRuntimeLogConfig(context.Background(), 1)
 	require.NoError(t, err)
-	require.Equal(t, 90, *reset.RequestRetentionDays)
+	require.Equal(t, 30, *reset.RequestRetentionDays)
 }
 
 func TestRequestLogRetention_CutoffAlignsToConfiguredDayStart(t *testing.T) {

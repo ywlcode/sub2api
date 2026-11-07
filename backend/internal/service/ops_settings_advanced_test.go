@@ -119,6 +119,14 @@ func TestGetOpsAdvancedSettings_BackfillsNewDisplayFlagsFromDefaults(t *testing.
 	if !cfg.DisplayAlertEvents {
 		t.Fatalf("DisplayAlertEvents = false, want true default backfill")
 	}
+	if cfg.DataRetention.RequestConnectionRetentionDays != 3 ||
+		cfg.DataRetention.RequestTimingRetentionDays != 3 ||
+		cfg.DataRetention.CompletedBillingEventRetentionDays != 7 ||
+		cfg.DataRetention.BillingDedupHotRetentionDays != 15 ||
+		cfg.DataRetention.BillingDedupArchiveRetentionDays != 15 ||
+		cfg.DataRetention.UserTrafficRetentionDays != 7 {
+		t.Fatalf("legacy retention defaults not backfilled: %+v", cfg.DataRetention)
+	}
 }
 
 func TestGetOpenAIQuotaAutoPauseSettings_ReadsDefaultsFromOpsAdvancedSettings(t *testing.T) {
