@@ -6,8 +6,20 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOpsCleanupDisabledDoesNotQueryDatabase(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	svc := &OpsCleanupService{db: db, cfg: &config.Config{}}
+	counts, err := svc.runCleanupOnce(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, opsCleanupDeletedCounts{}, counts)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 func TestOpsCleanupPlan(t *testing.T) {
 	now := time.Date(2026, 4, 29, 12, 0, 0, 0, time.UTC)

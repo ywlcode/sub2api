@@ -335,8 +335,12 @@ func (s *OpsCleanupService) runScheduled() {
 	ctx, cancel := context.WithTimeout(context.Background(), opsCleanupRunTimeout)
 	defer cancel()
 
-	// 让 retention 改动当次生效（schedule/enabled 改动需要 Reload）。
+	// Recheck enabled as well as retention: another instance may have disabled
+	// cleanup while this instance still has the old cron schedule installed.
 	s.refreshEffectiveBeforeRun(ctx)
+	if !s.snapshotEffective().Enabled {
+		return
+	}
 
 	release, ok := s.tryAcquireLeaderLock(ctx)
 	if !ok {
@@ -369,6 +373,9 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 	}
 
 	effective := s.snapshotEffective()
+	if !effective.Enabled {
+		return out, nil
+	}
 	now := time.Now().UTC()
 
 	targets := []opsCleanupTarget{
