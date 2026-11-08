@@ -11,6 +11,75 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type requestConfigWaitingContext struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *requestConfigWaitingContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
+func TestRequestConfigCacheCanceledLeaderDoesNotFailFollower(t *testing.T) {
+	var cache requestConfigCache[int, string]
+	type traceKey struct{}
+	leader, cancel := context.WithCancel(context.WithValue(context.Background(), traceKey{}, "trace"))
+	defer cancel()
+	started, release := make(chan context.Context, 1), make(chan struct{})
+	var calls atomic.Int32
+	load := func(ctx context.Context) (string, int, error) {
+		calls.Add(1)
+		started <- ctx
+		select {
+		case <-ctx.Done():
+			return "", 0, ctx.Err()
+		case <-release:
+			return "fresh", 5, nil
+		}
+	}
+	leaderDone := make(chan error, 1)
+	go func() { _, err := cache.get(leader, 1, load); leaderDone <- err }()
+	loadCtx := <-started
+	follower := &requestConfigWaitingContext{Context: context.Background(), waiting: make(chan struct{})}
+	followerDone := make(chan error, 1)
+	go func() {
+		value, err := cache.get(follower, 1, load)
+		if err == nil && value != "fresh" {
+			err = errors.New("incorrect configuration")
+		}
+		followerDone <- err
+	}()
+	<-follower.waiting // DoChan has joined the existing load before Done is read.
+	cancel()
+	require.ErrorIs(t, <-leaderDone, context.Canceled)
+	require.NoError(t, loadCtx.Err())
+	require.Equal(t, "trace", loadCtx.Value(traceKey{}))
+	deadline, bounded := loadCtx.Deadline()
+	require.True(t, bounded)
+	require.LessOrEqual(t, time.Until(deadline), requestConfigLoadTimeout)
+	close(release)
+	require.NoError(t, <-followerDone)
+	require.Equal(t, int32(1), calls.Load())
+	value, err := cache.get(context.Background(), 1, load)
+	require.NoError(t, err)
+	require.Equal(t, "fresh", value)
+	require.Equal(t, int32(1), calls.Load())
+}
+
+func TestRequestConfigCacheSharedLoadTimeoutIsNotCached(t *testing.T) {
+	var cache requestConfigCache[int, string]
+	_, err := cache.get(context.Background(), 1, func(ctx context.Context) (string, int, error) {
+		<-ctx.Done()
+		return "", 0, ctx.Err()
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	value, err := cache.get(context.Background(), 1, func(context.Context) (string, int, error) { return "recovered", 9, nil })
+	require.NoError(t, err)
+	require.Equal(t, "recovered", value)
+}
+
 func TestRequestConfigCacheCoalescesInvalidationAndCancellation(t *testing.T) {
 	var cache requestConfigCache[int, string]
 	var calls atomic.Int32

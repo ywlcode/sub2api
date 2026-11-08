@@ -10,7 +10,10 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
-const requestConfigTTL = 30 * time.Second
+const (
+	requestConfigTTL         = 30 * time.Second
+	requestConfigLoadTimeout = 5 * time.Second
+)
 
 var errRequestConfigChanged = errors.New("request configuration changed during lookup; retry")
 
@@ -98,8 +101,16 @@ func (c *requestConfigCache[K, V]) getWithTTL(ctx context.Context, key K, ttl ti
 				return entry.value, nil
 			}
 			c.mu.Unlock()
-			value, cost, err := load(ctx)
+			// A coalesced lookup belongs to all waiters, not the first request.
+			// Preserve tracing/context values, but bound its lifetime independently
+			// so a disconnect or short caller deadline cannot fail healthy peers.
+			loadCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), requestConfigLoadTimeout)
+			defer cancel()
+			value, cost, err := load(loadCtx)
 			if err != nil {
+				return nil, err
+			}
+			if err := loadCtx.Err(); err != nil {
 				return nil, err
 			}
 			c.mu.Lock()

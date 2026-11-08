@@ -116,11 +116,7 @@ func (s *SecurityPenaltyService) GetConfig(ctx context.Context) (SecurityPenalty
 		cfg, _, err := s.loadConfig(ctx)
 		return cloneSecurityPenaltyConfig(cfg), err
 	}
-	cfg, err := s.configCache.getWithTTL(ctx, 0, 0, func(loadCtx context.Context) (SecurityPenaltyConfig, int, error) {
-		// Refresh belongs to all waiting requests. Its own bounded DB timeout
-		// remains in loadConfig; one canceled leader must not fail its peers.
-		return s.loadConfig(context.WithoutCancel(loadCtx))
-	})
+	cfg, err := s.configCache.getWithTTL(ctx, 0, 0, s.loadConfig)
 	return cloneSecurityPenaltyConfig(cfg), err
 }
 
