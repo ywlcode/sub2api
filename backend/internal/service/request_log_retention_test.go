@@ -137,6 +137,36 @@ func TestRequestLogRetention_CutoffAlignsToConfiguredDayStart(t *testing.T) {
 	}
 }
 
+func TestDashboardRetentionDoesNotOverrideOpsDedupPolicy(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		settings := newRuntimeSettingRepoStub()
+		advanced, err := json.Marshal(OpsAdvancedSettings{DataRetention: OpsDataRetentionSettings{
+			CleanupEnabled: enabled, BillingDedupHotRetentionDays: 60, BillingDedupArchiveRetentionDays: 15,
+		}})
+		require.NoError(t, err)
+		require.NoError(t, settings.Set(context.Background(), SettingKeyOpsAdvancedSettings, string(advanced)))
+		require.NoError(t, settings.Set(context.Background(), SettingKeyOpsRuntimeLogConfig, `{"request_retention_days":7}`))
+		cleanup := &OpsCleanupService{settingRepo: settings, cfg: &config.Config{
+			Ops: config.OpsConfig{Cleanup: config.OpsCleanupConfig{Enabled: true}},
+		}}
+		cleanup.computeEffectiveLocked(context.Background())
+		require.Equal(t, enabled, cleanup.effective.Enabled)
+		require.Equal(t, 60, cleanup.effective.BillingDedupHotRetentionDays)
+		repo := &dashboardAggregationRepoTestStub{}
+		svc := &DashboardAggregationService{repo: repo, settingRepo: settings, cfg: config.DashboardAggregationConfig{
+			Enabled: true, Retention: config.DashboardAggregationRetentionConfig{
+				UsageLogsDays: 7, UsageBillingDedupDays: 30, HourlyDays: 30, DailyDays: 90,
+			},
+		}}
+		now := time.Now().UTC()
+		svc.maybeCleanupRetention(context.Background(), now)
+		require.Zero(t, repo.cleanupDedupCalls, "dashboard must not bypass the Ops retention policy or switch")
+		require.Equal(t, 1, repo.cleanupUsageCalls)
+		require.Equal(t, 1, repo.cleanupAggregateCalls)
+		require.Equal(t, now, svc.lastRetentionCleanup.Load())
+	}
+}
+
 // 夏令时在零点跳变的日期没有 00:00：日界取该日期实际开始的时刻，而不是前一天的 23:00。
 func TestGroupUsageDayBoundariesSkipMidnightDSTGap(t *testing.T) {
 	loc, err := time.LoadLocation("America/Santiago")
