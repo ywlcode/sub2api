@@ -161,14 +161,19 @@ func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte
 
 	normalized := body
 	if applyStateless {
-		patched, err := sjson.SetBytes(normalized, "store", false)
-		if err != nil {
-			return body
+		if gjson.GetBytes(normalized, "store").Type != gjson.False {
+			patched, err := sjson.SetBytes(normalized, "store", false)
+			if err != nil {
+				return body
+			}
+			normalized = patched
 		}
-		normalized = patched
 		if stripped, err := sjson.DeleteBytes(normalized, "previous_response_id"); err == nil {
 			normalized = stripped
 		}
+	}
+	if !deepSeekInputNeedsNormalization(normalized, applyImages, applyReasoning, account.IsDeepSeekVolcengineCompatibilityEnabled(), deepSeekResponsesImageField(account)) {
+		return normalized
 	}
 
 	var requestBody map[string]any

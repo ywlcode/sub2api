@@ -29,6 +29,9 @@ func normalizeVolcengineRequestBody(account *Account, body []byte, protocol stri
 	if !account.IsDeepSeekVolcengineCompatibilityEnabled() || len(body) == 0 {
 		return body, nil
 	}
+	if !volcengineRequestNeedsNormalization(body, protocol) {
+		return body, nil
+	}
 	var request map[string]any
 	if err := decodeOpenAIJSONUseNumber(body, &request); err != nil {
 		return nil, fmt.Errorf("normalize Volcengine request: %w", err)
