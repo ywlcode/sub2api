@@ -169,6 +169,10 @@ func (s *APIKeyService) StartAuthCacheInvalidationSubscriber(ctx context.Context
 }
 
 func (s *APIKeyService) invalidateLocalAuthCache(cacheKey string) {
+	if s != nil && cacheKey == securityPenaltyConfigInvalidationKey {
+		s.invalidateSecurityPenaltyConfig()
+		return
+	}
 	if s != nil && s.applyRequestConfigInvalidation(cacheKey) {
 		return
 	}

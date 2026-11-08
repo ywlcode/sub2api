@@ -20,6 +20,10 @@ type requestConfigEntry[V any] struct {
 	cost    int
 }
 
+func (e requestConfigEntry[V]) valid(now time.Time) bool {
+	return e.expires.IsZero() || now.Before(e.expires)
+}
+
 // Values are immutable and owned by the cache. Callers must copy mutable output.
 // A generation fences both publication and return of an invalidated load. Errors
 // are never cached; cancellation does not keep followers waiting for the leader.
@@ -56,6 +60,10 @@ func (c *requestConfigCache[K, V]) invalidate(matches func(K) bool) {
 }
 
 func (c *requestConfigCache[K, V]) get(ctx context.Context, key K, load func(context.Context) (V, int, error)) (V, error) {
+	return c.getWithTTL(ctx, key, requestConfigTTL, load)
+}
+
+func (c *requestConfigCache[K, V]) getWithTTL(ctx context.Context, key K, ttl time.Duration, load func(context.Context) (V, int, error)) (V, error) {
 	var zero V
 	for attempt := 0; attempt < 3; attempt++ {
 		if err := ctx.Err(); err != nil {
@@ -63,7 +71,7 @@ func (c *requestConfigCache[K, V]) get(ctx context.Context, key K, load func(con
 		}
 		c.mu.Lock()
 		entry, found := c.entries[key]
-		if found && time.Now().Before(entry.expires) {
+		if found && entry.valid(time.Now()) {
 			c.mu.Unlock()
 			return entry.value, nil
 		}
@@ -85,7 +93,7 @@ func (c *requestConfigCache[K, V]) get(ctx context.Context, key K, load func(con
 				c.mu.Unlock()
 				return nil, errRequestConfigChanged
 			}
-			if entry, ok := c.entries[key]; ok && time.Now().Before(entry.expires) {
+			if entry, ok := c.entries[key]; ok && entry.valid(time.Now()) {
 				c.mu.Unlock()
 				return entry.value, nil
 			}
@@ -107,7 +115,7 @@ func (c *requestConfigCache[K, V]) get(ctx context.Context, key K, load func(con
 				}
 				now := time.Now()
 				for k, e := range c.entries {
-					if k == key || !now.Before(e.expires) {
+					if k == key || !e.valid(now) {
 						delete(c.entries, k)
 						c.bytes -= e.cost
 					}
@@ -119,7 +127,11 @@ func (c *requestConfigCache[K, V]) get(ctx context.Context, key K, load func(con
 						break
 					}
 				}
-				c.entries[key] = requestConfigEntry[V]{value, now.Add(requestConfigTTL), cost}
+				var expires time.Time
+				if ttl > 0 {
+					expires = now.Add(ttl)
+				}
+				c.entries[key] = requestConfigEntry[V]{value, expires, cost}
 				c.bytes += cost
 			}
 			return value, nil

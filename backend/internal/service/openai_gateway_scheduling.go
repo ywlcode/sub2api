@@ -1206,6 +1206,7 @@ func (s *OpenAIGatewayService) SelectAccountWithLoadAwareness(ctx context.Contex
 }
 
 func (s *OpenAIGatewayService) selectAccountWithLoadAwareness(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability OpenAIEndpointCapability, useUpstreamTokenCost bool, stickyBindingAllowed ...func(*Account) bool) (*AccountSelectionResult, error) {
+	ctx = withOpenAISelectionAccountReuse(ctx)
 	platform = NormalizeOpenAICompatiblePlatform(platform)
 	if s.checkChannelPricingRestriction(ctx, groupID, requestedModel) {
 		slog.Warn("channel pricing restriction blocked request",
@@ -1850,6 +1851,7 @@ func (s *OpenAIGatewayService) recheckSelectedOpenAIAccountFromDBBeforeProfit(ct
 	if s.isOpenAIProxyStreamQuarantined(ctx, latest) {
 		return nil
 	}
+	rememberRecheckedOpenAIAccount(ctx, latest)
 	return latest
 }
 
@@ -1919,6 +1921,9 @@ func (s *OpenAIGatewayService) isOpenAIAccountBlockedBySchedulingThreshold(ctx c
 func (s *OpenAIGatewayService) hydrateSelectedAccount(ctx context.Context, account *Account) (*Account, error) {
 	if account == nil || s.schedulerSnapshot == nil {
 		return account, nil
+	}
+	if hydrated, reused, err := s.reuseRecheckedOpenAIAccount(ctx, account); reused {
+		return hydrated, err
 	}
 	hydrated, err := s.schedulerSnapshot.GetAccount(ctx, account.ID)
 	if err != nil {
