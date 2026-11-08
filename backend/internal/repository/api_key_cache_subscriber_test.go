@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"errors"
+	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,52 +50,83 @@ func TestAPIKeyCacheSubscriber_BlocksUntilContextCancellation(t *testing.T) {
 	}
 }
 
-func TestAPIKeyCacheSubscriberReportsAutomaticResubscription(t *testing.T) {
+// Reconnect is owned by APIKeyService, which disables and invalidates caches
+// before retrying. The repository must surface even a brief socket loss.
+func TestAPIKeyCacheSubscriberReportsDisconnect(t *testing.T) {
 	server := miniredis.RunT(t)
-	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	client := redis.NewClient(&redis.Options{Addr: server.Addr(), DialTimeout: 100 * time.Millisecond})
 	t.Cleanup(func() { _ = client.Close() })
 	cache := &apiKeyCache{rdb: client}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	t.Cleanup(cancel)
-	ready := make(chan struct{}, 4)
-	received := make(chan string, 4)
-	done := make(chan error, 1)
+	defer cancel()
+	ready, done := make(chan struct{}, 1), make(chan error, 1)
 	go func() {
-		done <- cache.subscribeAuthCacheInvalidation(ctx, func(key string) { received <- key }, func() { ready <- struct{}{} })
+		done <- cache.subscribeAuthCacheInvalidation(ctx, func(string) {}, func() { ready <- struct{}{} })
 	}()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Error("subscriber cleanup did not finish")
-		}
-	})
-	awaitReady := func() {
-		t.Helper()
-		select {
-		case <-ready:
-		case <-time.After(5 * time.Second):
-			t.Fatal("go-redis adapter did not report subscription acknowledgement")
-		}
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal("subscription did not start")
 	}
-	awaitReady()
-	// Force an actual connection loss on the isolated fixture only. Restart
-	// preserves the port, so the same PubSub call must reconnect by itself.
 	server.Close()
 	require.NoError(t, server.Restart())
-	awaitReady()
-	require.NoError(t, client.Publish(ctx, authCacheInvalidateChannel, "fixture-key-after-reconnect").Err())
-	select {
-	case key := <-received:
-		require.Equal(t, "fixture-key-after-reconnect", key)
-	case <-time.After(time.Second):
-		t.Fatal("messages stopped after the automatic resubscription")
-	}
 	select {
 	case err := <-done:
-		done <- err // Keep cleanup's one join intact on assertion failure.
-		t.Fatalf("subscriber returned instead of reconnecting: %v", err)
-	default:
+		require.Error(t, err, "a lost notification interval must be reported even if Redis reconnects")
+	case <-ctx.Done():
+		t.Fatal("subscription hid the disconnect")
+	}
+}
+
+type authSubscriberDroppingConn struct {
+	net.Conn
+	drop *atomic.Bool
+}
+
+func (c *authSubscriberDroppingConn) Read(p []byte) (int, error) {
+	for {
+		n, err := c.Conn.Read(p)
+		if !c.drop.Load() || err != nil {
+			return n, err
+		}
+		// Simulate a one-way black hole; socket and command connections stay up.
+	}
+}
+
+func TestAPIKeyCacheSubscriberProbesIdleSocketAndDetectsBlackhole(t *testing.T) {
+	server := miniredis.RunT(t)
+	var drop atomic.Bool
+	client := redis.NewClient(&redis.Options{Addr: server.Addr(), Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return &authSubscriberDroppingConn{Conn: conn, drop: &drop}, nil
+	}})
+	t.Cleanup(func() { _ = client.Close() })
+	cache := &apiKeyCache{rdb: client}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	ready, done := make(chan struct{}, 1), make(chan error, 1)
+	go func() {
+		done <- cache.subscribeAuthCacheInvalidation(ctx, func(string) {}, func() { ready <- struct{}{} })
+	}()
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal("subscription did not start")
+	}
+	// A healthy but idle connection must survive a full probe cycle.
+	select {
+	case err := <-done:
+		t.Fatalf("idle subscriber returned: %v", err)
+	case <-time.After(authCacheSubscriberIdle + authCacheSubscriberProbe):
+	}
+	drop.Store(true)
+	select {
+	case err := <-done:
+		require.Error(t, err)
+	case <-time.After(authCacheSubscriberIdle + authCacheSubscriberProbe + time.Second):
+		t.Fatal("silent partition left the subscriber connected indefinitely")
 	}
 }

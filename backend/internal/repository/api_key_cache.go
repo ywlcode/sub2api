@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"net"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -18,6 +18,8 @@ const (
 	apiKeyCreateCountKeyPrefix = "apikey:create_count:"
 	apiKeyAuthCachePrefix      = "apikey:auth:"
 	authCacheInvalidateChannel = "auth:cache:invalidate"
+	authCacheSubscriberIdle    = 5 * time.Second
+	authCacheSubscriberProbe   = 2 * time.Second
 )
 
 // apiKeyRateLimitKey generates the Redis key for API key creation rate limiting.
@@ -126,41 +128,53 @@ func (c *apiKeyCache) SubscribeAuthCacheInvalidation(ctx context.Context, handle
 
 func (c *apiKeyCache) subscribeAuthCacheInvalidation(ctx context.Context, handler func(string), ready func()) error {
 	pubsub := c.rdb.Subscribe(ctx, authCacheInvalidateChannel)
+	defer func() { _ = pubsub.Close() }()
+	stop := context.AfterFunc(ctx, func() { _ = pubsub.Close() })
+	defer stop()
 
-	// Verify subscription is working
-	_, err := pubsub.Receive(ctx)
-	if err != nil {
-		_ = pubsub.Close()
-		return fmt.Errorf("subscribe to auth cache invalidation: %w", err)
-	}
-
-	defer func() {
-		if err := pubsub.Close(); err != nil {
-			log.Printf("Warning: failed to close auth cache invalidation pubsub: %v", err)
-		}
-	}()
-	ready()
-
-	// The message-only channel hides automatic reconnects. Subscription events
-	// mark a recovery checkpoint at which consumers discard missed L1 grants.
-	ch := pubsub.ChannelWithSubscriptions()
+	// Receive directly: Channel* hides read failures during go-redis reconnects,
+	// leaving consumers trusting indefinite snapshots while notifications stop.
+	// Return every transport error to the service; it disables caches, clears
+	// generations and owns reconnect/backoff. Idle sockets get a bounded PING
+	// probe, without polling settings or expiring otherwise healthy snapshots.
+	subscribed, probing := false, false
 	for {
-		select {
-		case <-ctx.Done():
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		timeout := authCacheSubscriberIdle
+		if probing {
+			timeout = authCacheSubscriberProbe
+		}
+		readCtx, cancel := context.WithTimeout(ctx, timeout)
+		event, err := pubsub.ReceiveTimeout(readCtx, timeout)
+		cancel()
+		if ctx.Err() != nil {
 			return ctx.Err()
-		case event, ok := <-ch:
-			if !ok {
-				return errors.New("auth cache invalidation pubsub channel closed")
+		}
+		if err != nil {
+			var netErr net.Error
+			if subscribed && !probing && errors.As(err, &netErr) && netErr.Timeout() {
+				probeCtx, cancel := context.WithTimeout(ctx, authCacheSubscriberProbe)
+				err = pubsub.Ping(probeCtx)
+				cancel()
+				if err == nil {
+					probing = true
+					continue
+				}
 			}
-			switch message := event.(type) {
-			case *redis.Subscription:
-				if message.Kind == "subscribe" && message.Channel == authCacheInvalidateChannel {
-					ready()
-				}
-			case *redis.Message:
-				if message != nil {
-					handler(message.Payload)
-				}
+			return fmt.Errorf("receive auth cache invalidation: %w", err)
+		}
+		probing = false
+		switch message := event.(type) {
+		case *redis.Subscription:
+			if message.Kind == "subscribe" && message.Channel == authCacheInvalidateChannel {
+				subscribed = true
+				ready()
+			}
+		case *redis.Message:
+			if message != nil {
+				handler(message.Payload)
 			}
 		}
 	}
