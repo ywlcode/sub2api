@@ -187,6 +187,7 @@ type apiKeyHealthBody struct {
 	unknownStream bool
 	failed        bool
 	terminal      bool
+	neutral       bool
 	eof           bool
 	readErr       error
 	closeOnce     sync.Once
@@ -267,6 +268,9 @@ func (b *apiKeyHealthBody) observeLine(line []byte) {
 	}
 	typ := gjson.GetBytes(data, "type").String()
 	b.failed = b.failed || typ == "error" || typ == "response.failed" || apiKeyHealthErrorJSON(data)
+	if apiKeyHealthNeutralTerminal(data) {
+		b.terminal, b.neutral = true, true
+	}
 	b.terminal = b.terminal || typ == "message_stop" || IsSuccessfulStreamTerminal(data) ||
 		typ == "response.done" && gjson.GetBytes(data, "response.status").String() == "completed"
 	for _, choice := range gjson.GetBytes(data, "choices").Array() {
@@ -277,6 +281,27 @@ func (b *apiKeyHealthBody) observeLine(line []byte) {
 	}
 }
 
+// A caller's output cap, content filtering, or explicit cancellation is a
+// valid Responses terminal, but provides no evidence of upstream health.
+// Unknown incomplete reasons and explicit errors retain their failure path.
+func apiKeyHealthNeutralTerminal(data []byte) bool {
+	switch gjson.GetBytes(data, "type").String() {
+	case "response.incomplete", "response.completed", "response.done", "response.cancelled":
+	default:
+		return false
+	}
+	switch gjson.GetBytes(data, "response.status").String() {
+	case "cancelled":
+		return true
+	case "incomplete":
+		switch gjson.GetBytes(data, "response.incomplete_details.reason").String() {
+		case "max_output_tokens", "content_filter":
+			return true
+		}
+	}
+	return false
+}
+
 func (b *apiKeyHealthBody) observeOversizedLine(prefix []byte) {
 	// Response completion events can contain the entire generated output. Keep
 	// the bounded prefix and inspect only structural fields present before it.
@@ -284,6 +309,11 @@ func (b *apiKeyHealthBody) observeOversizedLine(prefix []byte) {
 	data := bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(prefix), []byte("data:")))
 	typ := gjson.GetBytes(data, "type").String()
 	b.failed = b.failed || typ == "error" || typ == "response.failed" || apiKeyHealthErrorJSON(data)
+	// The reason/error may lie beyond the bounded prefix. Do not turn an
+	// uninspectable incomplete terminal into a healthy sample.
+	if typ == "response.incomplete" || gjson.GetBytes(data, "response.status").String() == "incomplete" || apiKeyHealthNeutralTerminal(data) {
+		b.neutral = true
+	}
 	b.terminal = b.terminal || typ == "response.completed" || typ == "message_stop" ||
 		typ == "response.done" && gjson.GetBytes(data, "response.status").String() == "completed"
 }
@@ -300,7 +330,7 @@ func (b *apiKeyHealthBody) finish() {
 	if b.stream {
 		if b.failed || upstreamTimeout || b.eof && !b.terminal && !b.unknownStream || b.readErr != nil && !errors.Is(b.readErr, context.Canceled) {
 			b.observation.record(false, b.status, "Upstream stream failed or ended without a terminal event")
-		} else if b.terminal {
+		} else if b.terminal && !b.neutral {
 			b.observation.record(true, b.status, "")
 		}
 		return
