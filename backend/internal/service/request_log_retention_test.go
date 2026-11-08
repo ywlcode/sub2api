@@ -22,8 +22,8 @@ func TestRequestLogRetention_RuntimePolicy(t *testing.T) {
 	}{
 		{"legacy uses deployment", `{"retention_days":30}`, true, 90, true},
 		{"short window", `{"request_retention_days":7}`, true, 7, true},
-		{"long window extends dedup", `{"request_retention_days":730}`, true, 730, true},
-		{"forever skips request and dedup deletion", `{"request_retention_days":0}`, true, 0, false},
+		{"long window", `{"request_retention_days":730}`, true, 730, true},
+		{"forever skips request deletion", `{"request_retention_days":0}`, true, 0, false},
 		{"works without aggregation", `{"request_retention_days":14}`, false, 14, true},
 		{"legacy disabled stays disabled", `{"retention_days":30}`, false, 0, false},
 	} {
@@ -41,11 +41,10 @@ func TestRequestLogRetention_RuntimePolicy(t *testing.T) {
 			if tt.wantCleanup {
 				require.Equal(t, 1, repo.cleanupUsageCalls)
 				require.Equal(t, now.AddDate(0, 0, -tt.wantDays), repo.cleanupUsageCutoff)
-				require.Equal(t, now.AddDate(0, 0, -max(365, tt.wantDays)), repo.cleanupDedupCutoff)
 			} else {
 				require.Zero(t, repo.cleanupUsageCalls)
-				require.Zero(t, repo.cleanupDedupCalls)
 			}
+			require.Zero(t, repo.cleanupDedupCalls, "dedup retention belongs to OpsCleanupService")
 			if !tt.enabled {
 				require.Zero(t, repo.cleanupAggregateCalls)
 			}
@@ -106,4 +105,30 @@ func TestRuntimeLogConfig_RequestRetentionCompatibility(t *testing.T) {
 	reset, err := svc.ResetRuntimeLogConfig(context.Background(), 1)
 	require.NoError(t, err)
 	require.Equal(t, 30, *reset.RequestRetentionDays)
+}
+
+func TestDashboardRetentionDoesNotOverrideOpsDedupPolicy(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		settings := newRuntimeSettingRepoStub()
+		writeAdvancedSettings(t, settings, OpsDataRetentionSettings{
+			CleanupEnabled: enabled, BillingDedupHotRetentionDays: 60, BillingDedupArchiveRetentionDays: 15,
+		})
+		require.NoError(t, settings.Set(context.Background(), SettingKeyOpsRuntimeLogConfig, `{"request_retention_days":7}`))
+		cleanup := makeOverlayService(settings, config.OpsCleanupConfig{Enabled: true})
+		cleanup.computeEffectiveLocked(context.Background())
+		require.Equal(t, enabled, cleanup.effective.Enabled)
+		require.Equal(t, 60, cleanup.effective.BillingDedupHotRetentionDays)
+		repo := &dashboardAggregationRepoTestStub{}
+		svc := &DashboardAggregationService{repo: repo, settingRepo: settings, cfg: config.DashboardAggregationConfig{
+			Enabled: true, Retention: config.DashboardAggregationRetentionConfig{
+				UsageLogsDays: 7, UsageBillingDedupDays: 30, HourlyDays: 30, DailyDays: 90,
+			},
+		}}
+		now := time.Now().UTC()
+		svc.maybeCleanupRetention(context.Background(), now)
+		require.Zero(t, repo.cleanupDedupCalls, "dashboard must not bypass the Ops retention policy or switch")
+		require.Equal(t, 1, repo.cleanupUsageCalls)
+		require.Equal(t, 1, repo.cleanupAggregateCalls)
+		require.Equal(t, now, svc.lastRetentionCleanup.Load())
+	}
 }

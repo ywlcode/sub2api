@@ -374,14 +374,10 @@ func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context,
 	hourlyCutoff := now.AddDate(0, 0, -s.cfg.Retention.HourlyDays)
 	dailyCutoff := now.AddDate(0, 0, -s.cfg.Retention.DailyDays)
 	usageCutoff := now.AddDate(0, 0, -usageDays)
-	dedupDays := s.cfg.Retention.UsageBillingDedupDays
-	if dedupDays <= 0 {
-		dedupDays = 365
-	}
-	dedupDays = max(dedupDays, usageDays)
-	dedupCutoff := now.AddDate(0, 0, -dedupDays)
-
-	var aggErr, usageErr, dedupErr error
+	// OpsCleanupService exclusively owns dedup hot/archive retention and its
+	// enable switch. A second YAML-driven worker could archive rows earlier
+	// than the admin policy, including when that policy disables cleanup.
+	var aggErr, usageErr error
 	if s.cfg.Enabled {
 		aggErr = s.repo.CleanupAggregates(ctx, hourlyCutoff, dailyCutoff)
 	}
@@ -394,13 +390,7 @@ func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context,
 	if usageErr != nil {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] usage_logs 保留清理失败: %v", usageErr)
 	}
-	if usageDays > 0 {
-		dedupErr = s.repo.CleanupUsageBillingDedup(ctx, dedupCutoff)
-	}
-	if dedupErr != nil {
-		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] usage_billing_dedup 保留清理失败: %v", dedupErr)
-	}
-	if aggErr == nil && usageErr == nil && dedupErr == nil {
+	if aggErr == nil && usageErr == nil {
 		s.lastRetentionCleanup.Store(now)
 	}
 }
