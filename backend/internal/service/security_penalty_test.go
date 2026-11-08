@@ -15,7 +15,14 @@ func penaltyTestService(t *testing.T, cfg SecurityPenaltyConfig) (*SecurityPenal
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	return &SecurityPenaltyService{db: db, cached: cfg, expires: time.Now().Add(time.Hour)}, mock
+	keys := &APIKeyService{cache: &struct{ APIKeyCache }{}}
+	keys.authInvalidationConnected.Store(true)
+	s := NewSecurityPenaltyService(db, nil, keys)
+	s.configCache.entries = map[int]requestConfigEntry[SecurityPenaltyConfig]{0: {
+		value: cfg, expires: time.Now().Add(time.Hour), cost: 256,
+	}}
+	s.configCache.bytes = 256
+	return s, mock
 }
 
 func penaltyTestConfig() SecurityPenaltyConfig {

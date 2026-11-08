@@ -311,6 +311,7 @@ type APIKeyService struct {
 	userRepo                  UserRepository
 	groupRouter               APIKeyGroupRouter
 	securityPenalties         *SecurityPenaltyService
+	securityPenaltyConfig     atomic.Pointer[SecurityPenaltyService]
 	groupRepo                 GroupRepository
 	userSubRepo               UserSubscriptionRepository
 	userGroupRateRepo         UserGroupRateRepository

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
-	"sync"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -94,17 +93,17 @@ type SecurityPenaltyAdmission struct {
 }
 
 type SecurityPenaltyService struct {
-	db       *sql.DB
-	settings SettingRepository
-	mu       sync.Mutex
-	cached   SecurityPenaltyConfig
-	expires  time.Time
+	db          *sql.DB
+	settings    SettingRepository
+	keys        *APIKeyService
+	configCache requestConfigCache[int, SecurityPenaltyConfig]
 }
 
 func NewSecurityPenaltyService(db *sql.DB, settings SettingRepository, keys *APIKeyService) *SecurityPenaltyService {
-	s := &SecurityPenaltyService{db: db, settings: settings}
+	s := &SecurityPenaltyService{db: db, settings: settings, keys: keys}
 	if keys != nil {
 		keys.securityPenalties = s
+		keys.securityPenaltyConfig.Store(s)
 	}
 	return s
 }
@@ -113,36 +112,16 @@ func (s *SecurityPenaltyService) GetConfig(ctx context.Context) (SecurityPenalty
 	if s == nil {
 		return DefaultSecurityPenaltyConfig(), nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if time.Now().Before(s.expires) {
-		return s.cached, nil
+	if s.keys == nil || !s.keys.requestConfigCacheReady() {
+		cfg, _, err := s.loadConfig(ctx)
+		return cloneSecurityPenaltyConfig(cfg), err
 	}
-	values, err := s.settings.GetMultiple(ctx, []string{SettingKeySecurityPenalty, SettingKeyRiskControlEnabled, SettingKeyCyberPolicyUserAllowlist})
-	if err != nil {
-		return SecurityPenaltyConfig{}, err
-	}
-	cfg := DefaultSecurityPenaltyConfig()
-	if raw := values[SettingKeySecurityPenalty]; raw != "" {
-		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
-			return SecurityPenaltyConfig{}, errors.New("invalid security penalty config")
-		}
-	}
-	if err := validateSecurityPenaltyConfig(cfg); err != nil {
-		return SecurityPenaltyConfig{}, err
-	}
-	cfg.RiskControlEnabled = values[SettingKeyRiskControlEnabled] == "true"
-	globalExempt, err := ParseCyberPolicyUserAllowlist(values[SettingKeyCyberPolicyUserAllowlist])
-	if err != nil {
-		return SecurityPenaltyConfig{}, err
-	}
-	// Global trusted-user exemptions apply to both legacy and new penalties.
-	for id := range globalExempt {
-		cfg.trustedUserIDs = append(cfg.trustedUserIDs, id)
-	}
-	s.cached = cfg
-	s.expires = time.Now().Add(time.Second)
-	return cfg, nil
+	cfg, err := s.configCache.getWithTTL(ctx, 0, 0, func(loadCtx context.Context) (SecurityPenaltyConfig, int, error) {
+		// Refresh belongs to all waiting requests. Its own bounded DB timeout
+		// remains in loadConfig; one canceled leader must not fail its peers.
+		return s.loadConfig(context.WithoutCancel(loadCtx))
+	})
+	return cloneSecurityPenaltyConfig(cfg), err
 }
 
 func (s *SecurityPenaltyService) SaveConfig(ctx context.Context, cfg SecurityPenaltyConfig) (SecurityPenaltyConfig, error) {
@@ -183,9 +162,7 @@ func (s *SecurityPenaltyService) SaveConfig(ctx context.Context, cfg SecurityPen
 	if err = tx.Commit(); err != nil {
 		return SecurityPenaltyConfig{}, err
 	}
-	s.mu.Lock()
-	s.expires = time.Time{}
-	s.mu.Unlock()
+	s.invalidateConfig()
 	return s.GetConfig(ctx)
 }
 

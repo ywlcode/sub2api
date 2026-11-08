@@ -32,6 +32,9 @@ func (s *APIKeyService) SetGroupRouter(router APIKeyGroupRouter) {
 	s.groupRouter = router
 	if gateway, ok := router.(*GatewayService); ok {
 		gateway.configCacheReady = s.requestConfigCacheReady
+		if gateway.schedulerSnapshot != nil {
+			gateway.schedulerSnapshot.requestConfigKeys.Store(s)
+		}
 		if gateway.compositeResolver != nil {
 			gateway.compositeResolver.configCacheReady = s.requestConfigCacheReady
 		}

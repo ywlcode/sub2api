@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -126,6 +127,7 @@ type SchedulerSnapshotService struct {
 	outboxRepo                   SchedulerOutboxRepository
 	accountRepo                  AccountRepository
 	groupRepo                    GroupRepository
+	requestConfigKeys            atomic.Pointer[APIKeyService]
 	cfg                          *config.Config
 	localSnapshotReader          LocalSchedulerSnapshotReader
 	stopCh                       chan struct{}
@@ -393,6 +395,11 @@ func (s *SchedulerSnapshotService) GetGroupByIDLite(ctx context.Context, groupID
 			return nil, ErrLocalSchedulerSnapshotUnavailable
 		}
 		return reader.GetLocalGroup(ctx, groupID)
+	}
+	// Share admission's bounded configuration cache and invalidation stream.
+	// Its reader bypasses cached permissions when the subscription is offline.
+	if keys := s.requestConfigKeys.Load(); keys != nil {
+		return keys.requestGroup(ctx, groupID)
 	}
 	if s.groupRepo == nil {
 		return nil, nil
