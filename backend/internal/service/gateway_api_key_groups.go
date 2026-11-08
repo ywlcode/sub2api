@@ -37,6 +37,7 @@ func (s *GatewayService) ProbeAPIKeyGroup(ctx context.Context, group *Group, mod
 	}
 	ctx = s.withWindowCostPrefetch(ctx, accounts)
 	ctx = s.withRPMPrefetch(ctx, accounts)
+	needsUpstreamCheck := s.needsUpstreamChannelRestrictionCheck(ctx, &group.ID)
 	eligible := make([]AccountWithConcurrency, 0, len(accounts))
 	for i := range accounts {
 		account := &accounts[i]
@@ -47,7 +48,7 @@ func (s *GatewayService) ProbeAPIKeyGroup(ctx context.Context, group *Group, mod
 			!s.isAccountSchedulableForQuota(account) ||
 			!s.isAccountSchedulableForWindowCost(ctx, account, false) ||
 			!s.isAccountSchedulableForRPM(ctx, account, false) ||
-			s.isUpstreamModelRestrictedByChannel(ctx, group.ID, account, model) {
+			(needsUpstreamCheck && s.isUpstreamModelRestrictedByChannel(ctx, group.ID, account, model)) {
 			continue
 		}
 		eligible = append(eligible, AccountWithConcurrency{ID: account.ID, MaxConcurrency: account.Concurrency})
