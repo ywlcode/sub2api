@@ -110,11 +110,15 @@ func TestRuntimeLogConfig_RequestRetentionCompatibility(t *testing.T) {
 func TestDashboardRetentionDoesNotOverrideOpsDedupPolicy(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
 		settings := newRuntimeSettingRepoStub()
-		writeAdvancedSettings(t, settings, OpsDataRetentionSettings{
+		advanced, err := json.Marshal(OpsAdvancedSettings{DataRetention: OpsDataRetentionSettings{
 			CleanupEnabled: enabled, BillingDedupHotRetentionDays: 60, BillingDedupArchiveRetentionDays: 15,
-		})
+		}})
+		require.NoError(t, err)
+		require.NoError(t, settings.Set(context.Background(), SettingKeyOpsAdvancedSettings, string(advanced)))
 		require.NoError(t, settings.Set(context.Background(), SettingKeyOpsRuntimeLogConfig, `{"request_retention_days":7}`))
-		cleanup := makeOverlayService(settings, config.OpsCleanupConfig{Enabled: true})
+		cleanup := &OpsCleanupService{settingRepo: settings, cfg: &config.Config{
+			Ops: config.OpsConfig{Cleanup: config.OpsCleanupConfig{Enabled: true}},
+		}}
 		cleanup.computeEffectiveLocked(context.Background())
 		require.Equal(t, enabled, cleanup.effective.Enabled)
 		require.Equal(t, 60, cleanup.effective.BillingDedupHotRetentionDays)
