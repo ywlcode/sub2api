@@ -28,6 +28,7 @@ func (s *APIKeyService) applyRequestConfigInvalidation(message string) bool {
 	kind := parts[0]
 	switch kind {
 	case "all":
+		s.invalidateSecurityPenaltyConfig()
 		s.requestGroups.invalidate(nil)
 		s.requestPolicies.invalidate(nil)
 		s.requestRPMOverrides.invalidate(nil)
