@@ -233,11 +233,11 @@ func TestDashboardAggregationService_CleanupRetentionFailure_DoesNotRecord(t *te
 
 	require.Nil(t, svc.lastRetentionCleanup.Load())
 	require.Equal(t, 1, repo.cleanupUsageCalls)
-	require.Equal(t, 1, repo.cleanupDedupCalls)
+	require.Zero(t, repo.cleanupDedupCalls)
 }
 
-func TestDashboardAggregationService_CleanupDedupFailure_DoesNotRecord(t *testing.T) {
-	repo := &dashboardAggregationRepoTestStub{cleanupDedupErr: errors.New("dedup cleanup failed")}
+func TestDashboardAggregationService_CleanupUsageFailure_DoesNotRecord(t *testing.T) {
+	repo := &dashboardAggregationRepoTestStub{cleanupUsageErr: errors.New("usage cleanup failed")}
 	svc := &DashboardAggregationService{
 		repo: repo,
 		cfg: config.DashboardAggregationConfig{
@@ -253,7 +253,8 @@ func TestDashboardAggregationService_CleanupDedupFailure_DoesNotRecord(t *testin
 	svc.maybeCleanupRetention(context.Background(), time.Now().UTC())
 
 	require.Nil(t, svc.lastRetentionCleanup.Load())
-	require.Equal(t, 1, repo.cleanupDedupCalls)
+	require.Equal(t, 1, repo.cleanupUsageCalls)
+	require.Zero(t, repo.cleanupDedupCalls)
 }
 
 func TestDashboardAggregationService_PartitionFailure_DoesNotAggregate(t *testing.T) {

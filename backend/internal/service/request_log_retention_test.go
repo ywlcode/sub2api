@@ -22,8 +22,8 @@ func TestRequestLogRetention_RuntimePolicy(t *testing.T) {
 	}{
 		{"legacy uses deployment", `{"retention_days":30}`, true, 90, true},
 		{"short window", `{"request_retention_days":7}`, true, 7, true},
-		{"long window extends dedup", `{"request_retention_days":730}`, true, 730, true},
-		{"forever skips request and dedup deletion", `{"request_retention_days":0}`, true, 0, false},
+		{"long window", `{"request_retention_days":730}`, true, 730, true},
+		{"forever skips request deletion", `{"request_retention_days":0}`, true, 0, false},
 		{"works without aggregation", `{"request_retention_days":14}`, false, 14, true},
 		{"legacy disabled stays disabled", `{"retention_days":30}`, false, 0, false},
 	} {
@@ -40,17 +40,11 @@ func TestRequestLogRetention_RuntimePolicy(t *testing.T) {
 			svc.maybeCleanupRetention(context.Background(), now)
 			if tt.wantCleanup {
 				require.Equal(t, 1, repo.cleanupUsageCalls)
-				wantUsageCutoff := GroupUsageTodayStart(now.AddDate(0, 0, -tt.wantDays))
-				wantDedupCutoff := now.AddDate(0, 0, -max(365, tt.wantDays))
-				if wantDedupCutoff.After(wantUsageCutoff) {
-					wantDedupCutoff = wantUsageCutoff
-				}
-				require.Equal(t, wantUsageCutoff, repo.cleanupUsageCutoff)
-				require.Equal(t, wantDedupCutoff, repo.cleanupDedupCutoff)
+				require.Equal(t, GroupUsageTodayStart(now.AddDate(0, 0, -tt.wantDays)), repo.cleanupUsageCutoff)
 			} else {
 				require.Zero(t, repo.cleanupUsageCalls)
-				require.Zero(t, repo.cleanupDedupCalls)
 			}
+			require.Zero(t, repo.cleanupDedupCalls, "dedup retention belongs to OpsCleanupService")
 			if !tt.enabled {
 				require.Zero(t, repo.cleanupAggregateCalls)
 			}
@@ -138,7 +132,7 @@ func TestRequestLogRetention_CutoffAlignsToConfiguredDayStart(t *testing.T) {
 			svc.maybeCleanupRetentionInLocation(context.Background(), now, loc)
 
 			require.Equal(t, time.Date(2026, 6, 16, 16, 0, 0, 0, time.UTC), repo.cleanupUsageCutoff)
-			require.Equal(t, tt.wantDedup, repo.cleanupDedupCutoff)
+			require.Zero(t, repo.cleanupDedupCalls)
 		})
 	}
 }
