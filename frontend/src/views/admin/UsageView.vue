@@ -5,6 +5,7 @@
         v-if="activeTab !== 'traffic'"
         :stats="usageStats"
         show-rate
+        show-request-phases
         :rate-window="usageStatsWindow"
         :notice-user-id="props.observerMode ? undefined : authStore.user?.id"
       />

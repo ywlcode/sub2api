@@ -70,8 +70,11 @@ func TestRequestPhaseCacheScopeAnd24HourWindow(t *testing.T) {
 	key := cache.Get(ctx, usagestats.UsageLogFilters{APIKeyID: 7})
 	require.Equal(t, 500.0, *user.AverageUserUploadMs)
 	require.Equal(t, 7.0, *key.AverageUserUploadMs)
-	require.Zero(t, cache.Get(ctx, usagestats.UsageLogFilters{}).TimingSampleCount)
-	require.Len(t, repo.reads, 3)
+	global := cache.Get(ctx, usagestats.UsageLogFilters{})
+	require.EqualValues(t, 1, global.TimingSampleCount)
+	require.Equal(t, 0.0, *global.AverageUserUploadMs)
+	require.Equal(t, "global", cache.key(usagestats.UsageLogFilters{}))
+	require.Len(t, repo.reads, 4)
 	for _, f := range repo.reads {
 		require.Empty(t, f.Model)
 		require.Equal(t, 24*time.Hour, f.EndTime.Sub(*f.StartTime))
@@ -79,6 +82,27 @@ func TestRequestPhaseCacheScopeAnd24HourWindow(t *testing.T) {
 	}
 	require.Zero(t, repo.reads[0].APIKeyID, "user page filters do not split the shared per-user cache")
 	require.Zero(t, repo.reads[2].UserID, "key-only credentials cannot see their owner's other requests")
+	require.Zero(t, repo.reads[3].UserID)
+	require.Zero(t, repo.reads[3].APIKeyID)
+}
+
+func TestRequestPhaseCacheRefreshesGlobalAverage(t *testing.T) {
+	repo := &phaseCacheTestRepo{}
+	cache := newPhaseCacheTest(t, repo)
+	ctx := context.Background()
+	scope := usagestats.UsageLogFilters{}
+	require.EqualValues(t, 1, cache.Get(ctx, scope).TimingSampleCount)
+	entry, err := cache.read(ctx, scope)
+	require.NoError(t, err)
+	entry.ComputedAt = time.Now().Add(-2 * time.Hour)
+	raw, err := json.Marshal(entry)
+	require.NoError(t, err)
+	require.NoError(t, cache.rdb.Set(ctx, cache.prefix+"value:"+cache.key(scope), raw, requestPhaseCacheRetention).Err())
+	require.NoError(t, cache.refreshCached(ctx))
+	require.Len(t, repo.reads, 2)
+	refreshed, err := cache.read(ctx, scope)
+	require.NoError(t, err)
+	require.WithinDuration(t, time.Now(), refreshed.ComputedAt, time.Second)
 }
 
 func TestRequestPhaseCacheConcurrentMissAcrossReplicas(t *testing.T) {
