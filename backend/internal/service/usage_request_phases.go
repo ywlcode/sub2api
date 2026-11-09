@@ -14,15 +14,24 @@ func (s *UsageService) requestPhaseAverages(ctx context.Context, filters usagest
 	if s.phaseCache != nil {
 		return s.phaseCache.Get(ctx, filters)
 	}
-	reader, ok := s.usageRepo.(interface {
-		ReadUsageRequestPhaseAverages(context.Context, usagestats.UsageLogFilters) (usagestats.RequestPhaseAverages, error)
-	})
-	if !ok {
-		return usagestats.RequestPhaseAverages{}
-	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	stats, err := reader.ReadUsageRequestPhaseAverages(ctx, requestPhaseWindow(filters, time.Now()))
+	window := requestPhaseWindow(filters, time.Now())
+	var stats usagestats.RequestPhaseAverages
+	var err error
+	if filters.UserID == 0 && filters.APIKeyID == 0 {
+		global, ok := s.usageRepo.(globalRequestPhaseHourlyReader)
+		if !ok {
+			return usagestats.RequestPhaseAverages{}
+		}
+		stats, err = global.ReadGlobalRequestPhaseHourlyAverages(ctx, *window.StartTime, *window.EndTime)
+	} else {
+		reader, ok := s.usageRepo.(requestPhaseReader)
+		if !ok {
+			return usagestats.RequestPhaseAverages{}
+		}
+		stats, err = reader.ReadUsageRequestPhaseAverages(ctx, window)
+	}
 	if err != nil {
 		// Diagnostics must not make the billing dashboard unavailable.
 		return usagestats.RequestPhaseAverages{}
