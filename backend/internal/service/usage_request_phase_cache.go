@@ -24,6 +24,15 @@ type requestPhaseReader interface {
 	ReadUsageRequestPhaseAverages(context.Context, usagestats.UsageLogFilters) (usagestats.RequestPhaseAverages, error)
 }
 
+type globalRequestPhaseHourlyReader interface {
+	ReadGlobalRequestPhaseHourlyAverages(context.Context, time.Time, time.Time) (usagestats.RequestPhaseAverages, error)
+}
+
+type globalRequestPhaseHourlyWorker interface {
+	SeedGlobalRequestPhaseHourBuckets(context.Context, time.Time) error
+	RefreshOneGlobalRequestPhaseHourBucket(context.Context, time.Time) (bool, error)
+}
+
 type requestPhaseCacheEntry struct {
 	UserID     int64                           `json:"user_id,omitempty"`
 	APIKeyID   int64                           `json:"api_key_id,omitempty"`
@@ -67,7 +76,8 @@ func (s *UsageRequestPhaseCache) key(scope usagestats.UsageLogFilters) string {
 	if scope.APIKeyID > 0 {
 		return fmt.Sprintf("key:%d", scope.APIKeyID)
 	}
-	return "global"
+	// Keep the user/key v1 entries intact while rejecting old global scans.
+	return "global-hourly-v2"
 }
 
 func (s *UsageRequestPhaseCache) read(ctx context.Context, scope usagestats.UsageLogFilters) (requestPhaseCacheEntry, error) {
@@ -120,10 +130,14 @@ func (s *UsageRequestPhaseCache) Get(ctx context.Context, filters usagestats.Usa
 }
 
 func (s *UsageRequestPhaseCache) compute(parent context.Context, scope usagestats.UsageLogFilters, refresh bool) (requestPhaseCacheEntry, error) {
+	return s.computeWithForce(parent, scope, refresh, false)
+}
+
+func (s *UsageRequestPhaseCache) computeWithForce(parent context.Context, scope usagestats.UsageLogFilters, refresh, force bool) (requestPhaseCacheEntry, error) {
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	entry, err := s.read(ctx, scope)
-	if err == nil && (!refresh || time.Since(entry.ComputedAt) < requestPhaseRefreshInterval) {
+	if err == nil && (!refresh || (!force && time.Since(entry.ComputedAt) < requestPhaseRefreshInterval)) {
 		return entry, nil
 	}
 	if err != nil && !errors.Is(err, redis.Nil) {
@@ -134,6 +148,21 @@ func (s *UsageRequestPhaseCache) compute(parent context.Context, scope usagestat
 	locked, err := s.rdb.SetNX(ctx, lockKey, owner, 30*time.Second).Result()
 	if err != nil {
 		return entry, err
+	}
+	if !locked && force {
+		ticker := time.NewTicker(50 * time.Millisecond)
+		defer ticker.Stop()
+		for !locked {
+			select {
+			case <-ctx.Done():
+				return entry, ctx.Err()
+			case <-ticker.C:
+				locked, err = s.rdb.SetNX(ctx, lockKey, owner, 30*time.Second).Result()
+				if err != nil {
+					return entry, err
+				}
+			}
+		}
 	}
 	if !locked {
 		if !entry.ComputedAt.IsZero() {
@@ -162,17 +191,27 @@ func (s *UsageRequestPhaseCache) compute(parent context.Context, scope usagestat
 	}()
 	// Recheck after the lease to close the cache-miss/lease-acquisition race.
 	latest, readErr := s.read(ctx, scope)
-	if readErr == nil && (!refresh || time.Since(latest.ComputedAt) < requestPhaseRefreshInterval) {
+	if readErr == nil && (!refresh || (!force && time.Since(latest.ComputedAt) < requestPhaseRefreshInterval)) {
 		return latest, nil
 	}
 	if readErr != nil && !errors.Is(readErr, redis.Nil) {
 		return entry, readErr
 	}
-	reader, ok := s.repo.(requestPhaseReader)
-	if !ok {
-		return entry, errors.New("request phase reader unavailable")
+	window := requestPhaseWindow(scope, time.Now())
+	var stats usagestats.RequestPhaseAverages
+	if scope.UserID == 0 && scope.APIKeyID == 0 {
+		reader, ok := s.repo.(globalRequestPhaseHourlyReader)
+		if !ok {
+			return entry, errors.New("global request phase hourly reader unavailable")
+		}
+		stats, err = reader.ReadGlobalRequestPhaseHourlyAverages(ctx, *window.StartTime, *window.EndTime)
+	} else {
+		reader, ok := s.repo.(requestPhaseReader)
+		if !ok {
+			return entry, errors.New("request phase reader unavailable")
+		}
+		stats, err = reader.ReadUsageRequestPhaseAverages(ctx, window)
 	}
-	stats, err := reader.ReadUsageRequestPhaseAverages(ctx, requestPhaseWindow(scope, time.Now()))
 	if err != nil {
 		return entry, err
 	}
@@ -192,7 +231,23 @@ func (s *UsageRequestPhaseCache) Start() {
 	if s.rdb == nil {
 		return
 	}
-	s.wg.Add(1)
+	s.wg.Add(2)
+	go func() {
+		defer s.wg.Done()
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
+		for {
+			select {
+			case <-s.ctx.Done():
+				return
+			case <-timer.C:
+				if err := s.refreshGlobalHourly(s.ctx); err != nil && s.ctx.Err() == nil {
+					logger.LegacyPrintf("usage_phase_cache", "global bucket refresh failed: %v", err)
+				}
+				timer.Reset(time.Minute)
+			}
+		}
+	}()
 	go func() {
 		defer s.wg.Done()
 		timer := time.NewTimer(30 * time.Second)
@@ -224,6 +279,41 @@ func (s *UsageRequestPhaseCache) Start() {
 			}
 		}
 	}()
+}
+
+func (s *UsageRequestPhaseCache) refreshGlobalHourly(ctx context.Context) error {
+	reader, ok := s.repo.(globalRequestPhaseHourlyWorker)
+	if !ok {
+		return errors.New("global request phase hourly reader unavailable")
+	}
+	seedCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	err := reader.SeedGlobalRequestPhaseHourBuckets(seedCtx, time.Now())
+	cancel()
+	if err != nil {
+		return err
+	}
+	changed := false
+	var refreshErr error
+	// Limit one pass to one day's buckets even if late traces keep an hour dirty.
+	for n := 0; n < 24; n++ {
+		bucketCtx, bucketCancel := context.WithTimeout(ctx, 15*time.Second)
+		updated, err := reader.RefreshOneGlobalRequestPhaseHourBucket(bucketCtx, time.Now())
+		bucketCancel()
+		if err != nil {
+			refreshErr = err
+			break
+		}
+		if !updated {
+			break
+		}
+		changed = true
+	}
+	if !changed {
+		return refreshErr
+	}
+	// Force a replacement while retaining the previous successful value on failure.
+	_, err = s.computeWithForce(ctx, usagestats.UsageLogFilters{}, true, true)
+	return errors.Join(refreshErr, err)
 }
 
 func (s *UsageRequestPhaseCache) refreshUsers(ctx context.Context) error {

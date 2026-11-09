@@ -16,11 +16,42 @@ import (
 
 type phaseCacheTestRepo struct {
 	UsageLogRepository
-	mu    sync.Mutex
-	reads []usagestats.UsageLogFilters
-	err   error
-	users []int64
-	gate  chan struct{}
+	mu              sync.Mutex
+	reads           []usagestats.UsageLogFilters
+	globalReads     int
+	globalStart     time.Time
+	globalEnd       time.Time
+	seedCalls       int
+	bucketRefreshes int
+	err             error
+	users           []int64
+	gate            chan struct{}
+}
+
+func (r *phaseCacheTestRepo) ReadGlobalRequestPhaseHourlyAverages(_ context.Context, start, end time.Time) (usagestats.RequestPhaseAverages, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.globalReads++
+	r.globalStart, r.globalEnd = start, end
+	value := 0.0
+	return usagestats.RequestPhaseAverages{AverageUserUploadMs: &value, AverageProcessingMs: &value, TimingSampleCount: 1}, r.err
+}
+
+func (r *phaseCacheTestRepo) SeedGlobalRequestPhaseHourBuckets(context.Context, time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.seedCalls++
+	return nil
+}
+
+func (r *phaseCacheTestRepo) RefreshOneGlobalRequestPhaseHourBucket(context.Context, time.Time) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.bucketRefreshes == 0 {
+		return false, nil
+	}
+	r.bucketRefreshes--
+	return true, nil
 }
 
 func (r *phaseCacheTestRepo) ReadUsageRequestPhaseAverages(ctx context.Context, f usagestats.UsageLogFilters) (usagestats.RequestPhaseAverages, error) {
@@ -73,8 +104,8 @@ func TestRequestPhaseCacheScopeAnd24HourWindow(t *testing.T) {
 	global := cache.Get(ctx, usagestats.UsageLogFilters{})
 	require.EqualValues(t, 1, global.TimingSampleCount)
 	require.Equal(t, 0.0, *global.AverageUserUploadMs)
-	require.Equal(t, "global", cache.key(usagestats.UsageLogFilters{}))
-	require.Len(t, repo.reads, 4)
+	require.Equal(t, "global-hourly-v2", cache.key(usagestats.UsageLogFilters{}))
+	require.Len(t, repo.reads, 3)
 	for _, f := range repo.reads {
 		require.Empty(t, f.Model)
 		require.Equal(t, 24*time.Hour, f.EndTime.Sub(*f.StartTime))
@@ -82,8 +113,8 @@ func TestRequestPhaseCacheScopeAnd24HourWindow(t *testing.T) {
 	}
 	require.Zero(t, repo.reads[0].APIKeyID, "user page filters do not split the shared per-user cache")
 	require.Zero(t, repo.reads[2].UserID, "key-only credentials cannot see their owner's other requests")
-	require.Zero(t, repo.reads[3].UserID)
-	require.Zero(t, repo.reads[3].APIKeyID)
+	require.Equal(t, 1, repo.globalReads)
+	require.Equal(t, 24*time.Hour, repo.globalEnd.Sub(repo.globalStart))
 }
 
 func TestRequestPhaseCacheRefreshesGlobalAverage(t *testing.T) {
@@ -99,10 +130,51 @@ func TestRequestPhaseCacheRefreshesGlobalAverage(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, cache.rdb.Set(ctx, cache.prefix+"value:"+cache.key(scope), raw, requestPhaseCacheRetention).Err())
 	require.NoError(t, cache.refreshCached(ctx))
-	require.Len(t, repo.reads, 2)
+	require.Equal(t, 2, repo.globalReads)
 	refreshed, err := cache.read(ctx, scope)
 	require.NoError(t, err)
 	require.WithinDuration(t, time.Now(), refreshed.ComputedAt, time.Second)
+}
+
+func TestRequestPhaseCacheRecomputesGlobalAfterBucketCorrection(t *testing.T) {
+	repo := &phaseCacheTestRepo{bucketRefreshes: 1}
+	cache := newPhaseCacheTest(t, repo)
+	ctx := context.Background()
+	require.EqualValues(t, 1, cache.Get(ctx, usagestats.UsageLogFilters{}).TimingSampleCount)
+	require.NoError(t, cache.refreshGlobalHourly(ctx))
+	require.Equal(t, 1, repo.seedCalls)
+	require.Zero(t, repo.bucketRefreshes)
+	require.Equal(t, 2, repo.globalReads)
+	require.Empty(t, repo.reads, "user and key readers must stay on their old path")
+}
+
+func TestRequestPhaseCacheKeepsLastGlobalValueWhenBucketRefreshFails(t *testing.T) {
+	repo := &phaseCacheTestRepo{}
+	cache := newPhaseCacheTest(t, repo)
+	ctx := context.Background()
+	old := cache.Get(ctx, usagestats.UsageLogFilters{})
+	repo.err = errors.New("temporary read failure")
+	repo.bucketRefreshes = 1
+	require.Error(t, cache.refreshGlobalHourly(ctx))
+	entry, err := cache.read(ctx, usagestats.UsageLogFilters{})
+	require.NoError(t, err)
+	require.Equal(t, old, entry.Stats)
+	require.Equal(t, 2, repo.globalReads)
+}
+
+func TestRequestPhaseCacheBackgroundWarmsGlobalWithoutPageVisit(t *testing.T) {
+	repo := &phaseCacheTestRepo{bucketRefreshes: 1}
+	cache := newPhaseCacheTest(t, repo)
+	cache.Start()
+	require.Eventually(t, func() bool {
+		repo.mu.Lock()
+		defer repo.mu.Unlock()
+		return repo.seedCalls > 0 && repo.globalReads > 0
+	}, 3*time.Second, 10*time.Millisecond)
+	entry, err := cache.read(context.Background(), usagestats.UsageLogFilters{})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, entry.Stats.TimingSampleCount)
+	require.Empty(t, repo.reads)
 }
 
 func TestRequestPhaseCacheConcurrentMissAcrossReplicas(t *testing.T) {
