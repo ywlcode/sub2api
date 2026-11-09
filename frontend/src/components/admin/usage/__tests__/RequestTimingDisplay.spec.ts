@@ -23,7 +23,7 @@ describe('request phase display', () => {
     } as UsageLog
     const wrapper = mount(UserRequestLatency, { props: { row, showCacheRate: false }, global: global() })
     expect(wrapper.findAll('span').map(item => item.text())).toEqual([
-      '用户上传耗时', '5s', '处理返回耗时', '1m 30s', '首字', '32.05s', '平均 TPS', '22.5 t/s',
+      '用户上传耗时', '5s', '处理返回耗时', '1m 30s', '首字(包含上传耗时)', '32.05s', '平均 TPS', '22.5 t/s',
     ])
     wrapper.unmount()
   })

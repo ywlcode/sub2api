@@ -64,7 +64,10 @@ func (s *UsageRequestPhaseCache) key(scope usagestats.UsageLogFilters) string {
 	if scope.UserID > 0 {
 		return fmt.Sprintf("user:%d", scope.UserID)
 	}
-	return fmt.Sprintf("key:%d", scope.APIKeyID)
+	if scope.APIKeyID > 0 {
+		return fmt.Sprintf("key:%d", scope.APIKeyID)
+	}
+	return "global"
 }
 
 func (s *UsageRequestPhaseCache) read(ctx context.Context, scope usagestats.UsageLogFilters) (requestPhaseCacheEntry, error) {
@@ -83,7 +86,7 @@ func (s *UsageRequestPhaseCache) read(ctx context.Context, scope usagestats.Usag
 
 func (s *UsageRequestPhaseCache) Get(ctx context.Context, filters usagestats.UsageLogFilters) usagestats.RequestPhaseAverages {
 	scope := requestPhaseScope(filters)
-	if s.rdb == nil || (scope.UserID <= 0 && scope.APIKeyID <= 0) {
+	if s.rdb == nil {
 		return usagestats.RequestPhaseAverages{}
 	}
 	entry, err := s.read(ctx, scope)
@@ -194,12 +197,19 @@ func (s *UsageRequestPhaseCache) Start() {
 		defer s.wg.Done()
 		timer := time.NewTimer(30 * time.Second)
 		defer timer.Stop()
-		var lastUsers time.Time
+		var lastGlobal, lastUsers time.Time
 		for {
 			select {
 			case <-s.ctx.Done():
 				return
 			case <-timer.C:
+				if time.Since(lastGlobal) >= requestPhaseRefreshInterval {
+					if _, err := s.compute(s.ctx, usagestats.UsageLogFilters{}, true); err != nil {
+						logger.LegacyPrintf("usage_phase_cache", "global refresh failed: %v", err)
+					} else {
+						lastGlobal = time.Now()
+					}
+				}
 				if time.Since(lastUsers) >= requestPhaseRefreshInterval {
 					if err := s.refreshUsers(s.ctx); err != nil {
 						logger.LegacyPrintf("usage_phase_cache", "user refresh failed: %v", err)
@@ -268,7 +278,7 @@ func (s *UsageRequestPhaseCache) refreshCached(ctx context.Context) error {
 				return err
 			}
 			var entry requestPhaseCacheEntry
-			if json.Unmarshal(raw, &entry) != nil || (entry.UserID <= 0 && entry.APIKeyID <= 0) {
+			if json.Unmarshal(raw, &entry) != nil || key != s.prefix+"value:"+s.key(entry.scope()) {
 				continue
 			}
 			if time.Since(entry.ComputedAt) < requestPhaseRefreshInterval {

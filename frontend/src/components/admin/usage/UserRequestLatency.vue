@@ -7,7 +7,7 @@
     <span data-testid="user-upload-duration" class="font-medium tabular-nums" :title="t('usage.userUploadDurationHint')">{{ formatRequestPhaseDuration(row.content_timing?.request_phases?.user_upload_ms) }}</span>
     <span class="text-gray-400 dark:text-gray-500">{{ t('usage.processingDuration') }}</span>
     <span data-testid="processing-duration" class="font-medium tabular-nums" :title="t('usage.processingDurationHint')">{{ formatRequestPhaseDuration(row.content_timing?.request_phases?.processing_ms) }}</span>
-    <span class="text-gray-400 dark:text-gray-500">{{ t('usage.latencyFirstTokenShort') }}</span>
+    <span class="text-gray-400 dark:text-gray-500">{{ t('usage.userFirstTokenWithUpload') }}</span>
     <span data-testid="first-token-duration" class="font-medium tabular-nums" :title="t('usage.requestFirstTokenHint')">{{ formatRequestPhaseDuration(firstTokenMs) }}</span>
     <span class="text-gray-400 dark:text-gray-500">{{ t('usage.latencyTps') }}</span>
     <span data-testid="latency-tps" class="font-medium tabular-nums" :title="t('usage.latencyTpsHint')">{{ formatUsageOutputTps(row) ?? '—' }}</span>
