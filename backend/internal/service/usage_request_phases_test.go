@@ -12,9 +12,26 @@ import (
 
 type requestPhaseStatsRepo struct {
 	UsageLogRepository
-	filters usagestats.UsageLogFilters
-	reads   int
-	err     error
+	filters     usagestats.UsageLogFilters
+	reads       int
+	globalReads int
+	globalStart time.Time
+	globalEnd   time.Time
+	err         error
+}
+
+func (r *requestPhaseStatsRepo) ReadGlobalRequestPhaseHourlyAverages(_ context.Context, start, end time.Time) (usagestats.RequestPhaseAverages, error) {
+	r.globalReads++
+	r.globalStart, r.globalEnd = start, end
+	upload, processing := 2000.0, 6000.0
+	return usagestats.RequestPhaseAverages{AverageUserUploadMs: &upload, AverageProcessingMs: &processing, TimingSampleCount: 2}, r.err
+}
+
+func (r *requestPhaseStatsRepo) SeedGlobalRequestPhaseHourBuckets(context.Context, time.Time) error {
+	return nil
+}
+func (r *requestPhaseStatsRepo) RefreshOneGlobalRequestPhaseHourBucket(context.Context, time.Time) (bool, error) {
+	return false, nil
 }
 
 func (r *requestPhaseStatsRepo) GetStatsWithFilters(context.Context, usagestats.UsageLogFilters) (*usagestats.UsageStats, error) {
@@ -64,10 +81,9 @@ func TestUsageRequestPhasesEnrichStatsWithTheirAuthorizedScope(t *testing.T) {
 
 	global, err := s.GetStatsWithFilters(context.Background(), usagestats.UsageLogFilters{})
 	require.NoError(t, err)
-	require.Equal(t, 4, r.reads)
-	require.Zero(t, r.filters.UserID)
-	require.Zero(t, r.filters.APIKeyID)
-	require.Equal(t, 24*time.Hour, r.filters.EndTime.Sub(*r.filters.StartTime))
+	require.Equal(t, 3, r.reads)
+	require.Equal(t, 1, r.globalReads)
+	require.Equal(t, 24*time.Hour, r.globalEnd.Sub(r.globalStart))
 	require.Equal(t, 2000.0, *global.AverageUserUploadMs)
 	require.Equal(t, 6000.0, *global.AverageProcessingMs)
 }
