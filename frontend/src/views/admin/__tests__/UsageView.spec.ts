@@ -968,7 +968,7 @@ describe('admin UsageView rolling 24 hour requests', () => {
     Object.keys(routeQuery).forEach(key => delete routeQuery[key])
     list.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
     exportList.mockReset().mockResolvedValue({ items: [], total: 0, pages: 0 })
-    getStats.mockReset().mockResolvedValue({ total_requests: 2, total_cost: 12, total_actual_cost: 3, total_account_cost: 5 })
+    getStats.mockReset().mockResolvedValue({ total_requests: 2, total_cost: 12, total_actual_cost: 3, total_account_cost: 5, average_user_upload_ms: 2000, average_processing_ms: 6000, timing_sample_count: 2 })
     getModelStats.mockReset().mockResolvedValue({ models: [] })
     getSnapshotV2.mockReset().mockResolvedValue({ trend: [], groups: [] })
     listErrorLogs.mockReset().mockResolvedValue({ items: [], total: 0 })
@@ -1046,8 +1046,10 @@ describe('admin UsageView rolling 24 hour requests', () => {
     }
     expect(wrapper.findComponent(DateRangePicker).get('.date-picker-trigger').text()).toContain('dates.today')
     expect(wrapper.findComponent(UsageStatsCards).props('stats')).toMatchObject({
-      total_actual_cost: 3, total_cost: 12, total_account_cost: 5
+      total_actual_cost: 3, total_cost: 12, total_account_cost: 5,
+      average_user_upload_ms: 2000, average_processing_ms: 6000,
     })
+    expect(wrapper.findComponent(UsageStatsCards).props('showRequestPhases')).toBe(true)
   })
 
   it('refreshes the rolling window once and keeps pagination/export on that applied snapshot', async () => {

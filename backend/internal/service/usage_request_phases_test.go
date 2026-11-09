@@ -62,9 +62,14 @@ func TestUsageRequestPhasesEnrichStatsWithTheirAuthorizedScope(t *testing.T) {
 	require.Zero(t, r.filters.UserID)
 	require.EqualValues(t, 2, key.TimingSampleCount)
 
-	_, err = s.GetStatsWithFilters(context.Background(), usagestats.UsageLogFilters{})
+	global, err := s.GetStatsWithFilters(context.Background(), usagestats.UsageLogFilters{})
 	require.NoError(t, err)
-	require.Equal(t, 3, r.reads, "admin global totals must not add an unscoped timing query")
+	require.Equal(t, 4, r.reads)
+	require.Zero(t, r.filters.UserID)
+	require.Zero(t, r.filters.APIKeyID)
+	require.Equal(t, 24*time.Hour, r.filters.EndTime.Sub(*r.filters.StartTime))
+	require.Equal(t, 2000.0, *global.AverageUserUploadMs)
+	require.Equal(t, 6000.0, *global.AverageProcessingMs)
 }
 
 func TestUsageRequestPhasesDiagnosticFailurePreservesBillingStats(t *testing.T) {

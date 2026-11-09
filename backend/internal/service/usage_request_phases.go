@@ -8,13 +8,8 @@ import (
 )
 
 func (s *UsageService) requestPhaseAverages(ctx context.Context, filters usagestats.UsageLogFilters) usagestats.RequestPhaseAverages {
-	// Only user/key pages display these averages. Avoid an extra global trace
-	// scan when the shared statistics service serves the admin overview.
-	if filters.UserID <= 0 && filters.APIKeyID <= 0 {
-		return usagestats.RequestPhaseAverages{}
-	}
-	// A signed-in user's diagnostic averages use their last 24 hours.
-	// Key-only dashboards never broaden their authorization scope to the owner.
+	// Admin overview, user pages, and key-only dashboards share the same rolling
+	// window. Key-only dashboards never broaden their scope to the owner.
 	filters = requestPhaseScope(filters)
 	if s.phaseCache != nil {
 		return s.phaseCache.Get(ctx, filters)
