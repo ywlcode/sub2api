@@ -38,17 +38,17 @@ func (r *requestGroupSubscriptionRepo) GetByID(ctx context.Context, id int64) (*
 	return r.GetActiveByUserIDAndGroupID(ctx, 7, id)
 }
 
-func (r *requestGroupSubscriptionRepo) ResetUsageWindows(_ context.Context, id int64, daily, weekly, monthly bool, dailyStart, periodicStart time.Time) error {
+func (r *requestGroupSubscriptionRepo) ResetUsageWindows(_ context.Context, id int64, daily, weekly, monthly bool, dailyStart, windowTime time.Time) error {
 	r.resets++
 	sub := r.subs[id]
 	if daily {
 		sub.DailyUsageUSD, sub.DailyWindowStart = 0, &dailyStart
 	}
 	if weekly {
-		sub.WeeklyUsageUSD, sub.WeeklyWindowStart = 0, &periodicStart
+		sub.WeeklyUsageUSD, sub.WeeklyWindowStart = 0, ptrTime(subscriptionWeekStart(windowTime))
 	}
 	if monthly {
-		sub.MonthlyUsageUSD, sub.MonthlyWindowStart = 0, &periodicStart
+		sub.MonthlyUsageUSD, sub.MonthlyWindowStart = 0, ptrTime(subscriptionMonthStart(windowTime))
 	}
 	return nil
 }
