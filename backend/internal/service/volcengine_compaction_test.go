@@ -268,7 +268,8 @@ func TestVolcengineCompactionSnapshotAndDeltaValidation(t *testing.T) {
 	for _, scenario := range []string{"snapshot_only", "delta_only", "oversized", "conflicting_snapshot", "refusal", "tool_call"} {
 		t.Run(scenario, func(t *testing.T) {
 			resp := volcengineCompactionTestResponse(t, "summary", "completed", false)
-			if scenario == "snapshot_only" {
+			switch scenario {
+			case "snapshot_only":
 				resp = volcengineCompactionTestResponse(t, "summary", "completed", true)
 				wire, _ := io.ReadAll(resp.Body)
 				lines := strings.Split(string(wire), "\n")
@@ -279,7 +280,7 @@ func TestVolcengineCompactionSnapshotAndDeltaValidation(t *testing.T) {
 					}
 				}
 				resp.Body = io.NopCloser(strings.NewReader(strings.Join(terminal, "\n")))
-			} else if scenario == "delta_only" || scenario == "conflicting_snapshot" {
+			case "delta_only", "conflicting_snapshot":
 				resp = volcengineCompactionTestResponse(t, "summary", "completed", true)
 				wire, _ := io.ReadAll(resp.Body)
 				if scenario == "delta_only" {
@@ -295,7 +296,7 @@ func TestVolcengineCompactionSnapshotAndDeltaValidation(t *testing.T) {
 				} else {
 					resp.Body = io.NopCloser(strings.NewReader(strings.Replace(string(wire), `"delta":"summary"`, `"delta":"different"`, 1)))
 				}
-			} else {
+			default:
 				wire, _ := io.ReadAll(resp.Body)
 				switch scenario {
 				case "oversized":

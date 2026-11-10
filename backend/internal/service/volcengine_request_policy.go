@@ -17,14 +17,14 @@ func validateVolcengineResponsesRequest(account *Account, body []byte) error {
 	}
 	request := jsonview.Parse(body)
 	if !gjson.ValidBytes(body) || !request.IsObject() {
-		return fmt.Errorf("Volcengine requires a valid Responses request object")
+		return fmt.Errorf("volcengine requires a valid Responses request object")
 	}
 	fields := normalizationObjectFields(request)
 	if err := validateVolcengineStatelessHistory(fields); err != nil {
 		return err
 	}
 	if fields["messages"].Exists() {
-		return fmt.Errorf("Chat Completions is not supported for this Volcengine account; use Responses input or /v1/messages")
+		return fmt.Errorf("chat completions is not supported for this Volcengine account; use Responses input or /v1/messages")
 	}
 	reasoning := normalizationObjectFields(fields["reasoning"])
 	thinking := normalizationObjectFields(fields["thinking"])
@@ -33,16 +33,16 @@ func validateVolcengineResponsesRequest(account *Account, body []byte) error {
 		effort = volcengineEffort(fields["reasoning_effort"].String())
 	}
 	if reasoning["summary"].String() == "none" && effort != "none" && volcengineEffort(thinking["type"].String()) != "none" {
-		return fmt.Errorf("Volcengine compatibility requires plaintext reasoning for replay; reasoning.summary:none is not supported while thinking is enabled (the client may hide thinking locally)")
+		return fmt.Errorf("volcengine compatibility requires plaintext reasoning for replay; reasoning.summary:none is not supported while thinking is enabled (the client may hide thinking locally)")
 	}
 	input := fields["input"]
 	if input.Type != gjson.String && !input.IsArray() {
-		return fmt.Errorf("Volcengine Responses input must be a string or a complete history array")
+		return fmt.Errorf("volcengine Responses input must be a string or a complete history array")
 	}
 	pending, seen := make(map[string]bool), make(map[string]bool)
 	for _, item := range input.Array() {
 		if item.Get("type").String() == "" && item.Get("id").String() != "" && !item.Get("role").Exists() && !item.Get("content").Exists() {
-			return fmt.Errorf("Volcengine compatibility does not support ID-only item references; resend the complete plaintext history")
+			return fmt.Errorf("volcengine compatibility does not support ID-only item references; resend the complete plaintext history")
 		}
 		switch item.Get("type").String() {
 		case "reasoning":
@@ -50,7 +50,7 @@ func validateVolcengineResponsesRequest(account *Account, body []byte) error {
 				return fmt.Errorf("reasoning item %q has no recoverable plaintext; resend the complete reasoning history (ID-only or encrypted history cannot be restored)", item.Get("id").String())
 			}
 		case "item_reference", "compaction", "compaction_trigger":
-			return fmt.Errorf("Volcengine compatibility does not support %s; resend the complete plaintext history", item.Get("type").String())
+			return fmt.Errorf("volcengine compatibility does not support %s; resend the complete plaintext history", item.Get("type").String())
 		case "function_call", "custom_tool_call":
 			id := item.Get("call_id").String()
 			if id == "" || seen[id] {
@@ -73,7 +73,7 @@ func validateVolcengineResponsesRequest(account *Account, body []byte) error {
 
 func validateVolcengineStatelessHistory(fields map[string]gjson.Result) error {
 	if fields["store"].Bool() || fields["previous_response_id"].String() != "" || fields["conversation"].Exists() && fields["conversation"].Type != gjson.Null {
-		return fmt.Errorf("Volcengine compatibility requires stateless full history; store:true, previous_response_id and conversation are not supported")
+		return fmt.Errorf("volcengine compatibility requires stateless full history; store:true, previous_response_id and conversation are not supported")
 	}
 	return nil
 }
@@ -90,7 +90,7 @@ func promoteVolcengineAdditionalTools(account *Account, body []byte) ([]byte, er
 	}
 	tools, ok := request["tools"].([]any)
 	if value, exists := request["tools"]; exists && value != nil && !ok {
-		return nil, fmt.Errorf("Responses tools must be an array")
+		return nil, fmt.Errorf("responses tools must be an array")
 	}
 	items, _ := request["input"].([]any)
 	input := make([]any, 0, len(items))
@@ -102,7 +102,7 @@ func promoteVolcengineAdditionalTools(account *Account, body []byte) ([]byte, er
 		}
 		additional, ok := item["tools"].([]any)
 		if !ok {
-			return nil, fmt.Errorf("Responses additional_tools.tools must be an array")
+			return nil, fmt.Errorf("responses additional_tools.tools must be an array")
 		}
 		tools = append(tools, additional...)
 	}

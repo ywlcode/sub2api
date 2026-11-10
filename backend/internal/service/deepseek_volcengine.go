@@ -187,11 +187,11 @@ func (u *volcengineHTTP) send(req *http.Request, send func(*http.Request) (*http
 	case strings.HasSuffix(path, "/responses"):
 		protocol = APIProtocolResponses
 	case strings.HasSuffix(path, "/chat/completions"):
-		return nil, fmt.Errorf("Volcengine compatibility only supports Responses upstream; Chat Completions is disabled")
+		return nil, fmt.Errorf("volcengine compatibility only supports Responses upstream; Chat Completions is disabled")
 	case strings.HasSuffix(path, "/messages"):
-		return nil, fmt.Errorf("Volcengine compatibility only supports Responses upstream; Anthropic Messages must be converted first")
+		return nil, fmt.Errorf("volcengine compatibility only supports Responses upstream; Anthropic Messages must be converted first")
 	case strings.HasSuffix(path, "/responses/compact"):
-		return nil, fmt.Errorf("Volcengine compatibility does not support /responses/compact")
+		return nil, fmt.Errorf("volcengine compatibility does not support /responses/compact")
 	default:
 		return send(req)
 	}

@@ -148,7 +148,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	account = latest
 	if account.IsDeepSeekVolcengineCompatibilityEnabled() && isOpenAIResponsesCompactPath(c) {
-		err := errors.New("Volcengine compatibility does not support /responses/compact; resend the complete plaintext history to /v1/responses")
+		err := errors.New("volcengine compatibility does not support /responses/compact; resend the complete plaintext history to /v1/responses")
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}

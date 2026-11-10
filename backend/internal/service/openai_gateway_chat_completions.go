@@ -109,7 +109,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	}
 	account = latest
 	if account.IsDeepSeekVolcengineCompatibilityEnabled() {
-		err := errors.New("Chat Completions is not supported for this Volcengine account; use /v1/responses or /v1/messages")
+		err := errors.New("chat completions is not supported for this Volcengine account; use /v1/responses or /v1/messages")
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}

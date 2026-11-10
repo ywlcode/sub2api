@@ -101,7 +101,7 @@ func TestVolcengineRequestHistoryPolicy(t *testing.T) {
 		{"tool_result_without_call", `{"input":[{"type":"function_call_output","call_id":"1"}]}`, "complete tool history"},
 		{"tool_without_result", `{"input":[{"type":"function_call","call_id":"1"}]}`, "missing results"},
 		{"duplicate_call", `{"input":[{"type":"function_call","call_id":"1"},{"type":"function_call","call_id":"1"}]}`, "duplicate call_id"},
-		{"chat_shape", `{"messages":[{"role":"user","content":"hi"}]}`, "Chat Completions is not supported"},
+		{"chat_shape", `{"messages":[{"role":"user","content":"hi"}]}`, "chat completions is not supported"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateVolcengineResponsesRequest(volcengineTestAccount(), []byte(tc.body))
@@ -329,8 +329,8 @@ func volcengineSuccessFixture(protocol string, stream bool) (string, string) {
 
 func TestVolcengineGatewayRejectsUnsupportedRequestsBeforeUpstream(t *testing.T) {
 	for _, tc := range []struct{ path, body, errorText string }{
-		{"/v1/chat/completions", `{"model":"ep-ark","messages":[{"role":"user","content":"hi"}]}`, "Chat Completions is not supported"},
-		{"/v1/chat/completions", `{"model":"ep-ark","input":"hi"}`, "Chat Completions is not supported"},
+		{"/v1/chat/completions", `{"model":"ep-ark","messages":[{"role":"user","content":"hi"}]}`, "chat completions is not supported"},
+		{"/v1/chat/completions", `{"model":"ep-ark","input":"hi"}`, "chat completions is not supported"},
 		{"/v1/responses", `{"model":"ep-ark","input":[{"type":"reasoning","id":"lost"}]}`, "complete reasoning history"},
 		{"/v1/responses", `{"model":"ep-ark","input":"hi","previous_response_id":"old"}`, "stateless full history"},
 		{"/v1/responses/compact", `{"model":"ep-ark","input":"hi"}`, "does not support /responses/compact"},
@@ -370,7 +370,7 @@ func TestVolcengineChatRestrictionDoesNotAffectOtherAccounts(t *testing.T) {
 		_, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
 		require.Error(t, err)
 		require.Len(t, upstream.requests, 1)
-		require.NotContains(t, err.Error(), "Chat Completions is not supported")
+		require.NotContains(t, err.Error(), "chat completions is not supported")
 	}
 }
 

@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-var errVolcengineSSEEventTooLarge = errors.New("Ark SSE event exceeds size limit")
+var errVolcengineSSEEventTooLarge = errors.New("upstream Ark SSE event exceeds size limit")
 
 // Normalize SSE framing before the existing protocol parsers. Enabled only by
 // the Ark account's transport wrapper; no background goroutine or full-response
@@ -129,11 +129,12 @@ func (b *volcengineSSEBody) frame() ([]byte, error) {
 			return output.Bytes(), nil
 		}
 		field, value, _ := strings.Cut(line, ":")
-		if field == "data" {
+		switch field {
+		case "data":
 			data = append(data, strings.TrimPrefix(value, " "))
-		} else if field == "event" {
+		case "event":
 			event = "event: " + strings.TrimPrefix(value, " ")
-		} else {
+		default:
 			headers = append(headers, line)
 		}
 	}
