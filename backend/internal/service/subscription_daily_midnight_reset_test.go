@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
 )
 
@@ -23,10 +22,10 @@ func (r *dailyMidnightResetRepo) ResetDailyUsage(_ context.Context, _ int64, _ *
 	return nil
 }
 
-// midnightTestBase 返回一个固定日期在配置时区的 0 点，测试用时刻均从它推导，
+// midnightTestBase 返回一个固定日期在北京时间的 0 点，测试用时刻均从它推导，
 // 保证断言在任意本地时区下都与生产逻辑同构。
 func midnightTestBase() time.Time {
-	return timezone.StartOfDay(time.Date(2026, 8, 6, 12, 0, 0, 0, timezone.Location()))
+	return time.Date(2026, 8, 6, 0, 0, 0, 0, subscriptionLocation)
 }
 
 func newMidnightTestSub(dailyWindowStart time.Time, base time.Time) *UserSubscription {
@@ -132,11 +131,11 @@ func TestNormalizeExpiredWindows_DailyUsageClearsAfterMidnight(t *testing.T) {
 	normalizeExpiredWindowsAt(subs, now)
 
 	require.Zero(t, subs[0].DailyUsageUSD, "跨 0 点后展示的日用量应清零")
-	require.Nil(t, subs[0].DailyWindowStart)
+	require.Equal(t, subscriptionDayStart(now), *subs[0].DailyWindowStart)
 }
 
-// 日卡（一次性日额度）不受 0 点语义影响：跨 0 点不重置。
-func TestCheckAndResetWindows_OneTimeDailyCardStillExemptFromMidnightReset(t *testing.T) {
+// Short subscriptions use the same Beijing midnight schedule.
+func TestCheckAndResetWindows_DailyCardUsesSameMidnightReset(t *testing.T) {
 	base := midnightTestBase()
 	startsAt := base.Add(17 * time.Hour)
 	anchor := base
@@ -157,6 +156,6 @@ func TestCheckAndResetWindows_OneTimeDailyCardStillExemptFromMidnightReset(t *te
 
 	require.NoError(t, svc.CheckAndResetWindows(context.Background(), sub))
 
-	require.False(t, repo.resetCalled, "日卡为一次性配额，跨 0 点不应重置")
-	require.Equal(t, 10.0, sub.DailyUsageUSD)
+	require.True(t, repo.resetCalled)
+	require.Zero(t, sub.DailyUsageUSD)
 }

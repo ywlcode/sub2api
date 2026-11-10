@@ -451,8 +451,8 @@ func (s *UserSubscriptionRepoSuite) TestActivateWindows() {
 	group := s.mustCreateGroup("g-activate")
 	sub := s.mustCreateSubscription(user.ID, group.ID, nil)
 
-	dailyStart := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	activateAt := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	activateAt := time.Date(2026, 3, 1, 16, 30, 0, 0, time.UTC)
+	dailyStart := service.SubscriptionWindowStarts(activateAt)[0]
 	err := s.repo.ActivateWindows(s.ctx, sub.ID, dailyStart, activateAt)
 	s.Require().NoError(err, "ActivateWindows")
 
@@ -462,8 +462,8 @@ func (s *UserSubscriptionRepoSuite) TestActivateWindows() {
 	s.Require().NotNil(got.WeeklyWindowStart)
 	s.Require().NotNil(got.MonthlyWindowStart)
 	s.Require().WithinDuration(dailyStart, *got.DailyWindowStart, time.Microsecond)
-	s.Require().WithinDuration(activateAt, *got.WeeklyWindowStart, time.Microsecond)
-	s.Require().WithinDuration(activateAt, *got.MonthlyWindowStart, time.Microsecond)
+	s.Require().WithinDuration(service.SubscriptionWindowStarts(activateAt)[1], *got.WeeklyWindowStart, time.Microsecond)
+	s.Require().WithinDuration(service.SubscriptionWindowStarts(activateAt)[2], *got.MonthlyWindowStart, time.Microsecond)
 }
 
 func (s *UserSubscriptionRepoSuite) TestActivateWindows_StaleActivationPreservesExistingWindows() {
@@ -482,8 +482,8 @@ func (s *UserSubscriptionRepoSuite) TestActivateWindows_StaleActivationPreserves
 	got, err := s.repo.GetByID(s.ctx, sub.ID)
 	s.Require().NoError(err)
 	s.Require().WithinDuration(manualDailyStart, *got.DailyWindowStart, time.Microsecond)
-	s.Require().WithinDuration(manualResetAt, *got.WeeklyWindowStart, time.Microsecond)
-	s.Require().WithinDuration(manualResetAt, *got.MonthlyWindowStart, time.Microsecond)
+	s.Require().WithinDuration(service.SubscriptionWindowStarts(manualResetAt)[1], *got.WeeklyWindowStart, time.Microsecond)
+	s.Require().WithinDuration(service.SubscriptionWindowStarts(manualResetAt)[2], *got.MonthlyWindowStart, time.Microsecond)
 }
 
 func (s *UserSubscriptionRepoSuite) TestResetDailyUsage() {
@@ -914,4 +914,24 @@ func (s *UserSubscriptionRepoSuite) TestTxContext_RollbackIsolation() {
 
 	_, err = repo.GetByID(context.Background(), sub.ID)
 	s.Require().ErrorIs(err, service.ErrSubscriptionNotFound)
+}
+
+func (s *UserSubscriptionRepoSuite) TestResetUsageWindows_BeijingCalendar() {
+	user := s.mustCreateUser("beijing-reset@test.com", service.RoleUser)
+	group := s.mustCreateGroup("g-beijing-reset")
+	sub := s.mustCreateSubscription(user.ID, group.ID, func(c *dbent.UserSubscriptionCreate) {
+		c.SetDailyUsageUsd(10).SetWeeklyUsageUsd(20).SetMonthlyUsageUsd(30)
+	})
+	resetAt := time.Date(2026, 3, 1, 16, 30, 0, 0, time.UTC)
+	windows := service.SubscriptionWindowStarts(resetAt)
+	s.Require().NoError(s.repo.ResetUsageWindows(s.ctx, sub.ID, true, true, true, windows[0], resetAt))
+	got, err := s.repo.GetByID(s.ctx, sub.ID)
+	s.Require().NoError(err)
+	s.Require().Zero(got.DailyUsageUSD)
+	s.Require().Zero(got.WeeklyUsageUSD)
+	s.Require().Zero(got.MonthlyUsageUSD)
+	for i, start := range []*time.Time{got.DailyWindowStart, got.WeeklyWindowStart, got.MonthlyWindowStart} {
+		s.Require().NotNil(start)
+		s.Require().True(windows[i].Equal(*start))
+	}
 }

@@ -11,11 +11,16 @@ import (
 // --- Task 5: 验证 calculateProgress 纯函数行为正确 ---
 
 func newTestSubscriptionService() *SubscriptionService {
-	return &SubscriptionService{}
+	return &SubscriptionService{now: time.Now}
 }
 
 func ptrFloat64(v float64) *float64  { return &v }
 func ptrTime(t time.Time) *time.Time { return &t }
+
+// Legacy fixtures retain their original timezone to exercise existing anchors.
+func startOfDay(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+}
 
 func TestCalculateProgress_BasicFields(t *testing.T) {
 	svc := newTestSubscriptionService()
@@ -43,7 +48,7 @@ func TestCalculateProgress_BasicFields(t *testing.T) {
 func TestCalculateProgress_DailyUsage(t *testing.T) {
 	svc := newTestSubscriptionService()
 	now := time.Now()
-	dailyStart := now.Add(-12 * time.Hour)
+	dailyStart := subscriptionDayStart(now)
 
 	sub := &UserSubscription{
 		ID:               1,
@@ -66,10 +71,11 @@ func TestCalculateProgress_DailyUsage(t *testing.T) {
 	assert.Equal(t, dailyStart, progress.Daily.WindowStart)
 }
 
-func TestCalculateProgress_DailyCardUsesExpiryAsDailyResetTime(t *testing.T) {
+func TestCalculateProgress_DailyCardUsesBeijingMidnight(t *testing.T) {
 	svc := newTestSubscriptionService()
-	startsAt := time.Now().Add(-12 * time.Hour)
-	dailyStart := time.Date(startsAt.Year(), startsAt.Month(), startsAt.Day(), 0, 0, 0, 0, startsAt.Location())
+	startsAt := time.Date(2026, 7, 31, 18, 0, 0, 0, subscriptionLocation)
+	svc.now = func() time.Time { return startsAt.Add(time.Hour) }
+	dailyStart := subscriptionDayStart(startsAt)
 	expiresAt := startsAt.Add(24 * time.Hour)
 
 	sub := &UserSubscription{
@@ -87,13 +93,13 @@ func TestCalculateProgress_DailyCardUsesExpiryAsDailyResetTime(t *testing.T) {
 	progress := svc.calculateProgress(sub, group)
 
 	require.NotNil(t, progress.Daily, "日卡有日限额和窗口时 Daily 不应为 nil")
-	assert.Equal(t, expiresAt, progress.Daily.ResetsAt, "日卡的一次性日额度结束时间应为订阅过期时间")
+	assert.Equal(t, dailyStart.AddDate(0, 0, 1), progress.Daily.ResetsAt, "短期订阅也在北京时间午夜刷新")
 }
 
 func TestCalculateProgress_WeeklyUsage(t *testing.T) {
 	svc := newTestSubscriptionService()
 	now := time.Now()
-	weeklyStart := now.Add(-3 * 24 * time.Hour)
+	weeklyStart := subscriptionWeekStart(now)
 
 	sub := &UserSubscription{
 		ID:                1,
@@ -115,12 +121,12 @@ func TestCalculateProgress_WeeklyUsage(t *testing.T) {
 	assert.Equal(t, 50.0, progress.Weekly.Percentage)
 }
 
-// 周窗口初始化在开通日零点（legacy anchor）时，展示的 ResetsAt 应与
-// automaticWindowStartAt 的实际推进时间一致（StartsAt+7d），而非窗口起点+7d。
+// 旧版开通日锚点在首次跨周之前保留用量，展示的刷新时间改为北京时间周一。
 func TestCalculateProgress_WeeklyResetsAt_LegacyMidnightAnchor(t *testing.T) {
 	svc := newTestSubscriptionService()
 	startsAt := time.Date(2026, 7, 31, 13, 37, 6, 0, time.FixedZone("UTC+8", 8*3600))
-	weeklyStart := time.Date(startsAt.Year(), startsAt.Month(), startsAt.Day(), 0, 0, 0, 0, startsAt.Location())
+	weeklyStart := subscriptionDayStart(startsAt)
+	svc.now = func() time.Time { return startsAt }
 
 	sub := &UserSubscription{
 		ID:                1,
@@ -137,14 +143,14 @@ func TestCalculateProgress_WeeklyResetsAt_LegacyMidnightAnchor(t *testing.T) {
 	progress := svc.calculateProgress(sub, group)
 
 	require.NotNil(t, progress.Weekly)
-	assert.True(t, startsAt.Add(7*24*time.Hour).Equal(progress.Weekly.ResetsAt),
-		"legacy 午夜锚点的周窗口 ResetsAt 应为 StartsAt+7d，与实际推进时间一致")
+	assert.Equal(t, subscriptionWeekStart(startsAt).AddDate(0, 0, 7), progress.Weekly.ResetsAt)
+	assert.Equal(t, sub.WeeklyUsageUSD, progress.Weekly.UsedUSD, "同一周内保留原有用量")
 }
 
 func TestCalculateProgress_MonthlyUsage(t *testing.T) {
 	svc := newTestSubscriptionService()
 	now := time.Now()
-	monthlyStart := now.Add(-15 * 24 * time.Hour)
+	monthlyStart := subscriptionMonthStart(now)
 
 	sub := &UserSubscription{
 		ID:                 1,
@@ -174,7 +180,7 @@ func TestCalculateProgress_OverLimit_ClampedTo100Percent(t *testing.T) {
 		ID:               1,
 		ExpiresAt:        now.Add(10 * 24 * time.Hour),
 		DailyUsageUSD:    15.0, // 超过限额
-		DailyWindowStart: ptrTime(now.Add(-1 * time.Hour)),
+		DailyWindowStart: ptrTime(subscriptionDayStart(now)),
 	}
 	group := &Group{
 		Name:          "Pro",
@@ -221,9 +227,9 @@ func TestCalculateProgress_AllLimits(t *testing.T) {
 		DailyUsageUSD:      5.0,
 		WeeklyUsageUSD:     20.0,
 		MonthlyUsageUSD:    60.0,
-		DailyWindowStart:   ptrTime(now.Add(-6 * time.Hour)),
-		WeeklyWindowStart:  ptrTime(now.Add(-3 * 24 * time.Hour)),
-		MonthlyWindowStart: ptrTime(now.Add(-15 * 24 * time.Hour)),
+		DailyWindowStart:   ptrTime(subscriptionDayStart(now)),
+		WeeklyWindowStart:  ptrTime(subscriptionWeekStart(now)),
+		MonthlyWindowStart: ptrTime(subscriptionMonthStart(now)),
 	}
 	group := &Group{
 		Name:            "Full",
@@ -278,4 +284,31 @@ func TestCalculateProgress_ResetsInSeconds_NotNegative(t *testing.T) {
 	require.NotNil(t, progress.Daily)
 	assert.GreaterOrEqual(t, progress.Daily.ResetsInSeconds, int64(0),
 		"ResetsInSeconds 不应为负数")
+}
+
+func TestCalculateProgress_NormalizesAllCalendarWindowsWithoutMutatingSource(t *testing.T) {
+	location := time.FixedZone("Beijing", 8*3600)
+	now := time.Date(2026, 2, 2, 0, 0, 0, 0, location)
+	old := time.Date(2026, 1, 31, 23, 30, 0, 0, location)
+	svc := &SubscriptionService{now: func() time.Time { return now.UTC() }}
+	sub := &UserSubscription{
+		StartsAt: old, ExpiresAt: now.AddDate(0, 1, 0),
+		DailyWindowStart: &old, WeeklyWindowStart: &old, MonthlyWindowStart: &old,
+		DailyUsageUSD: 10, WeeklyUsageUSD: 20, MonthlyUsageUSD: 30,
+	}
+	group := &Group{DailyLimitUSD: ptrFloat64(10), WeeklyLimitUSD: ptrFloat64(20), MonthlyLimitUSD: ptrFloat64(30)}
+	progress := svc.calculateProgress(sub, group)
+	for i, window := range []*UsageWindowProgress{progress.Daily, progress.Weekly, progress.Monthly} {
+		require.NotNil(t, window)
+		require.Zero(t, window.UsedUSD)
+		require.Equal(t, window.LimitUSD, window.RemainingUSD)
+		require.Equal(t, []string{"2026-02-03T00:00:00+08:00", "2026-02-09T00:00:00+08:00", "2026-03-01T00:00:00+08:00"}[i], window.ResetsAt.Format(time.RFC3339))
+		require.Equal(t, int64(window.ResetsAt.Sub(now).Seconds()), window.ResetsInSeconds)
+	}
+	require.Equal(t, old, *sub.DailyWindowStart)
+	require.Equal(t, old, *sub.WeeklyWindowStart)
+	require.Equal(t, old, *sub.MonthlyWindowStart)
+	require.Equal(t, 10.0, sub.DailyUsageUSD)
+	require.Equal(t, 20.0, sub.WeeklyUsageUSD)
+	require.Equal(t, 30.0, sub.MonthlyUsageUSD)
 }

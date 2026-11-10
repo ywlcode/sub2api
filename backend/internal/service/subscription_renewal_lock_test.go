@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
 )
 
@@ -141,9 +140,9 @@ func TestPaidSubscriptionRestartReplacesTermAndRefillsQuota(t *testing.T) {
 	require.Equal(t, 1, repo.lockReads)
 	require.Equal(t, now, sub.StartsAt)
 	require.Equal(t, now.AddDate(0, 0, 30), sub.ExpiresAt)
-	require.Equal(t, timezone.StartOfDay(now), *sub.DailyWindowStart)
-	require.Equal(t, now, *sub.WeeklyWindowStart)
-	require.Equal(t, now, *sub.MonthlyWindowStart)
+	require.Equal(t, subscriptionDayStart(now), *sub.DailyWindowStart)
+	require.Equal(t, subscriptionWeekStart(now), *sub.WeeklyWindowStart)
+	require.Equal(t, subscriptionMonthStart(now), *sub.MonthlyWindowStart)
 	require.Zero(t, sub.DailyUsageUSD)
 	require.Zero(t, sub.WeeklyUsageUSD)
 	require.Zero(t, sub.MonthlyUsageUSD)
@@ -195,9 +194,9 @@ func TestPaidSubscriptionExtendRestartsExpiredSubscription(t *testing.T) {
 	require.True(t, renewed)
 	require.Equal(t, now, sub.StartsAt)
 	require.Equal(t, now.AddDate(0, 0, 30), sub.ExpiresAt)
-	require.Equal(t, timezone.StartOfDay(now), *sub.DailyWindowStart)
-	require.Equal(t, now, *sub.WeeklyWindowStart)
-	require.Equal(t, now, *sub.MonthlyWindowStart)
+	require.Equal(t, subscriptionDayStart(now), *sub.DailyWindowStart)
+	require.Equal(t, subscriptionWeekStart(now), *sub.WeeklyWindowStart)
+	require.Equal(t, subscriptionMonthStart(now), *sub.MonthlyWindowStart)
 	require.Zero(t, sub.DailyUsageUSD)
 	require.Zero(t, sub.WeeklyUsageUSD)
 	require.Zero(t, sub.MonthlyUsageUSD)

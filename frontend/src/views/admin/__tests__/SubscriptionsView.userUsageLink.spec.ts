@@ -34,8 +34,8 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     useI18n: () => ({
-      t: (key: string, params?: { id?: number }) =>
-        key === 'admin.redeem.userPrefix' ? `User #${params?.id}` : key
+      t: (key: string, params?: { id?: number; days?: number; hours?: number; minutes?: number }) =>
+        key === 'admin.redeem.userPrefix' ? `User #${params?.id}` : params ? `${key}: ${JSON.stringify(params)}` : key
     })
   }
 })
@@ -46,6 +46,7 @@ const DataTableStub = {
     <div>
       <div v-for="row in data" :key="row.id">
         <slot name="cell-user" :row="row" />
+        <slot name="cell-usage" :row="row" />
       </div>
     </div>
   `
@@ -114,6 +115,33 @@ describe('admin subscription users', () => {
         Icon: true,
         Teleport: true
       }
+    }
+  })
+
+  it('uses Beijing reset timestamps returned by the server for all quota countdowns', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-02-28T23:00:00+08:00'))
+    listSubscriptions.mockResolvedValue({ items: [{
+      id: 9, user_id: 42, group_id: 3, status: 'active',
+      starts_at: '2026-02-28T18:00:00+08:00', expires_at: '2026-03-01T18:00:00+08:00',
+      daily_usage_usd: 1, weekly_usage_usd: 2, monthly_usage_usd: 3,
+      daily_window_start: '2026-02-28T18:00:00+08:00',
+      weekly_window_start: '2026-02-28T18:00:00+08:00',
+      monthly_window_start: '2026-02-28T18:00:00+08:00',
+      daily_resets_at: '2026-03-01T00:00:00+08:00',
+      weekly_resets_at: '2026-03-02T00:00:00+08:00',
+      monthly_resets_at: '2026-03-01T00:00:00+08:00',
+      group: { daily_limit_usd: 10, weekly_limit_usd: 50, monthly_limit_usd: 100 },
+    }], total: 1, pages: 1 })
+    const wrapper = mountView()
+    try {
+      await flushPromises()
+      const text = wrapper.text()
+      expect(text.match(/admin.subscriptions.resetInHoursMinutes: \{"hours":1,"minutes":0\}/g)).toHaveLength(2)
+      expect(text).toContain('admin.subscriptions.resetInDaysHours: {"days":1,"hours":1}')
+    } finally {
+      wrapper.unmount()
+      vi.useRealTimers()
     }
   })
 
