@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
 )
 
@@ -26,7 +25,7 @@ type resetQuotaUserSubRepoStub struct {
 	resetWeeklyErr     error
 	resetMonthlyErr    error
 	dailyStart         time.Time
-	periodicStart      time.Time
+	windowTime         time.Time
 }
 
 func (r *resetQuotaUserSubRepoStub) GetByID(_ context.Context, id int64) (*UserSubscription, error) {
@@ -37,12 +36,12 @@ func (r *resetQuotaUserSubRepoStub) GetByID(_ context.Context, id int64) (*UserS
 	return &cp, nil
 }
 
-func (r *resetQuotaUserSubRepoStub) ResetUsageWindows(_ context.Context, _ int64, resetDaily, resetWeekly, resetMonthly bool, dailyStart, periodicStart time.Time) error {
+func (r *resetQuotaUserSubRepoStub) ResetUsageWindows(_ context.Context, _ int64, resetDaily, resetWeekly, resetMonthly bool, dailyStart, windowTime time.Time) error {
 	r.resetDailyCalled = resetDaily
 	r.resetWeeklyCalled = resetWeekly
 	r.resetMonthlyCalled = resetMonthly
 	r.dailyStart = dailyStart
-	r.periodicStart = periodicStart
+	r.windowTime = windowTime
 	if resetDaily && r.resetDailyErr != nil {
 		return r.resetDailyErr
 	}
@@ -55,17 +54,18 @@ func (r *resetQuotaUserSubRepoStub) ResetUsageWindows(_ context.Context, _ int64
 	if r.sub == nil {
 		return nil
 	}
+	windows := SubscriptionWindowStarts(windowTime)
 	if resetDaily {
 		r.sub.DailyUsageUSD = 0
 		r.sub.DailyWindowStart = &dailyStart
 	}
 	if resetWeekly {
 		r.sub.WeeklyUsageUSD = 0
-		r.sub.WeeklyWindowStart = &periodicStart
+		r.sub.WeeklyWindowStart = &windows[1]
 	}
 	if resetMonthly {
 		r.sub.MonthlyUsageUSD = 0
-		r.sub.MonthlyWindowStart = &periodicStart
+		r.sub.MonthlyWindowStart = &windows[2]
 	}
 	return nil
 }
@@ -108,11 +108,11 @@ func TestAdminResetQuota_ResetBoth(t *testing.T) {
 	require.True(t, stub.resetDailyCalled, "应调用 ResetDailyUsage")
 	require.True(t, stub.resetWeeklyCalled, "应调用 ResetWeeklyUsage")
 	require.False(t, stub.resetMonthlyCalled, "不应调用 ResetMonthlyUsage")
-	// 手动重置后日窗口锚定当天 0 点（保持 0 点刷新节奏），周窗口锚定重置时刻。
-	require.Equal(t, timezone.StartOfDay(resetAt), stub.dailyStart)
-	require.Equal(t, resetAt, stub.periodicStart)
-	require.Equal(t, timezone.StartOfDay(resetAt), *result.DailyWindowStart)
-	require.Equal(t, resetAt, *result.WeeklyWindowStart)
+	// 手动清零后仍保持北京时间日历边界。
+	require.Equal(t, subscriptionDayStart(resetAt), stub.dailyStart)
+	require.Equal(t, resetAt, stub.windowTime)
+	require.Equal(t, subscriptionDayStart(resetAt), *result.DailyWindowStart)
+	require.Equal(t, subscriptionWeekStart(resetAt), *result.WeeklyWindowStart)
 }
 
 func TestAdminResetQuota_ResetDailyOnly(t *testing.T) {
@@ -233,10 +233,11 @@ func TestAdminResetQuota_BeforeStartsAtSameDayPreservesAutomaticBoundary(t *test
 	result, err := svc.AdminResetQuota(context.Background(), 10, false, false, true)
 
 	require.NoError(t, err)
-	require.Equal(t, resetAt, *result.MonthlyWindowStart)
-	boundary, ok := result.automaticWindowStartAt(result.MonthlyWindowStart, 30*24*time.Hour, resetAt.Add(30*24*time.Hour))
+	require.Equal(t, subscriptionMonthStart(resetAt), *result.MonthlyWindowStart)
+	nextMonth := subscriptionMonthStart(resetAt).AddDate(0, 1, 0)
+	boundary, ok := result.automaticWindowStartAt(result.MonthlyWindowStart, subscriptionMonthStart, nextMonth)
 	require.True(t, ok)
-	require.Equal(t, resetAt.Add(30*24*time.Hour), boundary)
+	require.Equal(t, nextMonth, boundary)
 }
 
 func TestAdminResetQuota_ResetMonthlyUsageError(t *testing.T) {

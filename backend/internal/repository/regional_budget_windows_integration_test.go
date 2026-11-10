@@ -114,3 +114,39 @@ func TestRegionalBudgetWindowsResetEveryPeriodAndFixedAccountPolicy(t *testing.T
 	require.True(t, daily.After(now))
 	require.True(t, weekly.After(now))
 }
+
+func TestRegionalSubscriptionWindowsUseBeijingAndKeepLateUsageInItsPeriod(t *testing.T) {
+	ctx := context.Background()
+	user := regionalLedgerUser(t)
+	group := mustCreateGroup(t, testEntClient(t), &service.Group{Name: "calendar-" + uuid.NewString(), Platform: service.PlatformDeepseek, RateMultiplier: 1})
+	anchor := time.Date(2026, 1, 31, 15, 30, 0, 0, time.UTC) // Beijing 23:30.
+	tx := testTx(t)
+	var id int64
+	require.NoError(t, tx.QueryRowContext(ctx, `INSERT INTO user_subscriptions
+        (user_id,group_id,starts_at,expires_at,status,daily_usage_usd,weekly_usage_usd,monthly_usage_usd,daily_window_start,weekly_window_start,monthly_window_start)
+        VALUES ($1,$2,$3,$4,'active',10,10,10,$3,$3,$3) RETURNING id`, user, group.ID, anchor, anchor.AddDate(0, 2, 0)).Scan(&id))
+	assertUsage := func(daily, weekly, monthly float64) {
+		t.Helper()
+		var got [3]float64
+		require.NoError(t, tx.QueryRowContext(ctx, "SELECT daily_usage_usd,weekly_usage_usd,monthly_usage_usd FROM user_subscriptions WHERE id=$1", id).Scan(&got[0], &got[1], &got[2]))
+		require.Equal(t, [3]float64{daily, weekly, monthly}, got)
+	}
+	require.NoError(t, regionalSubscriptionWindows(ctx, tx, id, anchor.Add(29*time.Minute)))
+	assertUsage(10, 10, 10)
+	sunday := time.Date(2026, 1, 31, 16, 0, 0, 0, time.UTC)
+	require.NoError(t, regionalSubscriptionWindows(ctx, tx, id, sunday))
+	assertUsage(0, 10, 0)
+	_, err := tx.ExecContext(ctx, "UPDATE user_subscriptions SET daily_usage_usd=2,weekly_usage_usd=12,monthly_usage_usd=2 WHERE id=$1", id)
+	require.NoError(t, err)
+	monday := sunday.Add(24 * time.Hour)
+	require.NoError(t, regionalSubscriptionWindows(ctx, tx, id, monday))
+	assertUsage(0, 0, 2)
+	// A late request from the previous month must not reset the current counters.
+	require.NoError(t, regionalSubscriptionWindows(ctx, tx, id, anchor))
+	assertUsage(0, 0, 2)
+	var starts [3]time.Time
+	require.NoError(t, tx.QueryRowContext(ctx, "SELECT daily_window_start,weekly_window_start,monthly_window_start FROM user_subscriptions WHERE id=$1", id).Scan(&starts[0], &starts[1], &starts[2]))
+	for i, want := range []time.Time{monday, monday, sunday} {
+		require.True(t, starts[i].Equal(want))
+	}
+}

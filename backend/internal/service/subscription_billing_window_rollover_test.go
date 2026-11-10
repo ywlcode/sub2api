@@ -1,26 +1,23 @@
 package service
 
 import (
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
-func TestSubscriptionBillingWindowsPreserveTermAndAdvanceAligned(t *testing.T) {
-	start := time.Date(2026, 1, 1, 15, 30, 0, 0, timezone.Location())
-	end := start.Add(10 * 24 * time.Hour)
-	s := UserSubscription{StartsAt: start, ExpiresAt: end, DailyWindowStart: &start, WeeklyWindowStart: &start, MonthlyWindowStart: &start}
-	now := start.Add(9 * 24 * time.Hour)
+func TestSubscriptionBillingWindowsUseBeijingAndDoNotRewind(t *testing.T) {
+	start := time.Date(2026, 1, 31, 15, 30, 0, 0, time.UTC)
+	now := time.Date(2026, 2, 1, 16, 0, 0, 0, time.UTC)
+	s := UserSubscription{StartsAt: start, ExpiresAt: start.AddDate(0, 1, 0), DailyWindowStart: &start, WeeklyWindowStart: &start, MonthlyWindowStart: &start}
 	got := s.BillingWindowStarts(now)
-	require.Equal(t, timezone.StartOfDay(now), got[0])
-	require.Equal(t, start.Add(7*24*time.Hour), got[1])
-	require.Equal(t, start, got[2])
-	s.ExpiresAt = start.Add(24 * time.Hour)
-	got = s.BillingWindowStarts(start.Add(20 * time.Hour))
-	require.Equal(t, start, got[0])
-	require.Equal(t, start, got[1])
-	s.DailyWindowStart = nil
-	got = s.BillingWindowStarts(start.Add(20 * time.Hour))
-	require.Equal(t, start, got[0])
+	want := []string{"2026-02-02T00:00:00+08:00", "2026-02-02T00:00:00+08:00", "2026-02-01T00:00:00+08:00"}
+	for i := range got {
+		require.Equal(t, want[i], got[i].Format(time.RFC3339))
+	}
+	s.DailyWindowStart, s.WeeklyWindowStart, s.MonthlyWindowStart = &got[0], &got[1], &got[2]
+	require.Equal(t, got, s.BillingWindowStarts(start), "late billing must not rewind a newer window")
+	s.DailyWindowStart, s.WeeklyWindowStart, s.MonthlyWindowStart = nil, nil, nil
+	require.Equal(t, got, s.BillingWindowStarts(now))
 }

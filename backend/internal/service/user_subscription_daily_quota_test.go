@@ -2,11 +2,9 @@ package service
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,7 +19,7 @@ func (r *dailyResetTrackingUserSubRepo) ResetDailyUsage(context.Context, int64, 
 	return nil
 }
 
-func TestAssignOrExtendSubscription_ExpiredDailyCardStartsNewOneTimeQuota(t *testing.T) {
+func TestAssignOrExtendSubscription_ExpiredDailyCardStartsNewCalendarQuota(t *testing.T) {
 	groupRepo := &subscriptionGroupRepoStub{
 		group: &Group{ID: 1, SubscriptionType: SubscriptionTypeSubscription},
 	}
@@ -54,12 +52,11 @@ func TestAssignOrExtendSubscription_ExpiredDailyCardStartsNewOneTimeQuota(t *tes
 
 	require.NoError(t, err)
 	require.True(t, reused)
-	require.True(t, renewed.HasOneTimeDailyQuota(), "过期后重新购买 1 日卡仍应被识别为一次性日额度")
 	require.Equal(t, SubscriptionStatusActive, renewed.Status)
 	require.True(t, renewed.StartsAt.After(oldStart), "重新购买过期订阅时应重置当前周期 StartsAt")
 	require.False(t, renewed.ExpiresAt.After(renewed.StartsAt.AddDate(0, 0, 1)))
 	require.NotNil(t, renewed.DailyWindowStart)
-	require.Equal(t, timezone.StartOfDay(renewed.StartsAt), *renewed.DailyWindowStart, "续期后日窗口应锚定当天 0 点")
+	require.Equal(t, subscriptionDayStart(renewed.StartsAt), *renewed.DailyWindowStart, "续期后日窗口应锚定当天 0 点")
 	require.Equal(t, 0.0, renewed.DailyUsageUSD)
 	require.Equal(t, 0.0, renewed.WeeklyUsageUSD)
 	require.Equal(t, 0.0, renewed.MonthlyUsageUSD)
@@ -95,7 +92,7 @@ func TestAssignOrExtendSubscription_ExpiredSubscriptionAppendsMatchingNotes(t *t
 	require.Equal(t, "same\nsame", renewed.Notes)
 }
 
-func TestUserSubscriptionNeedsDailyReset_DailyCardKeepsOneTimeQuota(t *testing.T) {
+func TestUserSubscriptionNeedsDailyReset_DailyCardUsesBeijingMidnight(t *testing.T) {
 	start := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
 	dailyWindowStart := time.Date(2026, 5, 18, 0, 0, 0, 0, time.UTC)
 	sub := &UserSubscription{
@@ -105,8 +102,7 @@ func TestUserSubscriptionNeedsDailyReset_DailyCardKeepsOneTimeQuota(t *testing.T
 		DailyUsageUSD:    10,
 	}
 
-	require.True(t, sub.HasOneTimeDailyQuota())
-	require.False(t, sub.NeedsDailyResetAt(dailyWindowStart.Add(25*time.Hour)), "日卡应作为一次性配额，跨 0 点后不再刷新日额度")
+	require.True(t, sub.NeedsDailyResetAt(dailyWindowStart.Add(25*time.Hour)))
 }
 
 func TestUserSubscriptionNeedsDailyReset_MultiDaySubscriptionStillRefreshes(t *testing.T) {
@@ -118,11 +114,10 @@ func TestUserSubscriptionNeedsDailyReset_MultiDaySubscriptionStillRefreshes(t *t
 		DailyWindowStart: &dailyWindowStart,
 	}
 
-	require.False(t, sub.HasOneTimeDailyQuota())
-	require.True(t, sub.NeedsDailyResetAt(dailyWindowStart.Add(24*time.Hour)), "多日订阅仍应按 24 小时日窗口刷新")
+	require.True(t, sub.NeedsDailyResetAt(dailyWindowStart.Add(24*time.Hour)), "多日订阅也在北京时间午夜刷新")
 }
 
-func TestUserSubscriptionDailyResetTime_DailyCardReturnsExpiry(t *testing.T) {
+func TestUserSubscriptionDailyResetTime_DailyCardReturnsBeijingMidnight(t *testing.T) {
 	start := time.Date(2026, 5, 18, 12, 0, 0, 0, time.UTC)
 	dailyWindowStart := time.Date(2026, 5, 18, 0, 0, 0, 0, time.UTC)
 	expiresAt := start.Add(24 * time.Hour)
@@ -134,10 +129,10 @@ func TestUserSubscriptionDailyResetTime_DailyCardReturnsExpiry(t *testing.T) {
 
 	resetAt := sub.DailyResetTime()
 	require.NotNil(t, resetAt)
-	require.Equal(t, expiresAt, *resetAt, "日卡展示的日额度结束时间应为订阅过期时间")
+	require.Equal(t, subscriptionDayStart(dailyWindowStart).AddDate(0, 0, 1), *resetAt)
 }
 
-func TestCheckAndResetWindows_DailyCardDoesNotResetDailyUsage(t *testing.T) {
+func TestCheckAndResetWindows_DailyCardResetsDailyUsage(t *testing.T) {
 	now := time.Now()
 	startsAt := now.Add(-23 * time.Hour)
 	dailyWindowStart := now.Add(-25 * time.Hour)
@@ -156,8 +151,8 @@ func TestCheckAndResetWindows_DailyCardDoesNotResetDailyUsage(t *testing.T) {
 	err := svc.CheckAndResetWindows(context.Background(), sub)
 
 	require.NoError(t, err)
-	require.False(t, repo.resetDailyCalled, "日卡作为一次性配额，过了 24 小时日窗口也不应重置 daily usage")
-	require.Equal(t, 10.0, sub.DailyUsageUSD)
+	require.True(t, repo.resetDailyCalled)
+	require.Zero(t, sub.DailyUsageUSD)
 }
 
 func TestCheckAndResetWindows_MultiDaySubscriptionStillResetsDailyUsage(t *testing.T) {
@@ -184,7 +179,7 @@ func TestCheckAndResetWindows_MultiDaySubscriptionStillResetsDailyUsage(t *testi
 	require.Equal(t, 0.0, sub.DailyUsageUSD)
 }
 
-func TestValidateAndCheckLimits_DailyCardDoesNotAllowSecondQuotaAfterMidnight(t *testing.T) {
+func TestValidateAndCheckLimits_DailyCardUsesNewCalendarDay(t *testing.T) {
 	start := time.Now().Add(-23 * time.Hour)
 	dailyWindowStart := time.Now().Add(-25 * time.Hour)
 	dailyLimit := 10.0
@@ -203,7 +198,7 @@ func TestValidateAndCheckLimits_DailyCardDoesNotAllowSecondQuotaAfterMidnight(t 
 
 	needsMaintenance, err := svc.ValidateAndCheckLimits(sub, group)
 
-	require.False(t, needsMaintenance, "日卡跨过日窗口后不应触发 daily reset 维护")
-	require.True(t, errors.Is(err, ErrDailyLimitExceeded))
-	require.Equal(t, dailyLimit+0.01, sub.DailyUsageUSD, "热路径不应清零日卡已用额度")
+	require.True(t, needsMaintenance)
+	require.NoError(t, err)
+	require.Zero(t, sub.DailyUsageUSD)
 }
