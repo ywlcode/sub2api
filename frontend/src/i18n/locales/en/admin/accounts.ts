@@ -222,7 +222,7 @@ export default {
       },
       cnProviders: {
         volcengineCompatibility: 'Volcengine Ark compatibility',
-        volcengineCompatibilityHint: 'Enable for Volcengine Ark or its relays. Adapts request fields and reasoning settings, preserves the requested effort, and keeps historical reasoning separate from answer text.',
+        volcengineCompatibilityHint: 'Enable for Volcengine Ark or its relays. Uses Responses upstream and accepts Responses or Anthropic Messages clients only; Chat is unsupported. Clients must preserve and replay the full reasoning history.',
         accountMode: {
           title: 'Account Type',
           payg: 'Pay-as-you-go',

@@ -66,6 +66,12 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 		return nil, admissionErr
 	}
 	account = latest
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() {
+		if err := validateVolcengineStatelessHistory(normalizationObjectFields(parseRawJSONView(body))); err != nil {
+			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return nil, err
+		}
+	}
 	if normalized, err := normalizeVolcengineRequestBody(account, body, APIProtocolAnthropic); err != nil {
 		return nil, err
 	} else {
@@ -174,8 +180,8 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 		compatPromptCacheInjected = promptCacheKey != ""
 	}
 	compatReplayTrimmed := false
-	compatReplayGuardEnabled := shouldAutoInjectPromptCacheKeyForCompat(upstreamModel)
-	compatContinuationEnabled := openAICompatContinuationEnabled(account, upstreamModel)
+	compatReplayGuardEnabled := !account.IsDeepSeekVolcengineCompatibilityEnabled() && shouldAutoInjectPromptCacheKeyForCompat(upstreamModel)
+	compatContinuationEnabled := !account.IsDeepSeekVolcengineCompatibilityEnabled() && openAICompatContinuationEnabled(account, upstreamModel)
 	previousResponseID := ""
 	if compatContinuationEnabled {
 		previousResponseID = s.getOpenAICompatSessionResponseID(ctx, c, account, promptCacheKey)
@@ -194,6 +200,9 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 	anthropicReq.Model = upstreamModel
 	responsesReq, err := anthropicToResponsesForAccount(s.cfg, account, &anthropicReq)
 	if err != nil {
+		if account.IsDeepSeekVolcengineCompatibilityEnabled() {
+			writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		}
 		return nil, fmt.Errorf("convert anthropic to responses: %w", err)
 	}
 
@@ -475,7 +484,16 @@ func (s *OpenAIGatewayService) forwardAsAnthropic(
 				return nil, fmt.Errorf("build grok retry request: %w", err)
 			}
 		}
+		stopCompactionKeepalive := func() {}
+		if account.IsDeepSeekVolcengineCompatibilityEnabled() && anthropicReq.Stream && isVolcengineTextCompaction(responsesBody) && s.cfg != nil {
+			stopCompactionKeepalive = startOpenAISSEKeepalive(c, time.Duration(s.cfg.Gateway.StreamKeepaliveInterval)*time.Second)
+		}
 		resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
+		stopCompactionKeepalive()
+		if result, handled := writeVolcengineCompactionError(c, err, APIProtocolAnthropic, anthropicReq.Stream, originalModel); handled {
+			result.UpstreamModel, result.BillingModel = upstreamModel, billingModel
+			return result, err
+		}
 		if err != nil {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		}
@@ -679,7 +697,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	observer.Observe(finalResponse.Model, true)
 	observer.ObserveServiceTier(finalResponse.ServiceTier, true)
 
-	if strings.TrimSpace(finalResponse.Status) == "failed" {
+	if strings.TrimSpace(finalResponse.Status) == "failed" || account.IsDeepSeekVolcengineCompatibilityEnabled() && (finalResponse.Status == "cancelled" || finalResponse.Status == "canceled") {
 		payload, _ := json.Marshal(gin.H{"type": "response.failed", "response": finalResponse})
 		if hit, code, msg := detectOpenAICyberPolicy(payload); hit {
 			MarkOpsCyberPolicy(c, CyberPolicyMark{
@@ -1061,6 +1079,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
 
 	state := apicompat.NewResponsesEventToAnthropicState()
+	state.VolcengineCompatibility = account.IsDeepSeekVolcengineCompatibilityEnabled()
 	state.Model = originalModel
 	var usage OpenAIUsage
 	responseID := ""
@@ -1145,6 +1164,8 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		eventType := strings.TrimSpace(event.Type)
 		isBareErrorEvent := eventType == "error"
 		isTerminalEvent := isOpenAICompatResponsesTerminalEvent(eventType) || isBareErrorEvent
+		volcengineFailure := account.IsDeepSeekVolcengineCompatibilityEnabled() && volcengineResponsesTerminalFailure(eventType, []byte(payload))
+		isTerminalEvent = isTerminalEvent || volcengineFailure
 		if isTerminalEvent {
 			terminalEventType = eventType
 			if event.Response != nil {
@@ -1160,7 +1181,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 			}
 			// cyber_policy 致命不可重试：标记供 handler 事后记录；以 Anthropic SSE error 事件
 			// 回写让客户端感知并停止重试（F4），丢弃后续转换输出。
-			if eventType == "response.failed" || isBareErrorEvent {
+			if eventType == "response.failed" || isBareErrorEvent || volcengineFailure {
 				payloadBytes := []byte(payload)
 				if hit, code, msg := detectOpenAICyberPolicy(payloadBytes); hit {
 					MarkOpsCyberPolicy(c, CyberPolicyMark{
@@ -1295,9 +1316,23 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		return resultWithUsage(), nil
 	}
 
+	writeVolcengineIncompleteError := func(message string) {
+		if !account.IsDeepSeekVolcengineCompatibilityEnabled() || state.MessageStopSent || !clientOutputStarted || clientDisconnected {
+			return
+		}
+		state.MessageStopSent = true
+		writeStreamHeaders()
+		if _, err := fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE("api_error", message)); err != nil {
+			clientDisconnected = true
+			return
+		}
+		c.Writer.Flush()
+	}
+
 	// handleScanErr logs scanner errors if meaningful.
 	handleScanErr := func(err error) {
 		if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			writeVolcengineIncompleteError("Upstream stream could not be read completely")
 			logger.L().Warn("openai messages stream: read error",
 				zap.Error(err),
 				zap.String("request_id", requestID),
@@ -1313,6 +1348,7 @@ func (s *OpenAIGatewayService) handleAnthropicStreamingResponse(
 		if !clientOutputStarted {
 			return result, s.newOpenAIStreamFailoverError(c, account, false, requestID, nil, message)
 		}
+		writeVolcengineIncompleteError(message)
 		s.recordOpenAIMessagesStreamUpstreamError(c, account, requestID, "stream_missing_terminal", message)
 		return result, fmt.Errorf("stream usage incomplete: missing terminal event")
 	}

@@ -44,6 +44,9 @@ func volcengineRequestNeedsNormalization(body []byte, protocol string) bool {
 			return false
 		}
 		fields := normalizationObjectFields(item)
+		if fields["type"].Str == "reasoning" && fields["encrypted_content"].Str != "" && fields["summary"].IsArray() && len(fields["summary"].Array()) > 0 {
+			return true
+		}
 		if fields["internal_chat_message_metadata_passthrough"].Exists() || volcengineUntypedMessageView(fields) ||
 			fields["type"].Str == "reasoning" && deepSeekReasoningItemNeedsNormalization(item, true) {
 			return true

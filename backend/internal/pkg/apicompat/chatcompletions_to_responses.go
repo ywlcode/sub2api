@@ -32,6 +32,8 @@ func ChatCompletionsToResponsesWithMinOutputTokens(req *ChatCompletionsRequest, 
 type ResponsesConversionOptions struct {
 	MinOutputTokens          int
 	PreserveReasoningContent bool
+	// Explicit Ark DeepSeek account policy; all other providers keep defaults.
+	VolcengineCompatibility bool
 	// Preserve provider effort tiers instead of mapping between OpenAI/Claude
 	// conventions (for example max and xhigh mean different things on Ark).
 	PreserveReasoningEffort bool

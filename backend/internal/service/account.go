@@ -1627,6 +1627,13 @@ func (a *Account) IsOpenAIApiKey() bool {
 // 适用 openai、国产 OpenAI 兼容供应商（kimi/zhipu/deepseek）与 OpenCode Go；
 // grok 走 GetGrokBaseURL，此处对 grok 返回 "" 以保持原有行为。
 func (a *Account) GetOpenAIBaseURL() string {
+	if a.IsDeepSeekVolcengineCompatibilityEnabled() {
+		if baseURLs, ok := a.Credentials["api_base_urls"].(map[string]any); ok {
+			if baseURL, ok := baseURLs[APIProtocolResponses].(string); ok && strings.TrimSpace(baseURL) != "" {
+				return strings.TrimSpace(baseURL)
+			}
+		}
+	}
 	if !a.IsOpenAI() && !a.IsMultiProtocolAPIKey() {
 		return ""
 	}
@@ -1672,6 +1679,9 @@ func (a *Account) IsCodingPlan() bool {
 // （与既有行为完全一致）。responses 协议仅 deepseek / kimi / minimax 支持（官方原生
 // Responses 端点，适配 Codex）；zhipu 无此端点。
 func (a *Account) GetAPIProtocol() string {
+	if a.IsDeepSeekVolcengineCompatibilityEnabled() {
+		return APIProtocolResponses
+	}
 	if a == nil || !a.IsMultiProtocolAPIKey() {
 		return APIProtocolChatCompletions
 	}

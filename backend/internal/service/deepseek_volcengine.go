@@ -41,6 +41,15 @@ func normalizeVolcengineRequestBody(account *Account, body []byte, protocol stri
 	}
 	normalizeVolcengineReasoning(request, protocol)
 	normalizeDeepSeekReasoningInput(request["input"], true)
+	if items, ok := request["input"].([]any); ok {
+		for _, value := range items {
+			if item, ok := value.(map[string]any); ok && item["type"] == "reasoning" && len(deepSeekReasoningParts(item["summary"], "summary_text")) > 0 {
+				// This account replays plaintext. Do not attach a foreign
+				// provider's ciphertext/signature to the converted Ark item.
+				delete(item, "encrypted_content")
+			}
+		}
+	}
 	for _, field := range []string{"input", "messages"} {
 		items, _ := request[field].([]any)
 		for _, value := range items {
@@ -112,6 +121,9 @@ func normalizeVolcengineReasoning(request map[string]any, protocol string) {
 			}
 		} else if effort != "" {
 			output["effort"] = effort
+			// Ark only honors output_config.effort in adaptive mode. Claude's
+			// manual token budget must not cap DeepSeek's requested effort.
+			request["thinking"] = map[string]any{"type": "adaptive"}
 		}
 		return
 	}
@@ -131,21 +143,16 @@ func normalizeVolcengineReasoning(request map[string]any, protocol string) {
 	if mode == "none" || mode == "enabled" {
 		delete(request, "thinking")
 	}
-	if protocol == APIProtocolChatCompletions {
-		request["reasoning_effort"] = effort
-		delete(request, "reasoning")
-	} else {
-		if reasoning == nil {
-			reasoning = make(map[string]any)
-		}
-		reasoning["effort"] = effort
-		request["reasoning"] = reasoning
-		delete(request, "reasoning_effort")
+	if reasoning == nil {
+		reasoning = make(map[string]any)
 	}
+	reasoning["effort"] = effort
+	request["reasoning"] = reasoning
+	delete(request, "reasoning_effort")
 }
 
-// Apply the final wire adaptation before gzip, for every HTTP ingress bridge
-// and admin probe. Account scope also works when the next hop is another relay.
+// Apply the final Responses adaptation before gzip, including admin probes.
+// Account scope also works when the next hop is another relay.
 func accountVolcengineHTTP(upstream HTTPUpstream, account *Account) HTTPUpstream {
 	if !account.IsDeepSeekVolcengineCompatibilityEnabled() {
 		return upstream
@@ -171,21 +178,26 @@ func (u *volcengineHTTP) DoWithTLS(req *http.Request, proxy string, accountID in
 }
 
 func (u *volcengineHTTP) send(req *http.Request, send func(*http.Request) (*http.Response, error)) (*http.Response, error) {
-	if req == nil || req.URL == nil || req.Method != http.MethodPost || req.Body == nil || req.GetBody == nil {
+	if req == nil || req.URL == nil || req.Method != http.MethodPost || req.Body == nil {
 		return send(req)
 	}
+	defer func() { _ = req.Body.Close() }()
 	var protocol string
 	switch path := strings.TrimRight(req.URL.Path, "/"); {
 	case strings.HasSuffix(path, "/responses"):
 		protocol = APIProtocolResponses
 	case strings.HasSuffix(path, "/chat/completions"):
-		protocol = APIProtocolChatCompletions
+		return nil, fmt.Errorf("Volcengine compatibility only supports Responses upstream; Chat Completions is disabled")
 	case strings.HasSuffix(path, "/messages"):
-		protocol = APIProtocolAnthropic
+		return nil, fmt.Errorf("Volcengine compatibility only supports Responses upstream; Anthropic Messages must be converted first")
+	case strings.HasSuffix(path, "/responses/compact"):
+		return nil, fmt.Errorf("Volcengine compatibility does not support /responses/compact")
 	default:
 		return send(req)
 	}
-	defer func() { _ = req.Body.Close() }()
+	if req.GetBody == nil {
+		return nil, fmt.Errorf("normalize Volcengine request: JSON request body must be replayable")
+	}
 	if err := context.Cause(req.Context()); err != nil {
 		return nil, err
 	}
@@ -201,6 +213,9 @@ func (u *volcengineHTTP) send(req *http.Request, send func(*http.Request) (*http
 	if err != nil {
 		return nil, err
 	}
+	if err := validateVolcengineResponsesRequest(u.account, body); err != nil {
+		return nil, err
+	}
 	body, err = normalizeVolcengineRequestBody(u.account, body, protocol)
 	if err != nil {
 		return nil, err
@@ -211,5 +226,18 @@ func (u *volcengineHTTP) send(req *http.Request, send func(*http.Request) (*http
 	prepared.ContentLength = int64(len(body))
 	prepared.TransferEncoding = nil
 	prepared.Header.Del("Content-Length")
-	return send(prepared)
+	if isVolcengineTextCompaction(body) {
+		return forwardVolcengineTextCompaction(prepared, body, func(attempt *http.Request) (*http.Response, error) {
+			resp, err := send(attempt)
+			if err == nil && resp != nil && resp.Body != nil && isEventStreamResponse(resp.Header) {
+				resp.Body = newVolcengineSSEBodyWithLimit(resp.Body, volcengineCompactionMaxEventBytes)
+			}
+			return resp, err
+		})
+	}
+	resp, err := send(prepared)
+	if err == nil && resp != nil && resp.Body != nil && isEventStreamResponse(resp.Header) {
+		resp.Body = newVolcengineSSEBody(resp.Body)
+	}
+	return resp, err
 }

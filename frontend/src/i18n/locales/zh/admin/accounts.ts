@@ -502,7 +502,7 @@ export default {
       },
       cnProviders: {
         volcengineCompatibility: '火山引擎兼容',
-        volcengineCompatibilityHint: '连接火山方舟或其中转服务时开启。自动适配请求字段与思考参数，保留用户选择的推理强度，并将历史思考与正文分开传递。',
+        volcengineCompatibilityHint: '连接火山方舟或其中转服务时开启。上游固定使用 Responses，用户仅可使用 Responses 或 Anthropic Messages，不支持 Chat。客户端须保留并回传完整思考历史。',
         accountMode: {
           title: '账号类型',
           payg: '按量付费',

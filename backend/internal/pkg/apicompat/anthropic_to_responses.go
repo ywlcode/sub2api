@@ -24,12 +24,25 @@ func AnthropicToResponsesWithMinOutputTokens(req *AnthropicRequest, minOutputTok
 
 func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts ResponsesConversionOptions) (*ResponsesRequest, error) {
 	minOutputTokens := opts.MinOutputTokens
+	if opts.VolcengineCompatibility {
+		minOutputTokens = 0
+		if err := validateVolcengineMessagesHistory(req.Messages); err != nil {
+			return nil, err
+		}
+	}
 	if err := openai.ValidateGPT61SolReasoningEffort(req.Model, anthropicReasoningEffort(req)); err != nil {
 		return nil, err
 	}
 	input, err := convertAnthropicToResponsesInputWithReasoning(req.System, req.Messages, opts.PreserveReasoningContent)
 	if err != nil {
 		return nil, err
+	}
+	if opts.VolcengineCompatibility {
+		for i := range input {
+			if input[i].Type == "reasoning" {
+				input[i].EncryptedContent = ""
+			}
+		}
 	}
 
 	inputJSON, err := json.Marshal(input)

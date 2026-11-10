@@ -20,7 +20,6 @@ func chatCompletionsToResponsesForAccount(cfg *config.Config, account *Account, 
 	return apicompat.ChatCompletionsToResponsesWithOptions(req, apicompat.ResponsesConversionOptions{
 		MinOutputTokens:          configuredMinOutputTokens(cfg),
 		PreserveReasoningContent: shouldPreserveDeepSeekReasoning(account),
-		PreserveReasoningEffort:  account.IsDeepSeekVolcengineCompatibilityEnabled(),
 	})
 }
 
@@ -29,13 +28,13 @@ func anthropicToResponsesForAccount(cfg *config.Config, account *Account, req *a
 		MinOutputTokens:          configuredMinOutputTokens(cfg),
 		PreserveReasoningContent: shouldPreserveDeepSeekReasoning(account),
 		PreserveReasoningEffort:  account.IsDeepSeekVolcengineCompatibilityEnabled(),
+		VolcengineCompatibility:  account.IsDeepSeekVolcengineCompatibilityEnabled(),
 	})
 }
 
 func responsesToAnthropicForAccount(account *Account, req *apicompat.ResponsesRequest) (*apicompat.AnthropicRequest, error) {
 	return apicompat.ResponsesToAnthropicRequestWithOptions(req, apicompat.ResponsesConversionOptions{
 		PreserveReasoningContent: shouldPreserveDeepSeekReasoning(account),
-		PreserveReasoningEffort:  account.IsDeepSeekVolcengineCompatibilityEnabled(),
 	})
 }
 
