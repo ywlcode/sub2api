@@ -19,11 +19,13 @@ import (
 func gatewayHTTPUpstream(upstream HTTPUpstream, limiter *RateLimitService, account *Account, cfg *config.Config) HTTPUpstream {
 	upstream = apiKeyHealthHTTP(upstream, limiter, account)
 	upstream = accountRequestGzipHTTP(upstream, account)
-	upstream = accountVolcengineHTTP(upstream, account)
 	if account == nil || account.Platform == PlatformOpenAI {
 		return upstream
 	}
-	return &guardedGatewayHTTP{HTTPUpstream: upstream, cfg: cfg}
+	// A recognized Ark compaction can consume a response and retry internally.
+	// Guard each physical attempt inside that adapter, so receiving headers
+	// ends the header timer before the adapter waits for the summary body.
+	return accountVolcengineHTTP(&guardedGatewayHTTP{HTTPUpstream: upstream, cfg: cfg}, account)
 }
 
 func (s *AntigravityGatewayService) guardedHTTPUpstream(account *Account) HTTPUpstream {

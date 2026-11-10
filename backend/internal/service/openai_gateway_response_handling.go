@@ -680,7 +680,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				capacityFailoverSuppressedLogged = true
 			}
 			cyberHit := false
-			if eventType == "response.failed" || eventType == "error" {
+			if eventType == "response.failed" || eventType == "error" || account.IsDeepSeekVolcengineCompatibilityEnabled() && volcengineResponsesTerminalFailure(eventType, dataBytes) {
 				if codexFailureTerminal && eventType == "error" {
 					sawBareError = true
 					bareErrorPayload = append(bareErrorPayload[:0], dataBytes...)
@@ -2168,7 +2168,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 	if c.Request != nil {
 		regionalMeterObserveUsage(c.Request.Context(), terminalPayload, terminalType)
 	}
-	if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
+	if terminalOK && (terminalType == "response.failed" || terminalType == "error" || account.IsDeepSeekVolcengineCompatibilityEnabled() && volcengineResponsesTerminalFailure(terminalType, terminalPayload)) {
 		usage := s.parseSSEUsageFromBody(bodyText)
 		markOpenAICyberPolicyEvent(c, terminalPayload, resp.StatusCode, usage)
 		if !openAIStreamFailedEventShouldFailover(terminalPayload, extractOpenAISSEErrorMessage(terminalPayload)) {
@@ -2197,9 +2197,20 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		}
 		return nil, s.writeOpenAINonStreamingProtocolError(resp, c, msg)
 	}
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() && !terminalOK {
+		return nil, s.writeOpenAINonStreamingProtocolError(resp, c, "Volcengine stream ended without a terminal response event")
+	}
 	finalResponse, ok := extractCodexFinalResponse(bodyText)
 	if !ok && terminalOK {
 		finalResponse, ok = extractOpenAINonCompletedTerminalResponse(terminalType, terminalPayload)
+	}
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() {
+		if response := gjson.GetBytes(terminalPayload, "response"); terminalType == "response.incomplete" && response.IsObject() {
+			finalResponse, ok = []byte(response.Raw), true
+		}
+		if !ok {
+			return nil, s.writeOpenAINonStreamingProtocolError(resp, c, "Volcengine terminal event is missing its response object")
+		}
 	}
 
 	usage := s.parseSSEUsageFromBody(bodyText)
@@ -2256,6 +2267,9 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		if contentType == "" {
 			contentType = "text/event-stream"
 		}
+	}
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() && ok {
+		c.Writer.Header().Set("Content-Type", contentType)
 	}
 	deliveryErr := observeOpenAIAgentRecoveryOutput(c, body, false)
 	if deliveryErr == nil && !writeOpenAICompactSSEBridge(c, resp.StatusCode, body) {

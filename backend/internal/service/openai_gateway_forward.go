@@ -161,6 +161,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if err := s.checkOpenAIAgentRecoveryDispatch(ctx, c, account, body); err != nil {
 		return nil, err
 	}
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() && isOpenAIResponsesCompactPath(c) {
+		err := errors.New("Volcengine compatibility does not support /responses/compact; resend the complete plaintext history to /v1/responses")
+		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
+	if err := validateVolcengineResponsesRequest(account, body); err != nil {
+		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
 	if normalized, err := normalizeVolcengineRequestBody(account, body, APIProtocolResponses); err != nil {
 		return nil, err
 	} else {
@@ -368,6 +377,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	passthroughEnabled := account.IsOpenAIPassthroughEnabled() && !openAI409UsesNativeAPIKey(ctx, account)
 	compactPath := isOpenAIResponsesCompactPath(c)
+	body, err = promoteVolcengineAdditionalTools(account, body)
+	if err != nil {
+		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
 	body, err = normalizeOpenAIResponsesNamespaces(c, account, body, wsDecision.Transport, passthroughEnabled, compactPath)
 	if err != nil {
 		return nil, err
@@ -380,8 +394,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// 映射，会把 custom_tool_call 降级成 function_call（Codex 判 unsupported call）。
 	// 因此进入 fallback 的请求必须跳过 adaptation。
 	if shouldAdaptDeepSeekResponsesClientTools(account, body, compactPath) {
-		adaptedBody, mapping, adaptErr := adaptOpenAIResponsesClientTools(body)
+		adapt := adaptOpenAIResponsesClientTools
+		if account.IsDeepSeekVolcengineCompatibilityEnabled() {
+			adapt = adaptVolcengineResponsesClientTools
+		}
+		adaptedBody, mapping, adaptErr := adapt(body)
 		if adaptErr != nil {
+			if account.IsDeepSeekVolcengineCompatibilityEnabled() {
+				writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", adaptErr.Error())
+			}
 			return nil, fmt.Errorf("adapt DeepSeek Responses client tools: %w", adaptErr)
 		}
 		body = adaptedBody
@@ -1490,6 +1511,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			return s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 		}()
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
+		if result, handled := writeVolcengineCompactionError(c, err, APIProtocolResponses, reqStream, originalModel); handled {
+			result.UpstreamModel, result.BillingModel = upstreamModel, billingModel
+			return result, err
+		}
 		var phaseTimeout *openAIHTTPPhaseTimeout
 		if errors.As(err, &phaseTimeout) {
 			if headerGuard != nil {
@@ -1844,6 +1869,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 }
 
 func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() {
+		return false
+	}
 	if account.IsCopilotSDKEnabled() {
 		return false
 	}
@@ -1897,6 +1925,9 @@ func shouldForwardOpenAIResponsesViaChatCompletions(account *Account, body []byt
 // 顶层工具，namespace 子工具摊平后回程再还原为 custom_tool_call，因此这里对
 // DeepSeek 语义上游显式绕开原生端点。
 func shouldForwardDeepSeekResponsesLiteViaChatCompletions(account *Account, body []byte) bool {
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() {
+		return false
+	}
 	if account == nil || account.Type != AccountTypeAPIKey {
 		return false
 	}
@@ -1911,6 +1942,9 @@ func shouldForwardDeepSeekResponsesLiteViaChatCompletions(account *Account, body
 // compaction_trigger，会把它当普通回合，返回 reasoning+message 而非 compaction
 // item，Codex 判 fatal（got 0 items）。改走 chat 桥后在回程合成 compaction item。
 func shouldForwardDeepSeekResponsesCompactViaChatCompletions(account *Account, body []byte) bool {
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() {
+		return false
+	}
 	if account == nil || account.Type != AccountTypeAPIKey {
 		return false
 	}
@@ -2033,7 +2067,7 @@ func shouldAdaptDeepSeekResponsesClientTools(account *Account, body []byte, comp
 		account.Type == AccountTypeAPIKey &&
 		!compactPath &&
 		!shouldForwardOpenAIResponsesViaChatCompletions(account, body) &&
-		needsOpenAIResponsesClientToolAdaptation(body)
+		(needsOpenAIResponsesClientToolAdaptation(body) || account.IsDeepSeekVolcengineCompatibilityEnabled() && gjson.GetBytes(body, "tools.#(type==namespace)").Exists())
 }
 
 func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, isStream bool, promptCacheKey string, isCodexCLI bool) (*http.Request, error) {

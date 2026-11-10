@@ -28,6 +28,13 @@ func AnthropicToResponsesWithMinOutputTokens(req *AnthropicRequest, minOutputTok
 type AnthropicToResponsesOptions = ResponsesConversionOptions
 
 func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts AnthropicToResponsesOptions) (*ResponsesRequest, error) {
+	minOutputTokens := opts.MinOutputTokens
+	if opts.VolcengineCompatibility {
+		minOutputTokens = 0
+		if err := validateVolcengineMessagesHistory(req.Messages); err != nil {
+			return nil, err
+		}
+	}
 	if !opts.DeferReasoningEffortValidation {
 		if err := openai.ValidateGPT61ReasoningEffort(req.Model, anthropicReasoningEffort(req)); err != nil {
 			return nil, err
@@ -36,6 +43,13 @@ func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts AnthropicToResp
 	input, err := convertAnthropicToResponsesInputWithReasoning(req.System, req.Messages, opts.PreserveReasoningContent)
 	if err != nil {
 		return nil, err
+	}
+	if opts.VolcengineCompatibility {
+		for i := range input {
+			if input[i].Type == "reasoning" {
+				input[i].EncryptedContent = ""
+			}
+		}
 	}
 
 	inputJSON, err := json.Marshal(input)
@@ -67,8 +81,8 @@ func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts AnthropicToResp
 
 	if req.MaxTokens > 0 {
 		v := req.MaxTokens
-		if v < opts.MinOutputTokens {
-			v = opts.MinOutputTokens
+		if v < minOutputTokens {
+			v = minOutputTokens
 		}
 		out.MaxOutputTokens = &v
 	}

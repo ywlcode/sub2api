@@ -282,7 +282,8 @@ func (usage AnthropicUsage) MarshalJSON() ([]byte, error) {
 
 // AnthropicStreamEvent is a single SSE event in the Anthropic streaming protocol.
 type AnthropicStreamEvent struct {
-	Type string `json:"type"`
+	Type  string                `json:"type"`
+	Error *AnthropicStreamError `json:"error,omitempty"`
 
 	// message_start
 	Message *AnthropicResponse `json:"message,omitempty"`
@@ -296,6 +297,11 @@ type AnthropicStreamEvent struct {
 
 	// message_delta
 	Usage *AnthropicUsage `json:"usage,omitempty"`
+}
+
+type AnthropicStreamError struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
 }
 
 // AnthropicDelta carries incremental content in streaming events.
@@ -771,8 +777,10 @@ type ResponsesStreamEvent struct {
 	Part *ResponsesContentPart `json:"part,omitempty"`
 
 	// error event fields
-	Code  string `json:"code,omitempty"`
-	Param string `json:"param,omitempty"`
+	Code    string          `json:"code,omitempty"`
+	Param   string          `json:"param,omitempty"`
+	Message string          `json:"message,omitempty"`
+	Error   *ResponsesError `json:"error,omitempty"`
 
 	// SequenceNumber orders streamed events. Strict Responses clients (Grok Build,
 	// Codex CLI) declare it required and abort with `missing field 'sequence_number'`
