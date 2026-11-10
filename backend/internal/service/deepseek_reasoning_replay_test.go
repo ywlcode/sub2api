@@ -50,7 +50,7 @@ func TestDeepSeekReasoningReplayAcrossProviders(t *testing.T) {
 					}
 					require.Error(t, err) // Stop after capture; no paid inference.
 					if destination == "ark_responses" && inbound == "/v1/chat/completions" {
-						require.ErrorContains(t, err, "Chat Completions is not supported")
+						require.ErrorContains(t, err, "chat completions is not supported")
 						require.Equal(t, http.StatusBadRequest, c.Writer.Status())
 						require.Empty(t, upstream.requests)
 						return

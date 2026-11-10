@@ -135,7 +135,7 @@ func TestVolcengineGatewayIngress(t *testing.T) {
 			if tc.path == "/v1/chat/completions" || tc.name == "legacy_messages" {
 				require.Empty(t, upstream.requests)
 				require.Equal(t, http.StatusBadRequest, c.Writer.Status())
-				require.Contains(t, err.Error(), "Chat Completions is not supported")
+				require.Contains(t, err.Error(), "chat completions is not supported")
 				return
 			}
 			require.NotNil(t, upstream.lastReq)

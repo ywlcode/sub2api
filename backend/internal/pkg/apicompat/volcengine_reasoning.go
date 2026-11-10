@@ -261,7 +261,7 @@ func validateVolcengineMessagesHistory(messages []AnthropicMessage) error {
 		for _, block := range blocks {
 			switch block.Type {
 			case "redacted_thinking":
-				return fmt.Errorf("Ark DeepSeek requires plaintext thinking; redacted thinking cannot be converted")
+				return fmt.Errorf("plaintext thinking is required for Ark DeepSeek; redacted thinking cannot be converted")
 			case "thinking":
 				if block.Thinking == "" {
 					return fmt.Errorf("thinking block has no recoverable plaintext; resend the complete thinking history")
