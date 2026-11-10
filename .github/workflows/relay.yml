@@ -23,11 +23,14 @@ jobs:
       - name: Test relay and transport cancellation
         working-directory: backend
         run: go test -race ./internal/relay ./internal/pkg/volcengine ./cmd/relay
+      - name: Test relay with unit tag
+        working-directory: backend
+        run: go test -tags unit ./internal/relay ./internal/pkg/volcengine ./cmd/relay
       - name: Verify dependency isolation and build
         working-directory: backend
         run: |
           go list -deps ./cmd/relay > /tmp/relay-deps.txt
-          if grep -E '^(database/sql|github.com/redis/|github.com/gin-gonic/|github.com/Wei-Shaw/sub2api/internal/service$)' /tmp/relay-deps.txt; then
+          if grep -E '^(database/sql|github.com/redis/|github.com/gin-gonic/|github.com/Wei-Shaw/sub2api/internal/(service|pkg/volcengine)$)' /tmp/relay-deps.txt; then
             exit 1
           fi
           CGO_ENABLED=0 go build -trimpath -o /tmp/sub2api-relay ./cmd/relay

@@ -1,31 +1,18 @@
 package relay
 
 import (
-	"sort"
 	"sync"
 	"time"
 )
 
-const timingCapacity = 4096
+const TimingWindowSize = 2000
 
-// Timing stores transport timing only, never prompts, credentials or response text.
-type Timing struct {
-	At                  time.Time `json:"at"`
-	RequestID           string    `json:"request_id"`
-	UpstreamRequestID   string    `json:"upstream_request_id,omitempty"`
-	Path                string    `json:"path"`
-	Status              int       `json:"status"`
-	Gzip                bool      `json:"gzip"`
-	BodyBytes           int64     `json:"body_bytes"`
-	ResponseBytes       int64     `json:"response_bytes"`
-	UploadMS            float64   `json:"user_upload_ms"`
-	CompatibilityMS     float64   `json:"compatibility_ms"`
-	ProcessingMS        float64   `json:"processing_ms"`
-	UpstreamConnectMS   *float64  `json:"upstream_connection_ms,omitempty"`
-	UpstreamWriteMS     *float64  `json:"upstream_request_write_ms,omitempty"`
-	UpstreamFirstByteMS *float64  `json:"upstream_first_byte_ms,omitempty"`
-	TotalMS             float64   `json:"total_ms"`
-	Error               string    `json:"error,omitempty"`
+// Each entry contains only three durations. No IDs, bodies or request metadata
+// are retained. All three sums share the same window of valid first-token samples.
+type timingSample struct {
+	upload      time.Duration
+	preparation time.Duration
+	firstToken  time.Duration
 }
 
 type Timings struct {
@@ -35,7 +22,9 @@ type Timings struct {
 	completed uint64
 	errors    uint64
 	next      int
-	records   []Timing
+	samples   int
+	sums      timingSample
+	window    [TimingWindowSize]timingSample
 }
 
 func (t *Timings) begin() {
@@ -47,68 +36,58 @@ func (t *Timings) begin() {
 	t.active++
 }
 
-func (t *Timings) finish(record Timing) {
+func (t *Timings) finish(failed bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.active--
 	t.completed++
-	if record.Status >= 400 || record.Error != "" {
+	if failed {
 		t.errors++
 	}
-	if len(t.records) < timingCapacity {
-		t.records = append(t.records, record)
-	} else {
-		t.records[t.next] = record
+}
+
+// record runs once on the first semantic token, even if the response keeps
+// streaming. Missing tokens never become artificial zero-latency samples.
+func (t *Timings) record(upload, preparation, firstToken time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	old := t.window[t.next]
+	if t.samples < TimingWindowSize {
+		t.samples++
 	}
-	t.next = (t.next + 1) % timingCapacity
+	sample := timingSample{upload: upload, preparation: preparation, firstToken: firstToken}
+	t.sums.upload += sample.upload - old.upload
+	t.sums.preparation += sample.preparation - old.preparation
+	t.sums.firstToken += sample.firstToken - old.firstToken
+	t.window[t.next] = sample
+	t.next = (t.next + 1) % TimingWindowSize
 }
 
 type DurationStats struct {
-	AverageMS float64 `json:"average_ms"`
-	P50MS     float64 `json:"p50_ms"`
-	P95MS     float64 `json:"p95_ms"`
+	AverageMS *float64 `json:"average_ms"`
 }
 
 type TimingSnapshot struct {
-	Since      time.Time     `json:"since"`
-	Active     int           `json:"active"`
-	Completed  uint64        `json:"completed"`
-	Errors     uint64        `json:"errors"`
-	Samples    int           `json:"samples"`
-	Scope      string        `json:"scope"`
-	Upload     DurationStats `json:"user_upload"`
-	Processing DurationStats `json:"processing"`
-	Total      DurationStats `json:"total"`
-	Recent     []Timing      `json:"recent"`
+	Since       time.Time     `json:"since"`
+	Active      int           `json:"active"`
+	Completed   uint64        `json:"completed"`
+	Errors      uint64        `json:"errors"`
+	Samples     int           `json:"samples"`
+	WindowSize  int           `json:"window_size"`
+	Upload      DurationStats `json:"user_upload"`
+	Preparation DurationStats `json:"local_preparation"`
+	FirstToken  DurationStats `json:"upstream_first_token"`
 }
 
 func (t *Timings) Snapshot() TimingSnapshot {
 	t.mu.Lock()
-	s := TimingSnapshot{Since: t.started, Active: t.active, Completed: t.completed, Errors: t.errors, Samples: len(t.records), Scope: "duration statistics cover the last 4096 completed requests; counters are since startup"}
-	records := append([]Timing(nil), t.records...)
-	next := t.next
-	t.mu.Unlock()
-	if len(records) == timingCapacity {
-		records = append(records[next:], records[:next]...)
+	defer t.mu.Unlock()
+	s := TimingSnapshot{Since: t.started, Active: t.active, Completed: t.completed, Errors: t.errors, Samples: t.samples, WindowSize: TimingWindowSize}
+	if t.samples != 0 {
+		average := func(d time.Duration) *float64 { v := milliseconds(d) / float64(t.samples); return &v }
+		s.Upload.AverageMS = average(t.sums.upload)
+		s.Preparation.AverageMS = average(t.sums.preparation)
+		s.FirstToken.AverageMS = average(t.sums.firstToken)
 	}
-	u, p, total := make([]float64, len(records)), make([]float64, len(records)), make([]float64, len(records))
-	for i, r := range records {
-		u[i], p[i], total[i] = r.UploadMS, r.ProcessingMS, r.TotalMS
-	}
-	s.Upload, s.Processing, s.Total = summarize(u), summarize(p), summarize(total)
-	start := max(0, len(records)-20)
-	s.Recent = records[start:]
 	return s
-}
-
-func summarize(values []float64) DurationStats {
-	if len(values) == 0 {
-		return DurationStats{}
-	}
-	var sum float64
-	for _, v := range values {
-		sum += v
-	}
-	sort.Float64s(values)
-	return DurationStats{AverageMS: sum / float64(len(values)), P50MS: values[(len(values)-1)/2], P95MS: values[(len(values)*95+99)/100-1]}
 }

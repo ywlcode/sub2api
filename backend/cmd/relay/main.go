@@ -66,23 +66,42 @@ func main() {
 		logger.Error("relay_start_error", "error", err)
 		os.Exit(1)
 	}
-	server := &http.Server{Addr: config.Listen, Handler: handler, ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 2 * time.Minute}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	done := make(chan error, 1)
-	go func() { done <- server.ListenAndServe() }()
-	logger.Info("relay_started", "version", Version, "commit", Commit, "listen", config.Listen, "timing_capacity", 4096)
+	if err := serve(ctx, config, handler, logger); err != nil {
+		logger.Error("relay_server_error", "error", err)
+		os.Exit(1)
+	}
+}
+
+func serve(ctx context.Context, config relay.Config, handler *relay.Handler, logger *slog.Logger) error {
+	server := &http.Server{Addr: config.Listen, Handler: handler, ReadHeaderTimeout: 15 * time.Second, IdleTimeout: 2 * time.Minute}
+	stats := &http.Server{Addr: config.StatsListen, Handler: handler.StatsHandler(), ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second}
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return fmt.Errorf("listen relay: %w", err)
+	}
+	defer func() { _ = listener.Close() }()
+	statsListener, err := net.Listen("tcp", stats.Addr)
+	if err != nil {
+		return fmt.Errorf("listen relay stats: %w", err)
+	}
+	defer func() { _ = statsListener.Close() }()
+	defer func() { _ = server.Close(); _ = stats.Close() }()
+	done := make(chan error, 2)
+	go func() { done <- server.Serve(listener) }()
+	go func() { done <- stats.Serve(statsListener) }()
+	logger.Info("relay_started", "version", Version, "commit", Commit, "listen", listener.Addr().String(), "stats_listen", statsListener.Addr().String(), "timing_window", relay.TimingWindowSize)
 	select {
 	case err := <-done:
 		if !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("relay_server_error", "error", err)
-			os.Exit(1)
+			return err
 		}
+		return nil
 	case <-ctx.Done():
 		shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := server.Shutdown(shutdown); err != nil {
-			_ = server.Close()
-		}
+		_ = stats.Shutdown(shutdown)
+		return server.Shutdown(shutdown)
 	}
 }

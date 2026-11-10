@@ -41,3 +41,43 @@ func TestLoadAdditionalFixedKeys(t *testing.T) {
 		t.Fatal("missing configured key file was ignored")
 	}
 }
+
+func TestStatsListenerConfiguration(t *testing.T) {
+	t.Setenv("RELAY_KEY_FILE", "")
+	t.Setenv("RELAY_KEY", "relay-fixture")
+	t.Setenv("RELAY_UPSTREAM_KEY_FILE", "")
+	t.Setenv("RELAY_UPSTREAM_KEY", "upstream-fixture")
+	t.Setenv("RELAY_ADDITIONAL_KEYS_FILE", "")
+	t.Setenv("RELAY_ADDITIONAL_KEYS", "")
+	t.Setenv("RELAY_STATS_LISTEN", "")
+	config, err := LoadConfig()
+	if err != nil || config.StatsListen != "127.0.0.1:10800" {
+		t.Fatalf("incorrect default stats listener: %+v, %v", config, err)
+	}
+	t.Setenv("RELAY_STATS_LISTEN", "0.0.0.0:10800")
+	config, err = LoadConfig()
+	if err != nil || config.StatsListen != "0.0.0.0:10800" {
+		t.Fatal("container stats listener override ignored")
+	}
+	t.Setenv("RELAY_STATS_LISTEN", "invalid")
+	if _, err = LoadConfig(); err == nil {
+		t.Fatal("invalid stats listener accepted")
+	}
+}
+
+func TestLegacyCompatibilitySettingIsIgnored(t *testing.T) {
+	t.Setenv("RELAY_KEY_FILE", "")
+	t.Setenv("RELAY_KEY", "relay-fixture")
+	t.Setenv("RELAY_UPSTREAM_KEY_FILE", "")
+	t.Setenv("RELAY_UPSTREAM_KEY", "upstream-fixture")
+	t.Setenv("RELAY_ADDITIONAL_KEYS_FILE", "")
+	t.Setenv("RELAY_ADDITIONAL_KEYS", "")
+	for _, value := range []string{"true", "false", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("RELAY_VOLCENGINE_COMPATIBILITY", value)
+			if _, err := LoadConfig(); err != nil {
+				t.Fatalf("removed compatibility setting affected startup: %v", err)
+			}
+		})
+	}
+}

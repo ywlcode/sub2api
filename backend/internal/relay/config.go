@@ -4,6 +4,7 @@ package relay
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"strconv"
@@ -13,21 +14,24 @@ import (
 
 type Config struct {
 	Listen                string
+	StatsListen           string
 	Key                   string
 	AdditionalKeys        []string
 	UpstreamKey           string
 	UpstreamURL           string
-	Compatibility         bool
 	MaxBodyBytes          int64
 	UploadTimeout         time.Duration
 	ResponseHeaderTimeout time.Duration
 }
 
 func LoadConfig() (Config, error) {
-	c := Config{Listen: "0.0.0.0:8080", UpstreamURL: "https://ark.cn-beijing.volces.com/api/v3", Compatibility: true,
+	c := Config{Listen: "0.0.0.0:8080", StatsListen: "127.0.0.1:10800", UpstreamURL: "https://ark.cn-beijing.volces.com/api/v3",
 		MaxBodyBytes: 64 << 20, UploadTimeout: 3 * time.Minute, ResponseHeaderTimeout: 5 * time.Minute}
 	if v := os.Getenv("RELAY_LISTEN"); v != "" {
 		c.Listen = v
+	}
+	if v := os.Getenv("RELAY_STATS_LISTEN"); v != "" {
+		c.StatsListen = v
 	}
 	if v := os.Getenv("RELAY_UPSTREAM_URL"); v != "" {
 		c.UpstreamURL = v
@@ -46,12 +50,6 @@ func LoadConfig() (Config, error) {
 	for _, line := range strings.Split(additional, "\n") {
 		if key := strings.TrimSpace(line); key != "" {
 			c.AdditionalKeys = append(c.AdditionalKeys, key)
-		}
-	}
-	if v := os.Getenv("RELAY_VOLCENGINE_COMPATIBILITY"); v != "" {
-		c.Compatibility, err = strconv.ParseBool(v)
-		if err != nil {
-			return c, errors.New("invalid RELAY_VOLCENGINE_COMPATIBILITY")
 		}
 	}
 	if v := os.Getenv("RELAY_MAX_BODY_BYTES"); v != "" {
@@ -83,6 +81,13 @@ func loadSecret(name string) (string, error) {
 }
 
 func (c Config) Validate() error {
+	if c.StatsListen != "" {
+		_, port, err := net.SplitHostPort(c.StatsListen)
+		n, portErr := strconv.Atoi(port)
+		if err != nil || portErr != nil || n < 0 || n > 65535 {
+			return errors.New("RELAY_STATS_LISTEN must be a host:port address")
+		}
+	}
 	if c.Key == "" || c.UpstreamKey == "" {
 		return errors.New("RELAY_KEY and RELAY_UPSTREAM_KEY are required (or their _FILE variants)")
 	}

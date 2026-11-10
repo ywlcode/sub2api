@@ -12,16 +12,14 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
-	"net/http/httptrace"
 	"net/http/httputil"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/Wei-Shaw/sub2api/internal/pkg/volcengine"
 )
 
 type Handler struct {
@@ -33,10 +31,13 @@ type Handler struct {
 }
 
 type traceState struct {
-	mu                                                                               sync.Mutex
-	start, connectionStart, gotConnection, headersWritten, requestWritten, firstByte time.Time
-	upstreamID                                                                       string
-	errorKind                                                                        string
+	mu            sync.Mutex
+	uploadDone    time.Time
+	upstreamStart time.Time
+	upload        time.Duration
+	preparation   time.Duration
+	firstToken    bool
+	errorKind     string
 }
 type traceKey struct{}
 
@@ -70,12 +71,28 @@ func NewHandler(config Config, logger *slog.Logger) (*Handler, error) {
 				p.Out.Header.Del(name)
 			}
 			p.Out.Header.Set("Accept-Encoding", "identity")
+			if state, ok := p.Out.Context().Value(traceKey{}).(*traceState); ok {
+				state.mu.Lock()
+				state.upstreamStart = time.Now()
+				state.preparation = state.upstreamStart.Sub(state.uploadDone)
+				state.mu.Unlock()
+			}
 		},
 		ModifyResponse: func(r *http.Response) error {
-			if state, ok := r.Request.Context().Value(traceKey{}).(*traceState); ok {
-				state.mu.Lock()
-				state.upstreamID = boundedID(r.Header.Get("X-Request-Id"))
-				state.mu.Unlock()
+			mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			encoding := strings.TrimSpace(r.Header.Get("Content-Encoding"))
+			if state, ok := r.Request.Context().Value(traceKey{}).(*traceState); ok && r.Request.Method == http.MethodPost && r.StatusCode >= 200 && r.StatusCode < 300 && mediaType == "text/event-stream" && (encoding == "" || strings.EqualFold(encoding, "identity")) {
+				r.Body = &firstTokenBody{ReadCloser: r.Body, observer: deltaObserver{first: func(at time.Time) {
+					state.mu.Lock()
+					if state.firstToken || state.upstreamStart.IsZero() {
+						state.mu.Unlock()
+						return
+					}
+					state.firstToken = true
+					upload, preparation, firstToken := state.upload, state.preparation, at.Sub(state.upstreamStart)
+					state.mu.Unlock()
+					h.Timings.record(upload, preparation, firstToken)
+				}}}
 			}
 			return nil
 		},
@@ -101,6 +118,7 @@ func NewHandler(config Config, logger *slog.Logger) (*Handler, error) {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	receivedAt := time.Now()
 	if r.Method == http.MethodGet && r.URL.Path == "/health" {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "mode": "relay"})
 		return
@@ -119,68 +137,50 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, h.Timings.Snapshot())
 		return
 	}
-	path, protocol, ok := route(r.Method, r.URL.Path)
+	path, ok := route(r.Method, r.URL.Path)
 	if !ok {
 		writeError(w, http.StatusNotFound, "unsupported_relay_endpoint")
 		return
 	}
-	start := time.Now()
-	state := &traceState{start: start}
-	record := Timing{At: start.UTC(), RequestID: boundedID(r.Header.Get("X-Request-Id")), Path: r.URL.Path}
-	if record.RequestID == "" {
+	state := &traceState{}
+	requestID := boundedID(r.Header.Get("X-Request-Id"))
+	if requestID == "" {
 		var id [12]byte
 		if _, err := rand.Read(id[:]); err == nil {
-			record.RequestID = hex.EncodeToString(id[:])
+			requestID = hex.EncodeToString(id[:])
 		}
 	}
-	w.Header().Set("X-Relay-Request-Id", record.RequestID)
+	w.Header().Set("X-Relay-Request-Id", requestID)
 	tracked := &responseWriter{ResponseWriter: w}
-	uploadDone := start
-	h.Timings.begin()
+	countStats := r.Method == http.MethodPost
+	if countStats {
+		h.Timings.begin()
+	}
 	defer func() {
 		panicked := recover()
-		record.Status = tracked.status
-		if record.Status == 0 {
-			record.Status = http.StatusOK
-		}
-		record.ResponseBytes = tracked.bytes
-		record.TotalMS = milliseconds(time.Since(start))
-		record.ProcessingMS = milliseconds(time.Since(uploadDone))
 		state.mu.Lock()
-		record.UpstreamRequestID, record.Error = state.upstreamID, state.errorKind
-		if !state.gotConnection.IsZero() {
-			record.UpstreamConnectMS = durationPointer(state.gotConnection.Sub(state.connectionStart))
-		}
-		if !state.requestWritten.IsZero() && !state.headersWritten.IsZero() {
-			record.UpstreamWriteMS = durationPointer(state.requestWritten.Sub(state.headersWritten))
-		}
-		if !state.firstByte.IsZero() {
-			record.UpstreamFirstByteMS = durationPointer(state.firstByte.Sub(state.start))
-		}
+		failed := state.errorKind != "" || tracked.status >= 400 || tracked.writeError || r.Context().Err() != nil || panicked != nil
 		state.mu.Unlock()
-		if tracked.writeError {
-			record.Error = "downstream_write_error"
+		if countStats {
+			h.Timings.finish(failed)
 		}
-		if r.Context().Err() != nil {
-			record.Error = "request_canceled"
-		}
-		if panicked != nil && record.Error == "" {
-			record.Error = "stream_interrupted"
-		}
-		h.Timings.finish(record)
-		h.logger.Info("relay_request", "timing", record)
 		if panicked != nil {
 			panic(panicked)
 		}
 	}()
 	if r.Method == http.MethodPost {
 		controller := http.NewResponseController(w)
-		_ = controller.SetReadDeadline(start.Add(h.config.UploadTimeout))
-		body, wasGzip, err := readBody(tracked, r, h.config.MaxBodyBytes)
+		_ = controller.SetReadDeadline(receivedAt.Add(h.config.UploadTimeout))
+		// Finish receiving the wire body before decompressing it, so the three
+		// timing intervals are contiguous and never overlap.
+		wire, err := readWireBody(tracked, r, h.config.MaxBodyBytes)
 		_ = controller.SetReadDeadline(time.Time{})
-		uploadDone = time.Now()
-		record.UploadMS = milliseconds(uploadDone.Sub(start))
-		record.Gzip = wasGzip
+		state.uploadDone = time.Now()
+		state.upload = state.uploadDone.Sub(receivedAt)
+		var body []byte
+		if err == nil {
+			body, err = decodeBody(wire, r.Header.Get("Content-Encoding"), h.config.MaxBodyBytes)
+		}
 		if err != nil {
 			status, kind := http.StatusBadRequest, "invalid_request_body"
 			var tooLarge *http.MaxBytesError
@@ -195,16 +195,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(tracked, status, kind)
 			return
 		}
-		record.BodyBytes = int64(len(body))
-		if h.config.Compatibility {
-			body, err = volcengine.NormalizeRequest(body, protocol)
-			if err != nil {
-				state.errorKind = "invalid_json"
-				writeError(tracked, http.StatusBadRequest, "invalid_json")
-				return
-			}
-		}
-		record.CompatibilityMS = milliseconds(time.Since(uploadDone))
+		// Forward the decoded bytes unchanged. Protocol and provider-specific
+		// normalization belongs to the full gateway before it calls the relay.
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		r.GetBody = nil
 		r.ContentLength = int64(len(body))
@@ -212,62 +204,52 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r.Header.Del("Content-Encoding")
 		r.Header.Del("Content-Length")
 	}
-	trace := &httptrace.ClientTrace{
-		GetConn:      func(string) { state.mu.Lock(); state.connectionStart = time.Now(); state.mu.Unlock() },
-		GotConn:      func(httptrace.GotConnInfo) { state.mu.Lock(); state.gotConnection = time.Now(); state.mu.Unlock() },
-		WroteHeaders: func() { state.mu.Lock(); state.headersWritten = time.Now(); state.mu.Unlock() },
-		WroteRequest: func(info httptrace.WroteRequestInfo) {
-			state.mu.Lock()
-			if info.Err == nil {
-				state.requestWritten = time.Now()
-			}
-			state.mu.Unlock()
-		},
-		GotFirstResponseByte: func() { state.mu.Lock(); state.firstByte = time.Now(); state.mu.Unlock() },
-	}
-	ctx := httptrace.WithClientTrace(context.WithValue(r.Context(), traceKey{}, state), trace)
+	ctx := context.WithValue(r.Context(), traceKey{}, state)
 	r = r.WithContext(ctx)
 	r.URL.Path = path
 	r.URL.RawPath = ""
-	state.start = time.Now()
 	h.proxy.ServeHTTP(tracked, r)
 }
 
-func readBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool, error) {
+func readWireBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, error) {
 	defer func() { _ = r.Body.Close() }()
-	var reader io.Reader = http.MaxBytesReader(w, r.Body, limit)
-	compressed := strings.EqualFold(strings.TrimSpace(r.Header.Get("Content-Encoding")), "gzip")
-	if compressed {
-		gz, err := gzip.NewReader(reader)
-		if err != nil {
-			return nil, true, err
-		}
-		defer func() { _ = gz.Close() }()
-		reader = gz
-	} else if encoding := strings.TrimSpace(r.Header.Get("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
-		return nil, false, errors.New("unsupported content encoding")
-	}
-	body, err := io.ReadAll(io.LimitReader(reader, limit+1))
-	if int64(len(body)) > limit {
-		return nil, compressed, &http.MaxBytesError{Limit: limit}
-	}
-	return body, compressed, err
+	return io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 }
 
-func route(method, path string) (string, string, bool) {
+func decodeBody(wire []byte, encoding string, limit int64) ([]byte, error) {
+	encoding = strings.TrimSpace(encoding)
+	if strings.EqualFold(encoding, "gzip") {
+		gz, err := gzip.NewReader(bytes.NewReader(wire))
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = gz.Close() }()
+		body, err := io.ReadAll(io.LimitReader(gz, limit+1))
+		if int64(len(body)) > limit {
+			return nil, &http.MaxBytesError{Limit: limit}
+		}
+		return body, err
+	}
+	if encoding != "" && !strings.EqualFold(encoding, "identity") {
+		return nil, errors.New("unsupported content encoding")
+	}
+	return wire, nil
+}
+
+func route(method, path string) (string, bool) {
 	if method == http.MethodGet && (path == "/models" || path == "/v1/models") {
-		return "/models", "", true
+		return "/models", true
 	}
 	if method != http.MethodPost {
-		return "", "", false
+		return "", false
 	}
 	switch path {
 	case "/responses", "/v1/responses":
-		return "/responses", volcengine.ProtocolResponses, true
+		return "/responses", true
 	case "/chat/completions", "/v1/chat/completions":
-		return "/chat/completions", volcengine.ProtocolChatCompletions, true
+		return "/chat/completions", true
 	default:
-		return "", "", false
+		return "", false
 	}
 }
 
@@ -285,8 +267,7 @@ func boundedID(s string) string {
 	}
 	return s
 }
-func milliseconds(d time.Duration) float64     { return float64(d) / float64(time.Millisecond) }
-func durationPointer(d time.Duration) *float64 { v := milliseconds(d); return &v }
+func milliseconds(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
 
 type responseWriter struct {
 	http.ResponseWriter
