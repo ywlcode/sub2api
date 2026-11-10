@@ -174,8 +174,10 @@ type responsesTextPart struct {
 // ResponsesEventToAnthropicState tracks state for converting a sequence of
 // Responses SSE events directly into Anthropic SSE events.
 type ResponsesEventToAnthropicState struct {
-	MessageStartSent bool
-	MessageStopSent  bool
+	VolcengineCompatibility bool
+	volcengineReasoning     volcengineReasoningStream
+	MessageStartSent        bool
+	MessageStopSent         bool
 
 	ContentBlockIndex   int
 	ContentBlockOpen    bool
@@ -223,6 +225,31 @@ func ResponsesEventToAnthropicEvents(
 	evt *ResponsesStreamEvent,
 	state *ResponsesEventToAnthropicState,
 ) []AnthropicStreamEvent {
+	if state.VolcengineCompatibility {
+		if state.MessageStopSent {
+			return nil
+		}
+		if failure := volcengineResponsesStreamError(evt); failure != nil {
+			state.MessageStopSent = true
+			state.volcengineReasoning = volcengineReasoningStream{}
+			return []AnthropicStreamEvent{{Type: "error", Error: &AnthropicStreamError{Type: "api_error", Message: failure.Message}}}
+		}
+		var events []AnthropicStreamEvent
+		for _, normalized := range state.volcengineReasoning.events(evt) {
+			if !state.MessageStartSent && normalized.Type != "response.created" {
+				events = append(events, resToAnthHandleCreated(evt, state)...)
+			}
+			events = append(events, responsesEventToAnthropicEvents(normalized, state)...)
+		}
+		if state.MessageStopSent {
+			state.volcengineReasoning = volcengineReasoningStream{}
+		}
+		return events
+	}
+	return responsesEventToAnthropicEvents(evt, state)
+}
+
+func responsesEventToAnthropicEvents(evt *ResponsesStreamEvent, state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
 	switch evt.Type {
 	case "response.created":
 		return resToAnthHandleCreated(evt, state)
@@ -261,8 +288,13 @@ func ResponsesEventToAnthropicEvents(
 // FinalizeResponsesAnthropicStream emits synthetic termination events if the
 // stream ended without a proper completion event.
 func FinalizeResponsesAnthropicStream(state *ResponsesEventToAnthropicState) []AnthropicStreamEvent {
-	if !state.MessageStartSent || state.MessageStopSent {
+	if state.MessageStopSent || !state.MessageStartSent && !state.VolcengineCompatibility {
 		return nil
+	}
+	if state.VolcengineCompatibility {
+		state.MessageStopSent = true
+		state.volcengineReasoning = volcengineReasoningStream{}
+		return []AnthropicStreamEvent{{Type: "error", Error: &AnthropicStreamError{Type: "api_error", Message: "Upstream stream ended before its terminal event"}}}
 	}
 
 	var events []AnthropicStreamEvent

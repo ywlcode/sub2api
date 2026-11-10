@@ -49,6 +49,12 @@ func TestDeepSeekReasoningReplayAcrossProviders(t *testing.T) {
 						_, err = svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
 					}
 					require.Error(t, err) // Stop after capture; no paid inference.
+					if destination == "ark_responses" && inbound == "/v1/chat/completions" {
+						require.ErrorContains(t, err, "Chat Completions is not supported")
+						require.Equal(t, http.StatusBadRequest, c.Writer.Status())
+						require.Empty(t, upstream.requests)
+						return
+					}
 					require.NotNil(t, upstream.lastReq)
 					wire := upstream.lastBody
 					require.NotContains(t, string(wire), "<thinking>")

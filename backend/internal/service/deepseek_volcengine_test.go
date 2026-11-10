@@ -67,33 +67,28 @@ func TestVolcengineResponsesHistory(t *testing.T) {
 
 func TestVolcengineReasoningAliasesAndStrength(t *testing.T) {
 	account := volcengineTestAccount()
-	for _, protocol := range []string{APIProtocolResponses, APIProtocolChatCompletions} {
-		for _, effort := range []string{"off", "disabled", "none", "minimal", "low", "medium", "high", "xhigh", "max"} {
-			t.Run(protocol+"/"+effort, func(t *testing.T) {
-				body := []byte(`{"reasoning":{"effort":"` + effort + `","summary":"auto"},"reasoning_effort":"low","thinking":{"type":"enabled"}}`)
-				got, err := normalizeVolcengineRequestBody(account, body, protocol)
-				require.NoError(t, err)
-				want := effort
-				if effort == "off" || effort == "disabled" {
-					want = "none"
-				}
-				path := "reasoning.effort"
-				if protocol == APIProtocolChatCompletions {
-					path = "reasoning_effort"
-				}
-				require.Equal(t, want, gjson.GetBytes(got, path).String())
-				require.False(t, gjson.GetBytes(got, "thinking").Exists())
-				filtered, err := filterOpenAIResponsesNoneReasoningEffortForAccount(account, got)
-				require.NoError(t, err)
-				require.Equal(t, got, filtered)
-				var object map[string]any
-				require.NoError(t, json.Unmarshal(got, &object))
-				deleteOpenAIResponsesNoneReasoningEffortFromObject(account, object)
-				encoded, err := json.Marshal(object)
-				require.NoError(t, err)
-				require.Equal(t, want, gjson.GetBytes(encoded, path).String())
-			})
-		}
+	for _, effort := range []string{"off", "disabled", "none", "minimal", "low", "medium", "high", "xhigh", "max"} {
+		t.Run(effort, func(t *testing.T) {
+			body := []byte(`{"reasoning":{"effort":"` + effort + `","summary":"auto"},"reasoning_effort":"low","thinking":{"type":"enabled"}}`)
+			got, err := normalizeVolcengineRequestBody(account, body, APIProtocolResponses)
+			require.NoError(t, err)
+			want := effort
+			if effort == "off" || effort == "disabled" {
+				want = "none"
+			}
+			require.Equal(t, want, gjson.GetBytes(got, "reasoning.effort").String())
+			require.False(t, gjson.GetBytes(got, "reasoning_effort").Exists())
+			require.False(t, gjson.GetBytes(got, "thinking").Exists())
+			filtered, err := filterOpenAIResponsesNoneReasoningEffortForAccount(account, got)
+			require.NoError(t, err)
+			require.Equal(t, got, filtered)
+			var object map[string]any
+			require.NoError(t, json.Unmarshal(got, &object))
+			deleteOpenAIResponsesNoneReasoningEffortFromObject(account, object)
+			encoded, err := json.Marshal(object)
+			require.NoError(t, err)
+			require.Equal(t, want, gjson.GetBytes(encoded, "reasoning.effort").String())
+		})
 	}
 	got, err := normalizeVolcengineRequestBody(account, []byte(`{"thinking":{"type":"disabled","budget_tokens":99},"reasoning":{"effort":"max"}}`), APIProtocolResponses)
 	require.NoError(t, err)
@@ -137,15 +132,17 @@ func TestVolcengineGatewayIngress(t *testing.T) {
 				_, err = svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
 			}
 			require.Error(t, err)
+			if tc.path == "/v1/chat/completions" || tc.name == "legacy_messages" {
+				require.Empty(t, upstream.requests)
+				require.Equal(t, http.StatusBadRequest, c.Writer.Status())
+				require.Contains(t, err.Error(), "Chat Completions is not supported")
+				return
+			}
 			require.NotNil(t, upstream.lastReq)
 			require.Equal(t, "/api/v3/responses", upstream.lastReq.URL.Path)
 			require.Equal(t, tc.effort, gjson.GetBytes(upstream.lastBody, "reasoning.effort").String())
 			require.NotContains(t, string(upstream.lastBody), "internal_chat_message_metadata_passthrough")
 			require.NotContains(t, string(upstream.lastBody), "<thinking>")
-			if tc.name == "responses_shaped_chat" {
-				require.Equal(t, "auto", gjson.GetBytes(upstream.lastBody, "reasoning.summary").String())
-				require.Equal(t, "message", gjson.GetBytes(upstream.lastBody, "input.1.type").String())
-			}
 			if tc.reasoning {
 				require.Equal(t, "reasoning", gjson.GetBytes(upstream.lastBody, "input.0.type").String())
 				require.Equal(t, "plan", gjson.GetBytes(upstream.lastBody, "input.0.summary.0.text").String())
@@ -157,23 +154,15 @@ func TestVolcengineGatewayIngress(t *testing.T) {
 }
 
 func TestVolcengineHistoryKeepsToolsAndLiteralTags(t *testing.T) {
-	var req apicompat.ChatCompletionsRequest
-	require.NoError(t, json.Unmarshal([]byte(`{"model":"deepseek","messages":[{"role":"assistant","reasoning_content":"plan","content":[{"type":"thinking","thinking":"details"},{"type":"text","text":"<thinking>quoted example</thinking>"}],"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_1","content":"result"}]}`), &req))
-	resp, err := chatCompletionsToResponsesForAccount(nil, volcengineTestAccount(), &req)
+	body := []byte(`{"input":[{"type":"reasoning","content":[{"type":"reasoning_text","text":"plan"},{"type":"reasoning_text","text":"details"}]},{"role":"assistant","content":[{"type":"output_text","text":"<thinking>quoted example</thinking>"}]},{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_1","output":"result"}]}`)
+	got, err := normalizeVolcengineRequestBody(volcengineTestAccount(), body, APIProtocolResponses)
 	require.NoError(t, err)
-	require.Equal(t, "plan", gjson.GetBytes(resp.Input, "0.summary.0.text").String())
-	require.Equal(t, "details", gjson.GetBytes(resp.Input, "0.summary.1.text").String())
-	require.Equal(t, "<thinking>quoted example</thinking>", gjson.GetBytes(resp.Input, "1.content.0.text").String())
-	require.Equal(t, "function_call", gjson.GetBytes(resp.Input, "2.type").String())
-	require.Equal(t, "call_1", gjson.GetBytes(resp.Input, "3.call_id").String())
-	legacy, err := chatCompletionsToResponsesForAccount(nil, nil, &req)
-	require.NoError(t, err)
-	require.Contains(t, gjson.GetBytes(legacy.Input, "0.content.0.text").String(), "<thinking>plan</thinking>")
-	resp.Reasoning = &apicompat.ResponsesReasoning{Effort: "xhigh"}
-	ant, err := responsesToAnthropicForAccount(volcengineTestAccount(), resp)
-	require.NoError(t, err)
-	require.Equal(t, "xhigh", ant.OutputConfig.Effort)
-	require.Equal(t, "plan\ndetails", gjson.GetBytes(ant.Messages[0].Content, "0.thinking").String())
+	require.Equal(t, "plan", gjson.GetBytes(got, "input.0.summary.0.text").String())
+	require.Equal(t, "details", gjson.GetBytes(got, "input.0.summary.1.text").String())
+	require.Equal(t, "<thinking>quoted example</thinking>", gjson.GetBytes(got, "input.1.content.0.text").String())
+	require.Equal(t, "function_call", gjson.GetBytes(got, "input.2.type").String())
+	require.Equal(t, "call_1", gjson.GetBytes(got, "input.3.call_id").String())
+	require.NoError(t, validateVolcengineResponsesRequest(volcengineTestAccount(), got))
 }
 
 func TestVolcengineAnthropicThinkingHistory(t *testing.T) {
@@ -185,25 +174,24 @@ func TestVolcengineAnthropicThinkingHistory(t *testing.T) {
 			})
 			require.NoError(t, err)
 			resp, err := anthropicToResponsesForAccount(nil, volcengineTestAccount(), &apicompat.AnthropicRequest{
-				Model: "deepseek-v4-1-flash-261017", Messages: []apicompat.AnthropicMessage{{Role: "assistant", Content: content}},
+				Model: "deepseek-v4-1-flash-261017", Messages: []apicompat.AnthropicMessage{
+					{Role: "assistant", Content: content},
+					{Role: "user", Content: json.RawMessage(`[{"type":"tool_result","tool_use_id":"call_1","content":"result"}]`)},
+				},
 			})
 			require.NoError(t, err)
 			require.Equal(t, "plan", gjson.GetBytes(resp.Input, "0.summary.0.text").String())
 			require.Equal(t, "function_call", gjson.GetBytes(resp.Input, "1.type").String())
 			require.Equal(t, "call_1", gjson.GetBytes(resp.Input, "1.call_id").String())
-			if signature == "opaque-provider-signature" {
-				require.Equal(t, signature, gjson.GetBytes(resp.Input, "0.encrypted_content").String())
-			} else {
-				require.False(t, gjson.GetBytes(resp.Input, "0.encrypted_content").Exists())
-			}
+			require.False(t, gjson.GetBytes(resp.Input, "0.encrypted_content").Exists())
 		})
 	}
 }
 
 func TestVolcengineGatewayEffortAcrossProtocols(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, upstreamProtocol := range []string{APIProtocolResponses, APIProtocolChatCompletions, APIProtocolAnthropic} {
-		for _, inbound := range []string{"/v1/responses", "/v1/chat/completions", "/v1/messages"} {
+	for _, upstreamProtocol := range []string{APIProtocolResponses, APIProtocolChatCompletions, APIProtocolAnthropic, APIProtocolAdaptive} {
+		for _, inbound := range []string{"/v1/responses", "/v1/messages"} {
 			for _, effort := range []string{"off", "high", "max", "xhigh"} {
 				t.Run(upstreamProtocol+inbound+"/"+effort, func(t *testing.T) {
 					// An endpoint alias must retain the same effort as a named model.
@@ -230,9 +218,6 @@ func TestVolcengineGatewayEffortAcrossProtocols(t *testing.T) {
 					svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
 					account := volcengineTestAccount()
 					account.Credentials["api_protocol"] = upstreamProtocol
-					if upstreamProtocol == APIProtocolAnthropic {
-						account.Credentials["base_url"] = "https://ark.cn-beijing.volces.com/api/compatible"
-					}
 					switch inbound {
 					case "/v1/responses":
 						_, err = svc.Forward(context.Background(), c, account, body)
@@ -247,25 +232,9 @@ func TestVolcengineGatewayEffortAcrossProtocols(t *testing.T) {
 					if effort == "off" {
 						want = "none"
 					}
-					switch upstreamProtocol {
-					case APIProtocolResponses:
-						require.Equal(t, "/api/v3/responses", upstream.lastReq.URL.Path)
-						require.Equal(t, want, gjson.GetBytes(upstream.lastBody, "reasoning.effort").String())
-						require.False(t, gjson.GetBytes(upstream.lastBody, "reasoning_effort").Exists())
-					case APIProtocolChatCompletions:
-						require.Equal(t, "/api/v3/chat/completions", upstream.lastReq.URL.Path)
-						require.Equal(t, want, gjson.GetBytes(upstream.lastBody, "reasoning_effort").String())
-						require.False(t, gjson.GetBytes(upstream.lastBody, "reasoning").Exists())
-					case APIProtocolAnthropic:
-						require.Equal(t, "/api/compatible/v1/messages", upstream.lastReq.URL.Path)
-						if want == "none" {
-							require.Equal(t, "disabled", gjson.GetBytes(upstream.lastBody, "thinking.type").String())
-							require.False(t, gjson.GetBytes(upstream.lastBody, "output_config.effort").Exists())
-						} else {
-							require.Equal(t, want, gjson.GetBytes(upstream.lastBody, "output_config.effort").String())
-							require.False(t, gjson.GetBytes(upstream.lastBody, "thinking.budget_tokens").Exists())
-						}
-					}
+					require.Equal(t, "/api/v3/responses", upstream.lastReq.URL.Path)
+					require.Equal(t, want, gjson.GetBytes(upstream.lastBody, "reasoning.effort").String())
+					require.False(t, gjson.GetBytes(upstream.lastBody, "reasoning_effort").Exists())
 				})
 			}
 		}
@@ -275,7 +244,7 @@ func TestVolcengineGatewayEffortAcrossProtocols(t *testing.T) {
 func TestVolcengineTransportBeforeGzipAndProbe(t *testing.T) {
 	account := volcengineTestAccount()
 	account.Extra = map[string]any{AccountExtraRequestGzipEnabled: true}
-	body := []byte(`{"reasoning_effort":"off","messages":[{"role":"user","content":"` + strings.Repeat("hello", 1024) + `","internal_chat_message_metadata_passthrough":{}}]}`)
+	body := []byte(`{"reasoning_effort":"off","input":[{"role":"user","content":"` + strings.Repeat("hello", 1024) + `","internal_chat_message_metadata_passthrough":{}}]}`)
 	calls := 0
 	upstream := gzipTestHTTP{send: func(req *http.Request) (*http.Response, error) {
 		calls++
@@ -286,12 +255,13 @@ func TestVolcengineTransportBeforeGzipAndProbe(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, gz.Close())
 		require.NoError(t, req.Body.Close())
-		require.Equal(t, "none", gjson.GetBytes(got, "reasoning_effort").String())
-		require.False(t, gjson.GetBytes(got, "messages.0.internal_chat_message_metadata_passthrough").Exists())
+		require.Equal(t, "none", gjson.GetBytes(got, "reasoning.effort").String())
+		require.False(t, gjson.GetBytes(got, "input.0.internal_chat_message_metadata_passthrough").Exists())
 		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: http.NoBody, Request: req}, nil
 	}}
 	for _, probe := range []bool{false, true} {
 		req := gzipTestRequest(t, body)
+		req.URL.Path = "/api/v3/responses"
 		var err error
 		if probe {
 			svc := &AccountTestService{httpUpstream: upstream}
