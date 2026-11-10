@@ -226,7 +226,7 @@ func TestVolcengineCompactionStrictScope(t *testing.T) {
 			require.NoError(t, err)
 			resp, err := accountVolcengineHTTP(upstream, account).Do(req, "", account.ID, 1)
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			wire, err := io.ReadAll(resp.Body)
 			require.NoError(t, err)
 			require.Contains(t, string(wire), "THOUGHT_MUST_NOT_BECOME_SUMMARY")
@@ -289,7 +289,7 @@ func TestVolcengineCompactionSnapshotAndDeltaValidation(t *testing.T) {
 							data, _ := sjson.SetRaw(line[5:], "response.output", `[]`)
 							line = "data: " + data
 						}
-						rebuilt.WriteString(line + "\n")
+						_, _ = rebuilt.WriteString(line + "\n")
 					}
 					resp.Body = io.NopCloser(strings.NewReader(rebuilt.String()))
 				} else {
@@ -307,7 +307,7 @@ func TestVolcengineCompactionSnapshotAndDeltaValidation(t *testing.T) {
 				}
 				resp.Body = io.NopCloser(bytes.NewReader(wire))
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			final, _, reason := readVolcengineCompaction(resp)
 			if scenario == "snapshot_only" || scenario == "delta_only" {
 				require.Empty(t, reason)
@@ -336,7 +336,7 @@ func TestVolcengineCompactionOutputCap(t *testing.T) {
 			require.NoError(t, err)
 			resp, err := accountVolcengineHTTP(upstream, volcengineTestAccount()).Do(req, "", 144, 1)
 			require.NoError(t, err)
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 			require.Len(t, upstream.requests, 2)
 			want := int64(cap)
 			if cap == 0 {
@@ -375,7 +375,7 @@ func TestVolcengineCompactionRecoveryBeforeGzip(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := accountVolcengineHTTP(accountRequestGzipHTTP(upstream, account), account).Do(req, "", account.ID, 1)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Len(t, sent, 2)
 	require.Equal(t, "high", gjson.GetBytes(sent[0], "reasoning.effort").String())
 	require.Equal(t, "none", gjson.GetBytes(sent[1], "reasoning.effort").String())
@@ -460,7 +460,7 @@ func TestVolcengineCompactionHeaderTimeoutStopsBeforeSummaryBody(t *testing.T) {
 	require.NoError(t, err)
 	resp, err := gatewayHTTPUpstream(upstream, nil, volcengineTestAccount(), cfg).Do(req, "", 144, 1)
 	require.NoError(t, err, "summary-body wait must not count as waiting for response headers")
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	wire, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Contains(t, string(wire), "summary")

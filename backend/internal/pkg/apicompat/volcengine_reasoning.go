@@ -109,7 +109,7 @@ func setVolcengineReasoningPart(parts map[int]*strings.Builder, index int, text 
 			part.Reset()
 		}
 	}
-	part.WriteString(text)
+	_, _ = part.WriteString(text)
 }
 
 // A summary may be shorter than the raw text. Delay thinking until its item
@@ -214,7 +214,7 @@ func (s *volcengineReasoningStream) flush(index int) []*ResponsesStreamEvent {
 	} else {
 		var joined strings.Builder
 		for _, i := range indices {
-			joined.WriteString(parts[i].String())
+			_, _ = joined.WriteString(parts[i].String())
 		}
 		text = joined.String()
 	}

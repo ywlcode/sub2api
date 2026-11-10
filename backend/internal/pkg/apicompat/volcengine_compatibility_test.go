@@ -69,7 +69,7 @@ func TestVolcengineReasoningStreamSnapshotsAndRepresentations(t *testing.T) {
 			process := func(event ResponsesStreamEvent) {
 				for _, out := range ResponsesEventToAnthropicEvents(&event, state) {
 					if out.Delta != nil {
-						text.WriteString(out.Delta.Thinking)
+						_, _ = text.WriteString(out.Delta.Thinking)
 					}
 				}
 			}
@@ -173,7 +173,7 @@ func TestVolcengineReasoningStreamRecoversCompletePlaintext(t *testing.T) {
 						stops++
 					}
 					if out.Delta != nil {
-						thinking.WriteString(out.Delta.Thinking)
+						_, _ = thinking.WriteString(out.Delta.Thinking)
 					}
 				}
 			}
@@ -199,7 +199,7 @@ func TestVolcengineReasoningStreamPartsAndBlockOrder(t *testing.T) {
 				blocks = append(blocks, out.ContentBlock.Type)
 			}
 			if out.Delta != nil {
-				got.WriteString(out.Delta.Thinking)
+				_, _ = got.WriteString(out.Delta.Thinking)
 			}
 		}
 	}

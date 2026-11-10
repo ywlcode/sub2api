@@ -98,12 +98,12 @@ func (b *volcengineSSEBody) frame() ([]byte, error) {
 		if line == "" {
 			var output bytes.Buffer
 			for _, header := range headers {
-				output.WriteString(header)
-				output.WriteByte('\n')
+				_, _ = output.WriteString(header)
+				_ = output.WriteByte('\n')
 			}
 			if event != "" {
-				output.WriteString(event)
-				output.WriteByte('\n')
+				_, _ = output.WriteString(event)
+				_ = output.WriteByte('\n')
 			}
 			if len(data) > 0 {
 				// JSON event data permits line breaks between tokens. Compact
@@ -114,18 +114,18 @@ func (b *volcengineSSEBody) frame() ([]byte, error) {
 					payload = compact.Bytes()
 				} else if len(data) > 1 {
 					for _, line := range data {
-						output.WriteString("data: ")
-						output.WriteString(line)
-						output.WriteByte('\n')
+						_, _ = output.WriteString("data: ")
+						_, _ = output.WriteString(line)
+						_ = output.WriteByte('\n')
 					}
-					output.WriteByte('\n')
+					_ = output.WriteByte('\n')
 					return output.Bytes(), nil
 				}
-				output.WriteString("data: ")
-				output.Write(payload)
-				output.WriteByte('\n')
+				_, _ = output.WriteString("data: ")
+				_, _ = output.Write(payload)
+				_ = output.WriteByte('\n')
 			}
-			output.WriteByte('\n')
+			_ = output.WriteByte('\n')
 			return output.Bytes(), nil
 		}
 		field, value, _ := strings.Cut(line, ":")
