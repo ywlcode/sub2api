@@ -251,7 +251,9 @@ func volcengineClientContinuation(t *testing.T, path string, stream bool, wire s
 		for _, value := range output {
 			item, _ := value.(map[string]any)
 			if item["type"] == "function_call" {
-				input = append(input, map[string]any{"type": "function_call_output", "call_id": item["call_id"], "output": "result:" + item["call_id"].(string)})
+				callID, ok := item["call_id"].(string)
+				require.True(t, ok)
+				input = append(input, map[string]any{"type": "function_call_output", "call_id": callID, "output": "result:" + callID})
 			}
 		}
 		input = append(input, last)
@@ -491,7 +493,10 @@ func TestVolcengineGatewayParallelToolContinuationWithoutCache(t *testing.T) {
 	wire, _ := volcengineSuccessFixture(APIProtocolResponses, false)
 	var response map[string]any
 	require.NoError(t, json.Unmarshal([]byte(wire), &response))
-	output := response["output"].([]any)[:1]
+	items, ok := response["output"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, items)
+	output := items[:1]
 	for _, id := range []string{"call_1", "call_2"} {
 		output = append(output, map[string]any{"type": "function_call", "id": "item_" + id, "call_id": id, "name": "lookup", "arguments": `{"query":"<thinking>literal</thinking>"}`, "status": "completed"})
 	}
@@ -505,7 +510,8 @@ func TestVolcengineGatewayParallelToolContinuationWithoutCache(t *testing.T) {
 				if stream || path == "/v1/messages" {
 					events := []map[string]any{{"type": "response.created", "response": map[string]any{"id": "r", "status": "in_progress", "output": []any{}}}}
 					for i, value := range output {
-						item := value.(map[string]any)
+						item, ok := value.(map[string]any)
+						require.True(t, ok)
 						added := make(map[string]any)
 						for k, v := range item {
 							added[k] = v

@@ -204,7 +204,7 @@ func (s *volcengineCompactionText) add(output, content int, text string, snapsho
 		return false
 	}
 	s.bytes += len(text)
-	part.WriteString(text)
+	_, _ = part.WriteString(text)
 	return true
 }
 
@@ -233,7 +233,7 @@ func (s *volcengineCompactionText) text() string {
 	})
 	var out strings.Builder
 	for _, key := range keys {
-		out.WriteString(s.parts[key].String())
+		_, _ = out.WriteString(s.parts[key].String())
 	}
 	return out.String()
 }
