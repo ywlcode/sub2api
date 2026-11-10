@@ -770,6 +770,15 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	} else if changed {
 		body = cappedBody
 	}
+	// Desktop can attach standalone Page context before the first model call.
+	// Normalize it before bootstrap handling and tool-output pairing validation.
+	if normalizedBody, names := normalizeCodexPageContext(body); len(names) > 0 {
+		body = normalizedBody
+		reqLog.Info("openai.codex_page_context_normalized",
+			zap.Int("count", len(names)),
+			zap.Strings("names", names),
+		)
+	}
 	body, automationChanged, delegationChanged := normalizeCodexBootstraps(body)
 	if automationChanged {
 		reqLog.Info("openai.codex_automation_bootstrap_normalized",
