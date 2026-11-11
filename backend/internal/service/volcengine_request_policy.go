@@ -53,20 +53,28 @@ func validateVolcengineResponsesRequest(account *Account, body []byte) error {
 		if item.Get("type").String() == "" && item.Get("id").String() != "" && !item.Get("role").Exists() && !item.Get("content").Exists() {
 			return fmt.Errorf("volcengine compatibility does not support ID-only item references; resend the complete plaintext history")
 		}
-		switch item.Get("type").String() {
+		itemType := item.Get("type").String()
+		// Hosted search is native history with nullable call_id. Only
+		// client-executed search is lowered into function call/result pairs.
+		execution := item.Get("execution").String()
+		if (itemType == "tool_search_call" || itemType == "tool_search_output") &&
+			(execution == "server" || execution == "" && item.Get("call_id").String() == "") {
+			continue
+		}
+		switch itemType {
 		case "reasoning":
 			if !volcengineHasPlaintextReasoning(item) {
 				return fmt.Errorf("reasoning item %q has no recoverable plaintext; resend the complete reasoning history (ID-only or encrypted history cannot be restored)", item.Get("id").String())
 			}
 		case "item_reference", "compaction", "compaction_trigger":
 			return fmt.Errorf("volcengine compatibility does not support %s; resend the complete plaintext history", item.Get("type").String())
-		case "function_call", "custom_tool_call":
+		case "function_call", "custom_tool_call", "tool_search_call":
 			id := item.Get("call_id").String()
 			if id == "" || seen[id] {
 				return fmt.Errorf("tool history contains a missing or duplicate call_id")
 			}
 			seen[id], pending[id] = true, true
-		case "function_call_output", "custom_tool_call_output":
+		case "function_call_output", "custom_tool_call_output", "tool_search_output":
 			id := item.Get("call_id").String()
 			if !pending[id] {
 				return fmt.Errorf("tool output %q has no matching pending call; resend the complete tool history", id)

@@ -41,6 +41,9 @@ func normalizeDeepSeekReasoningInput(input any, useSummary bool) bool {
 			}
 			item["summary"] = deepSeekReasoningWireParts(content, "summary_text")
 			delete(item, "content")
+			// The summary now contains the complete plaintext, not an
+			// abbreviated summary coupled to foreign ciphertext.
+			delete(item, "encrypted_content")
 			changed = true
 			continue
 		}
