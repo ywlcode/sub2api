@@ -29,12 +29,6 @@ type AnthropicToResponsesOptions = ResponsesConversionOptions
 
 func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts AnthropicToResponsesOptions) (*ResponsesRequest, error) {
 	minOutputTokens := opts.MinOutputTokens
-	if opts.VolcengineCompatibility {
-		minOutputTokens = 0
-		if err := validateVolcengineMessagesHistory(req.Messages); err != nil {
-			return nil, err
-		}
-	}
 	if !opts.DeferReasoningEffortValidation {
 		if err := openai.ValidateGPT61ReasoningEffort(req.Model, anthropicReasoningEffort(req)); err != nil {
 			return nil, err
@@ -43,13 +37,6 @@ func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts AnthropicToResp
 	input, err := convertAnthropicToResponsesInputWithReasoning(req.System, req.Messages, opts.PreserveReasoningContent)
 	if err != nil {
 		return nil, err
-	}
-	if opts.VolcengineCompatibility {
-		for i := range input {
-			if input[i].Type == "reasoning" {
-				input[i].EncryptedContent = ""
-			}
-		}
 	}
 
 	inputJSON, err := json.Marshal(input)
@@ -93,9 +80,6 @@ func AnthropicToResponsesWithOptions(req *AnthropicRequest, opts AnthropicToResp
 
 	// An explicit thinking disable takes precedence over output_config.effort.
 	effort := anthropicReasoningEffort(req)
-	if opts.PreserveReasoningEffort && req.OutputConfig != nil && req.OutputConfig.Effort != "" && effort != "none" {
-		effort = req.OutputConfig.Effort
-	}
 	if (openai.GPT62ModelID(req.Model) != "" || openai.IsGPT61SolModelSpelling(req.Model) || openai.IsGPT61TerraModelSpelling(req.Model)) && req.OutputConfig != nil && req.OutputConfig.Effort == "max" && effort != "none" {
 		effort = "max"
 	}
