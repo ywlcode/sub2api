@@ -70,6 +70,17 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 		body,
 		billingModel,
 	)
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() {
+		// Record the effective Ark control, including explicit disabling. The
+		// request itself is normalized once by the final HTTP wrapper.
+		effort := volcengineEffort(gjson.GetBytes(body, "output_config.effort").String())
+		if volcengineEffort(gjson.GetBytes(body, "thinking.type").String()) == "none" {
+			effort = "none"
+		}
+		if effort != "" {
+			reasoningEffort = &effort
+		}
+	}
 
 	// 与 Anthropic 平台 passthrough 相同的 pre-filter：剥离空文本块与上游
 	// 无法接受的 web-search 历史块（GLM/Kimi/DeepSeek 对 server_tool_use 400）。
@@ -143,7 +154,7 @@ func (s *OpenAIGatewayService) nativeAnthropicTargetURL(account *Account) (strin
 // 连接测试共用。按模型分流的聚合平台（OpenCode、Command Code 等）的基址可能沿用带 /v1
 // 的 Chat Completions 基址，用版本感知拼接避免 /v1/v1/messages；其余供应商朴素拼接。
 func nativeAnthropicMessagesURL(account *Account, validatedBaseURL string) string {
-	if account.routesByModel() {
+	if account.routesByModel() || account.IsDeepSeekVolcengineCompatibilityEnabled() {
 		return buildOpenAIEndpointURL(validatedBaseURL, "/v1/messages")
 	}
 	return strings.TrimRight(validatedBaseURL, "/") + "/v1/messages"
@@ -307,7 +318,7 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	upstreamModel string,
 	reasoningEffort *string,
 	startTime time.Time,
-) (*OpenAIForwardResult, error) {
+) (result *OpenAIForwardResult, finalErr error) {
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -344,6 +355,15 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	var firstTokenMs *int
 	clientDisconnected := false
 	sawTerminalEvent := false
+	// The native Ark path must preserve a real upstream error and signal EOF
+	// truncation, without fabricating a successful message_stop.
+	upstreamFailed := false
+	defer func() {
+		if account.IsDeepSeekVolcengineCompatibilityEnabled() && finalErr != nil && !clientDisconnected && !sawTerminalEvent && !upstreamFailed {
+			_, _ = io.WriteString(w, "\n\n"+buildAnthropicStreamErrorSSE("api_error", "Upstream stream ended before a complete message"))
+			flusher.Flush()
+		}
+	}()
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -462,6 +482,10 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 			line := ev.line
 			if data, ok := extractAnthropicSSEDataLine(line); ok {
 				trimmed := strings.TrimSpace(data)
+				if account.IsDeepSeekVolcengineCompatibilityEnabled() && (gjson.Get(trimmed, "type").String() == "error" || gjson.Get(trimmed, "error").IsObject()) {
+					upstreamFailed = true
+				}
+
 				observer.ObserveAnthropic([]byte(trimmed))
 				if anthropicStreamEventIsTerminal("", trimmed) {
 					sawTerminalEvent = true
@@ -495,6 +519,10 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 				} else {
 					inPartialEvent = true
 				}
+			}
+
+			if upstreamFailed && line == "" {
+				return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime), fmt.Errorf("upstream Anthropic stream returned an error")
 			}
 
 		case <-intervalCh:

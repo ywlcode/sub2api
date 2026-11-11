@@ -137,18 +137,6 @@ func ResponsesToAnthropicRequestWithOptions(req *ResponsesRequest, opts Response
 	// reasoning.effort → output_config.effort + thinking
 	if req.Reasoning != nil && req.Reasoning.Effort != "" {
 		effort := mapResponsesEffortToAnthropic(req.Reasoning.Effort)
-		if opts.PreserveReasoningEffort {
-			effort = req.Reasoning.Effort
-			if effort == "none" {
-				out.Thinking = &AnthropicThinking{Type: "disabled"}
-			} else {
-				out.OutputConfig = &AnthropicOutputConfig{Effort: effort}
-				// Providers with native effort tiers do not need a synthetic
-				// Claude token budget that could cap the requested strength.
-				out.Thinking = &AnthropicThinking{Type: "enabled"}
-			}
-			return out, nil
-		}
 		out.OutputConfig = &AnthropicOutputConfig{Effort: effort}
 		// Enable thinking for non-low efforts
 		if effort != "low" {

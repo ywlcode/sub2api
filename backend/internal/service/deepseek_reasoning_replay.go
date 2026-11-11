@@ -1,10 +1,9 @@
 package service
 
-// Both native DeepSeek and Ark DeepSeek replay plaintext reasoning. Other
-// providers keep their existing signed/encrypted history conversion.
+// Preserve plaintext when bridging to the official DeepSeek API. Ark uses
+// native endpoints and does not pass through these protocol converters.
 func shouldPreserveDeepSeekReasoning(account *Account) bool {
-	return account.IsDeepSeekVolcengineCompatibilityEnabled() ||
-		usesNativeDeepSeekReasoningProtocol(account, APIProtocolResponses) ||
+	return usesNativeDeepSeekReasoningProtocol(account, APIProtocolResponses) ||
 		usesNativeDeepSeekReasoningProtocol(account, APIProtocolChatCompletions) ||
 		usesNativeDeepSeekReasoningProtocol(account, APIProtocolAnthropic)
 }

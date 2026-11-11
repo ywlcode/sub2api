@@ -14,12 +14,23 @@ type ResponsesClientToolMapping struct {
 	CustomTools    map[string]bool
 	ToolSearch     bool
 	NamespaceTools map[string]ResponsesNamespaceName
+	nativeTools    bool
 }
 
 // AdaptResponsesClientTools lowers Codex client-only tools in req to
 // ordinary function tools. It mutates req and returns the mapping required to
 // restore the upstream response.
 func AdaptResponsesClientTools(req map[string]any) (ResponsesClientToolMapping, bool, error) {
+	return adaptResponsesClientTools(req, false)
+}
+
+// AdaptResponsesToolSearch lowers only client-side tool discovery. Ark already
+// supports custom and namespace tools, so their wire format must stay intact.
+func AdaptResponsesToolSearch(req map[string]any) (ResponsesClientToolMapping, bool, error) {
+	return adaptResponsesClientTools(req, true)
+}
+
+func adaptResponsesClientTools(req map[string]any, nativeTools bool) (ResponsesClientToolMapping, bool, error) {
 	if req == nil {
 		return ResponsesClientToolMapping{}, false, nil
 	}
@@ -35,7 +46,7 @@ func AdaptResponsesClientTools(req map[string]any) (ResponsesClientToolMapping, 
 		tools, _ = req["tools"].([]any)
 	}
 
-	adapter := ResponsesClientToolMapping{CustomTools: make(map[string]bool)}
+	adapter := ResponsesClientToolMapping{CustomTools: make(map[string]bool), nativeTools: nativeTools}
 	functionNames := make(map[string]bool)
 	customNames := make(map[string]bool)
 	for _, raw := range tools {
@@ -58,7 +69,7 @@ func AdaptResponsesClientTools(req map[string]any) (ResponsesClientToolMapping, 
 		}
 	}
 	for name := range customNames {
-		if functionNames[name] {
+		if !nativeTools && functionNames[name] {
 			return ResponsesClientToolMapping{}, false, fmt.Errorf("custom tool %q conflicts with a function tool of the same name; this upstream cannot disambiguate them, rename one of the tools", name)
 		}
 	}
@@ -67,9 +78,13 @@ func AdaptResponsesClientTools(req map[string]any) (ResponsesClientToolMapping, 
 	}
 
 	// Namespace flattening also rewrites namespace-qualified history and choice.
-	names, flattened, err := FlattenResponsesNamespaces(req)
-	if err != nil {
-		return ResponsesClientToolMapping{}, false, err
+	var names map[string]ResponsesNamespaceName
+	var flattened bool
+	if !nativeTools {
+		names, flattened, err = FlattenResponsesNamespaces(req)
+		if err != nil {
+			return ResponsesClientToolMapping{}, false, err
+		}
 	}
 	adapter.NamespaceTools = names
 	if adapter.ToolSearch {
@@ -92,7 +107,7 @@ func AdaptResponsesClientTools(req map[string]any) (ResponsesClientToolMapping, 
 		name := strings.TrimSpace(stringValue(tool["name"]))
 		switch typ {
 		case "custom":
-			if name == "" {
+			if nativeTools || name == "" {
 				lowered = append(lowered, raw)
 				continue
 			}
@@ -119,7 +134,7 @@ func AdaptResponsesClientTools(req map[string]any) (ResponsesClientToolMapping, 
 			lowered = append(lowered, raw)
 		}
 	}
-	if stripResponsesDeferredToolFlags(lowered) {
+	if !nativeTools && stripResponsesDeferredToolFlags(lowered) {
 		changed = true
 	}
 	if changed {
@@ -239,6 +254,9 @@ func rewriteClientToolHistory(value any, adapter *ResponsesClientToolMapping) (b
 					changed = true
 				}
 			case "custom_tool_call_output":
+				if adapter.nativeTools {
+					break
+				}
 				typed["type"] = "function_call_output"
 				normalizeLoweredFunctionItemID(typed)
 				normalizeClientToolOutput(typed)
@@ -265,6 +283,11 @@ func rewriteClientToolHistory(value any, adapter *ResponsesClientToolMapping) (b
 					}
 					changed = true
 				}
+			}
+			if adapter.nativeTools {
+				// Native history is a flat input array. Do not interpret JSON
+				// inside an untouched custom result as another history item.
+				return nil
 			}
 			for _, child := range typed {
 				if err := visit(child); err != nil {
@@ -474,7 +497,7 @@ func RestoreResponsesClientToolPayload(payload []byte, mapping ResponsesClientTo
 		return payload, false, nil
 	}
 	var value any
-	if err := json.Unmarshal(payload, &value); err != nil {
+	if err := decodeResponsesClientToolPayload(payload, &value, mapping.nativeTools); err != nil {
 		return payload, false, err
 	}
 	changed := restoreClientToolValue(value, &mapping)
@@ -501,6 +524,17 @@ func RestoreResponsesClientToolPayload(payload []byte, mapping ResponsesClientTo
 	return restored, true, nil
 }
 
+func decodeResponsesClientToolPayload(payload []byte, target any, nativeTools bool) error {
+	if !nativeTools || !json.Valid(payload) {
+		return json.Unmarshal(payload, target)
+	}
+	// Native tool/provider fields remain opaque, including integers beyond
+	// float64 precision. Keep the existing decoder for all other adapters.
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	return decoder.Decode(target)
+}
+
 func restoreClientToolValue(value any, adapter *ResponsesClientToolMapping) bool {
 	changed := false
 	switch typed := value.(type) {
@@ -509,7 +543,7 @@ func restoreClientToolValue(value any, adapter *ResponsesClientToolMapping) bool
 			changed = restoreClientToolValue(item, adapter) || changed
 		}
 	case map[string]any:
-		if strings.TrimSpace(stringValue(typed["type"])) == "function_call" {
+		if strings.TrimSpace(stringValue(typed["type"])) == "function_call" && (!adapter.nativeTools || stringValue(typed["namespace"]) == "") {
 			name := strings.TrimSpace(stringValue(typed["name"]))
 			if adapter.CustomTools[name] {
 				typed["type"] = "custom_tool_call"
@@ -720,17 +754,18 @@ func (r *ResponsesClientToolStreamRestorer) clientToolEventPayload(payload []byt
 		Name        string `json:"name"`
 		OutputIndex int    `json:"output_index"`
 		Item        *struct {
-			Type   string `json:"type"`
-			ID     string `json:"id"`
-			CallID string `json:"call_id"`
-			Name   string `json:"name"`
+			Type      string `json:"type"`
+			ID        string `json:"id"`
+			CallID    string `json:"call_id"`
+			Name      string `json:"name"`
+			Namespace string `json:"namespace"`
 		} `json:"item"`
 	}
 	if err := json.Unmarshal(payload, &raw); err != nil {
 		return false
 	}
 	if raw.Item != nil {
-		if raw.Item.Type != "function_call" {
+		if raw.Item.Type != "function_call" || (r.adapter.nativeTools && raw.Item.Namespace != "") {
 			return false
 		}
 		_, namespaceTool := r.adapter.NamespaceTools[raw.Item.Name]
@@ -764,7 +799,7 @@ func (r *ResponsesClientToolStreamRestorer) resequenceRaw(payload []byte, sequen
 		return [][]byte{payload}, false, nil
 	}
 	var raw map[string]any
-	if err := json.Unmarshal(payload, &raw); err != nil {
+	if err := decodeResponsesClientToolPayload(payload, &raw, r.adapter.nativeTools); err != nil {
 		return nil, false, err
 	}
 	raw["sequence_number"] = r.nextSeq
@@ -786,7 +821,7 @@ func responsesClientToolItemType(kind string) string {
 }
 
 func (r *ResponsesClientToolStreamRestorer) recordItem(event ResponsesStreamEvent) *responsesClientToolStreamCall {
-	if event.Item == nil || event.Item.Type != "function_call" {
+	if event.Item == nil || event.Item.Type != "function_call" || (r.adapter.nativeTools && event.Item.Namespace != "") {
 		return nil
 	}
 	name := event.Item.Name
@@ -861,7 +896,7 @@ func (r *ResponsesClientToolStreamRestorer) restoreNamespaceEvent(event Response
 func restoreResponsesOutputClientTools(outputs []ResponsesOutput, adapter *ResponsesClientToolMapping) {
 	for index := range outputs {
 		output := &outputs[index]
-		if output.Type != "function_call" {
+		if output.Type != "function_call" || (adapter.nativeTools && output.Namespace != "") {
 			continue
 		}
 		if adapter.CustomTools[output.Name] {

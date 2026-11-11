@@ -13,11 +13,7 @@ func BenchmarkVolcengineNormalizationPipeline(b *testing.B) {
 			b.ReportAllocs()
 			b.SetBytes(int64(len(body)))
 			for b.Loop() {
-				normalized, err := normalizeVolcengineRequestBody(account, body, APIProtocolResponses)
-				if err != nil {
-					b.Fatal(err)
-				}
-				normalized = normalizeDeepSeekResponsesRequestBody(account, normalized)
+				normalized := normalizeDeepSeekResponsesRequestBody(account, body)
 				if _, err := normalizeVolcengineRequestBody(account, normalized, APIProtocolResponses); err != nil {
 					b.Fatal(err)
 				}
@@ -34,7 +30,7 @@ func normalizationBenchmarkSize(size int) string {
 }
 
 // A single adapter, including its no-change check, for comparison with the
-// three-stage pipeline. Neither benchmark measures end-to-end request latency.
+// two-stage pipeline. Neither benchmark measures end-to-end request latency.
 func BenchmarkVolcengineNormalizationSinglePass(b *testing.B) {
 	account := &Account{Platform: PlatformDeepseek, Type: AccountTypeAPIKey, Credentials: map[string]any{DeepSeekVolcengineCompatibilityCredential: true}}
 	for _, size := range []int{2 << 20, 20 << 20} {

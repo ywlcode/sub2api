@@ -1,13 +1,22 @@
 package service
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/jsonview"
 	"github.com/tidwall/gjson"
 )
+
+func volcengineHasPlaintextReasoning(item gjson.Result) bool {
+	var value map[string]any
+	if decodeOpenAIJSONUseNumber([]byte(item.Raw), &value) != nil {
+		return false
+	}
+	return len(deepSeekReasoningParts(value["content"], "reasoning_text")) > 0 ||
+		(value["encrypted_content"] == nil || value["encrypted_content"] == "") &&
+			len(deepSeekReasoningParts(value["summary"], "summary_text")) > 0
+}
 
 // Ark compatibility is stateless: clients replay the complete plaintext history.
 // Validate before any generic normalizer can drop state references or ciphertext.
@@ -24,7 +33,7 @@ func validateVolcengineResponsesRequest(account *Account, body []byte) error {
 		return err
 	}
 	if fields["messages"].Exists() {
-		return fmt.Errorf("chat completions is not supported for this Volcengine account; use Responses input or /v1/messages")
+		return fmt.Errorf("Responses requires input; send Chat messages to /v1/chat/completions")
 	}
 	reasoning := normalizationObjectFields(fields["reasoning"])
 	thinking := normalizationObjectFields(fields["thinking"])
@@ -46,7 +55,7 @@ func validateVolcengineResponsesRequest(account *Account, body []byte) error {
 		}
 		switch item.Get("type").String() {
 		case "reasoning":
-			if len(apicompat.VolcengineReasoningParts(json.RawMessage(item.Raw))) == 0 {
+			if !volcengineHasPlaintextReasoning(item) {
 				return fmt.Errorf("reasoning item %q has no recoverable plaintext; resend the complete reasoning history (ID-only or encrypted history cannot be restored)", item.Get("id").String())
 			}
 		case "item_reference", "compaction", "compaction_trigger":
@@ -115,7 +124,7 @@ func adaptVolcengineResponsesClientTools(body []byte) ([]byte, apicompat.Respons
 	if err := decodeOpenAIJSONUseNumber(body, &request); err != nil {
 		return nil, apicompat.ResponsesClientToolMapping{}, err
 	}
-	mapping, changed, err := apicompat.AdaptResponsesClientTools(request)
+	mapping, changed, err := apicompat.AdaptResponsesToolSearch(request)
 	if err != nil || !changed {
 		return body, mapping, err
 	}

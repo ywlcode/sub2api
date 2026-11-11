@@ -25,26 +25,16 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-func volcengineCompactionTestBody(t *testing.T, path string, stream bool) []byte {
+func volcengineCompactionTestBody(t *testing.T, stream bool) []byte {
 	t.Helper()
 	request := map[string]any{"model": "ep-ark", "stream": stream, "tools": []any{}}
-	if path == "/v1/responses" {
-		request["input"] = []any{
-			map[string]any{"type": "message", "role": "user", "content": "Project Lantern. Keep the 24-hour window. Never deploy."},
-			map[string]any{"type": "message", "role": "assistant", "content": "OLD_ASSISTANT_ANSWER"},
-			map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": volcengineCompactionPrompt}}},
-		}
-		request["reasoning"] = map[string]any{"effort": "high", "summary": "auto"}
-		request["max_output_tokens"] = 8192
-	} else {
-		request["messages"] = []any{
-			map[string]any{"role": "user", "content": "Project Lantern. Keep the 24-hour window. Never deploy."},
-			map[string]any{"role": "assistant", "content": "OLD_ASSISTANT_ANSWER"},
-			map[string]any{"role": "user", "content": volcengineCompactionPrompt},
-		}
-		request["output_config"] = map[string]any{"effort": "high"}
-		request["max_tokens"] = 8192
+	request["input"] = []any{
+		map[string]any{"type": "message", "role": "user", "content": "Project Lantern. Keep the 24-hour window. Never deploy."},
+		map[string]any{"type": "message", "role": "assistant", "content": "OLD_ASSISTANT_ANSWER"},
+		map[string]any{"type": "message", "role": "user", "content": []any{map[string]any{"type": "input_text", "text": volcengineCompactionPrompt}}},
 	}
+	request["reasoning"] = map[string]any{"effort": "high", "summary": "auto"}
+	request["max_output_tokens"] = 8192
 	body, err := json.Marshal(request)
 	require.NoError(t, err)
 	return body
@@ -97,7 +87,7 @@ func volcengineCompactionTestResponse(t *testing.T, text, status string, stream 
 }
 
 func TestVolcengineCompactionDetection(t *testing.T) {
-	body := volcengineCompactionTestBody(t, "/v1/responses", true)
+	body := volcengineCompactionTestBody(t, true)
 	require.True(t, isVolcengineTextCompaction(body))
 	for _, tc := range []struct {
 		path  string
@@ -119,14 +109,14 @@ func TestVolcengineCompactionDetection(t *testing.T) {
 	require.True(t, isVolcengineTextCompaction(changed))
 }
 
-func TestVolcengineCompactionRecoveryAcrossProtocols(t *testing.T) {
+func TestVolcengineCompactionRecovery(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, path := range []string{"/v1/responses", "/v1/messages"} {
+	for _, path := range []string{"/v1/responses"} {
 		for _, stream := range []bool{false, true} {
 			for _, scenario := range []string{"normal", "thinking_only", "empty", "truncated", "eof", "both_fail", "policy", "failed", "cancelled"} {
 				name := fmt.Sprintf("%s/stream=%t/%s", path, stream, scenario)
 				t.Run(name, func(t *testing.T) {
-					upstreamStream := stream || path == "/v1/messages"
+					upstreamStream := stream
 					firstText, firstStatus := "VALID_SUMMARY", "completed"
 					wantCalls, wantError := 1, false
 					switch scenario {
@@ -156,15 +146,9 @@ func TestVolcengineCompactionRecoveryAcrossProtocols(t *testing.T) {
 					}
 					upstream := &httpUpstreamRecorder{responses: []*http.Response{first, volcengineCompactionTestResponse(t, secondText, "completed", upstreamStream)}}
 					svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream, cache: &volcengineNoReasoningCache{}}
-					body := volcengineCompactionTestBody(t, path, stream)
+					body := volcengineCompactionTestBody(t, stream)
 					c, recorder := volcengineUserContext(1, path, body)
-					var result *OpenAIForwardResult
-					var err error
-					if path == "/v1/responses" {
-						result, err = svc.Forward(context.Background(), c, volcengineTestAccount(), body)
-					} else {
-						result, err = svc.ForwardAsAnthropic(context.Background(), c, volcengineTestAccount(), body, "", "")
-					}
+					result, err := svc.Forward(context.Background(), c, volcengineTestAccount(), body)
 					require.Len(t, upstream.requests, wantCalls)
 					require.Equal(t, "high", gjson.GetBytes(upstream.bodies[0], "reasoning.effort").String())
 					if wantCalls == 2 {
@@ -194,7 +178,7 @@ func TestVolcengineCompactionRecoveryAcrossProtocols(t *testing.T) {
 							expectedTokens = 10
 						}
 						require.Equal(t, expectedTokens, result.Usage.InputTokens)
-						if stream && path == "/v1/responses" {
+						if stream {
 							require.Equal(t, 1, strings.Count(wire, "event: response.completed"))
 						}
 					}
@@ -212,7 +196,7 @@ func TestVolcengineCompactionStrictScope(t *testing.T) {
 	for _, scope := range []string{"flag_off", "other_platform", "ordinary_request"} {
 		t.Run(scope, func(t *testing.T) {
 			account := volcengineTestAccount()
-			body := volcengineCompactionTestBody(t, "/v1/responses", false)
+			body := volcengineCompactionTestBody(t, false)
 			switch scope {
 			case "flag_off":
 				account.Credentials[DeepSeekVolcengineCompatibilityCredential] = false
@@ -249,7 +233,7 @@ func (b *volcengineCompactionBlockingBody) Close() error {
 func TestVolcengineCompactionCancellationClosesBody(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	body := volcengineCompactionTestBody(t, "/v1/responses", true)
+	body := volcengineCompactionTestBody(t, true)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://ark.example/api/v3/responses", bytes.NewReader(body))
 	require.NoError(t, err)
 	blocked := &volcengineCompactionBlockingBody{done: make(chan struct{})}
@@ -323,7 +307,7 @@ func TestVolcengineCompactionSnapshotAndDeltaValidation(t *testing.T) {
 func TestVolcengineCompactionOutputCap(t *testing.T) {
 	for _, cap := range []int{0, 17} {
 		t.Run(fmt.Sprint(cap), func(t *testing.T) {
-			body := volcengineCompactionTestBody(t, "/v1/responses", false)
+			body := volcengineCompactionTestBody(t, false)
 			if cap == 0 {
 				body, _ = sjson.DeleteBytes(body, "max_output_tokens")
 			} else {
@@ -354,7 +338,7 @@ func TestVolcengineCompactionOutputCap(t *testing.T) {
 func TestVolcengineCompactionRecoveryBeforeGzip(t *testing.T) {
 	account := volcengineTestAccount()
 	account.Extra = map[string]any{AccountExtraRequestGzipEnabled: true}
-	body := volcengineCompactionTestBody(t, "/v1/responses", true)
+	body := volcengineCompactionTestBody(t, true)
 	body, _ = sjson.SetBytes(body, "input.0.content", strings.Repeat("synthetic context ", 1024))
 	var sent [][]byte
 	upstream := gzipTestHTTP{send: func(req *http.Request) (*http.Response, error) {
@@ -385,7 +369,7 @@ func TestVolcengineCompactionRecoveryBeforeGzip(t *testing.T) {
 
 func TestVolcengineCompactionHeartbeatAndFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	for _, path := range []string{"/v1/responses", "/v1/messages"} {
+	for _, path := range []string{"/v1/responses"} {
 		t.Run(path, func(t *testing.T) {
 			calls := 0
 			upstream := gzipTestHTTP{send: func(req *http.Request) (*http.Response, error) {
@@ -398,16 +382,11 @@ func TestVolcengineCompactionHeartbeatAndFailure(t *testing.T) {
 			cfg := &config.Config{}
 			cfg.Gateway.StreamKeepaliveInterval = 1
 			svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream, cache: &volcengineNoReasoningCache{}}
-			body := volcengineCompactionTestBody(t, path, true)
+			body := volcengineCompactionTestBody(t, true)
 			c, recorder := volcengineUserContext(1, path, body)
-			var err error
-			if path == "/v1/responses" {
-				stop := WrapOpenAIResponsesHeaderWait(c, true)
-				defer stop()
-				_, err = svc.Forward(context.Background(), c, volcengineTestAccount(), body)
-			} else {
-				_, err = svc.ForwardAsAnthropic(context.Background(), c, volcengineTestAccount(), body, "", "")
-			}
+			stop := WrapOpenAIResponsesHeaderWait(c, true)
+			defer stop()
+			_, err := svc.Forward(context.Background(), c, volcengineTestAccount(), body)
 			require.Error(t, err)
 			require.Equal(t, 2, calls)
 			wire := recorder.Body.String()
@@ -416,17 +395,13 @@ func TestVolcengineCompactionHeartbeatAndFailure(t *testing.T) {
 			require.NotContains(t, wire, "response.completed")
 			require.NotContains(t, wire, "message_stop")
 			require.NotContains(t, wire, "THOUGHT_MUST_NOT_BECOME_SUMMARY")
-			if path == "/v1/messages" {
-				require.Contains(t, wire, "event: error")
-			} else {
-				require.Contains(t, wire, "event: response.failed")
-			}
+			require.Contains(t, wire, "event: response.failed")
 		})
 	}
 }
 
 func TestVolcengineCompactionDoesNotRetryBarePolicyError(t *testing.T) {
-	body := volcengineCompactionTestBody(t, "/v1/responses", true)
+	body := volcengineCompactionTestBody(t, true)
 	req, err := http.NewRequest(http.MethodPost, "https://ark.example/api/v3/responses", bytes.NewReader(body))
 	require.NoError(t, err)
 	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":\"invalid_request_error\",\"message\":\"Invalid request history\"}}\n\n"))}}
@@ -446,7 +421,7 @@ func (r *volcengineCompactionDelayedReader) Read(p []byte) (int, error) {
 }
 
 func TestVolcengineCompactionHeaderTimeoutStopsBeforeSummaryBody(t *testing.T) {
-	body := volcengineCompactionTestBody(t, "/v1/responses", true)
+	body := volcengineCompactionTestBody(t, true)
 	upstream := gzipTestHTTP{send: func(req *http.Request) (*http.Response, error) {
 		if trace := httptrace.ContextClientTrace(req.Context()); trace != nil && trace.WroteRequest != nil {
 			trace.WroteRequest(httptrace.WroteRequestInfo{})

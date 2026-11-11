@@ -156,11 +156,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		writeResponsesError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return nil, err
 	}
-	if normalized, err := normalizeVolcengineRequestBody(account, body, APIProtocolResponses); err != nil {
-		return nil, err
-	} else {
-		body = normalized
-	}
 	ctx = withOpenAITransportRoute(ctx, "http", "native", "", "")
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
@@ -1414,7 +1409,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			return s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 		}()
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
-		if result, handled := writeVolcengineCompactionError(c, err, APIProtocolResponses, reqStream, originalModel); handled {
+		if result, handled := writeVolcengineCompactionError(c, err, reqStream, originalModel); handled {
 			result.UpstreamModel, result.BillingModel = upstreamModel, billingModel
 			return result, err
 		}
@@ -1738,9 +1733,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 }
 
 func shouldForwardOpenAIResponsesViaRawChatCompletions(account *Account) bool {
-	if account.IsDeepSeekVolcengineCompatibilityEnabled() {
-		return false
-	}
 	if account.IsCopilotSDKEnabled() {
 		return false
 	}
@@ -1930,13 +1922,16 @@ func isDeepSeekSemanticsAccount(account *Account) bool {
 // namespace 工具并正确还原 custom_tool_call，先行改写会丢失顶层 custom 映射，回程
 // 降级成 function_call（Codex 判 unsupported call）。
 func shouldAdaptDeepSeekResponsesClientTools(account *Account, body []byte, compactPath bool) bool {
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() {
+		return !compactPath && gjson.GetBytes(body, "tools.#(type==tool_search)").Exists()
+	}
 	return account != nil &&
 		account.Platform == PlatformDeepseek &&
 		account.UsesNativeCNResponses() &&
 		account.Type == AccountTypeAPIKey &&
 		!compactPath &&
 		!shouldForwardOpenAIResponsesViaChatCompletions(account, body) &&
-		(needsOpenAIResponsesClientToolAdaptation(body) || account.IsDeepSeekVolcengineCompatibilityEnabled() && gjson.GetBytes(body, "tools.#(type==namespace)").Exists())
+		needsOpenAIResponsesClientToolAdaptation(body)
 }
 
 func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, isStream bool, promptCacheKey string, isCodexCLI bool) (*http.Request, error) {

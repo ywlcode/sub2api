@@ -222,7 +222,7 @@ export default {
       },
       cnProviders: {
         volcengineCompatibility: 'Volcengine Ark compatibility',
-        volcengineCompatibilityHint: 'Enable for Volcengine Ark or its relays. Uses Responses upstream and accepts Responses or Anthropic Messages clients only; Chat is unsupported. Clients must preserve and replay the full reasoning history.',
+        volcengineCompatibilityHint: 'Enable for Volcengine Ark or its relays. Chat, Responses and Anthropic Messages use their native upstream endpoints. Configure all three relay base URLs; Messages has no default fallback. Clients must replay the complete reasoning and tool history.',
         accountMode: {
           title: 'Account Type',
           payg: 'Pay-as-you-go',

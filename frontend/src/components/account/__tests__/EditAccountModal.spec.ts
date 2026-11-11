@@ -340,6 +340,27 @@ function mountModal(account = buildAccount(), renderGroupSelector = false) {
 }
 
 describe('EditAccountModal', () => {
+  it.each([
+    ['https://relay.example.com/v1', ''],
+    ['https://ark.cn-beijing.volces.com/api/v3', 'https://ark.cn-beijing.volces.com/api/compatible']
+  ])('migrates a legacy Volcengine account with base %s without DeepSeek fallbacks', async (base, anthropic) => {
+    const account = buildAccount()
+    account.platform = 'deepseek'
+    account.credentials = { api_key: 'fixture-key', base_url: base, api_protocol: 'responses',
+      deepseek_volcengine_compatibility: true }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials).toMatchObject({
+      api_protocol: 'adaptive',
+      base_url: base,
+      api_base_urls: { chat_completions: base, responses: base, anthropic }
+    })
+  })
+
   it('loads, saves and disables Volcengine compatibility per DeepSeek account', async () => {
     const account = buildAccount()
     account.platform = 'deepseek'

@@ -663,7 +663,8 @@ func requiresDeepSeekChatReasoning(account *Account, body []byte) bool {
 // 桥接会从 summary / 缓存回注真实明文；这里只填仍为空的缺口，不覆盖已有内容。
 // 判定见 requiresDeepSeekChatReasoning，不命中的上游原样返回（字节不变）。
 func ensureDeepSeekChatReasoningPlaceholders(account *Account, body []byte) []byte {
-	if !requiresDeepSeekChatReasoning(account, body) {
+	// Ark accepts its native empty-reasoning tool turns. Never fabricate history.
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() || !requiresDeepSeekChatReasoning(account, body) {
 		return body
 	}
 	if updated, ok := batchDeepSeekReasoningPlaceholders(body); ok {

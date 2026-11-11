@@ -27,8 +27,6 @@ func anthropicToResponsesForAccount(cfg *config.Config, account *Account, req *a
 	return apicompat.AnthropicToResponsesWithOptions(req, apicompat.ResponsesConversionOptions{
 		MinOutputTokens:          configuredMinOutputTokens(cfg),
 		PreserveReasoningContent: shouldPreserveDeepSeekReasoning(account),
-		PreserveReasoningEffort:  account.IsDeepSeekVolcengineCompatibilityEnabled(),
-		VolcengineCompatibility:  account.IsDeepSeekVolcengineCompatibilityEnabled(),
 	})
 }
 

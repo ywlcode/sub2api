@@ -10,7 +10,7 @@ import (
 )
 
 func requiresSystemChatRole(account *Account, targetURL, upstreamModel string) bool {
-	if account == nil || account.Type != AccountTypeAPIKey {
+	if account == nil || account.Type != AccountTypeAPIKey || account.IsDeepSeekVolcengineCompatibilityEnabled() {
 		return false
 	}
 	switch account.Platform {

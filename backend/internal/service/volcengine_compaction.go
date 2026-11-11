@@ -417,7 +417,7 @@ func encodeVolcengineCompactionResponse(resp *http.Response, final *apicompat.Re
 
 // Exhausted compaction recovery is a request failure, not another scheduling
 // attempt. Return a protocol error even if a heartbeat has committed HTTP 200.
-func writeVolcengineCompactionError(c *gin.Context, err error, protocol string, stream bool, model string) (*OpenAIForwardResult, bool) {
+func writeVolcengineCompactionError(c *gin.Context, err error, stream bool, model string) (*OpenAIForwardResult, bool) {
 	var failure *volcengineCompactionError
 	if !errors.As(err, &failure) {
 		return nil, false
@@ -434,15 +434,9 @@ func writeVolcengineCompactionError(c *gin.Context, err error, protocol string, 
 	if stream {
 		c.Writer.Header().Set("Content-Type", "text/event-stream")
 		c.Writer.Header().Del("Content-Length")
-		if protocol == APIProtocolAnthropic {
-			_, _ = c.Writer.WriteString(buildAnthropicStreamErrorSSE("api_error", message))
-		} else {
-			source, _ := json.Marshal(map[string]any{"error": map[string]any{"type": "server_error", "code": "volcengine_compaction_failed", "message": message}})
-			_, _ = c.Writer.WriteString(buildOpenAIResponseFailedSSE("", model, time.Now().Unix(), source, message))
-		}
+		source, _ := json.Marshal(map[string]any{"error": map[string]any{"type": "server_error", "code": "volcengine_compaction_failed", "message": message}})
+		_, _ = c.Writer.WriteString(buildOpenAIResponseFailedSSE("", model, time.Now().Unix(), source, message))
 		c.Writer.Flush()
-	} else if protocol == APIProtocolAnthropic {
-		writeAnthropicError(c, failure.status, "api_error", message)
 	} else {
 		writeResponsesError(c, failure.status, "volcengine_compaction_failed", message)
 	}

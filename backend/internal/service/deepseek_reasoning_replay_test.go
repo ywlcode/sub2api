@@ -49,17 +49,14 @@ func TestDeepSeekReasoningReplayAcrossProviders(t *testing.T) {
 						_, err = svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
 					}
 					require.Error(t, err) // Stop after capture; no paid inference.
-					if destination == "ark_responses" && inbound == "/v1/chat/completions" {
-						require.ErrorContains(t, err, "chat completions is not supported")
-						require.Equal(t, http.StatusBadRequest, c.Writer.Status())
-						require.Empty(t, upstream.requests)
-						return
-					}
 					require.NotNil(t, upstream.lastReq)
 					wire := upstream.lastBody
 					require.NotContains(t, string(wire), "<thinking>")
-					if destination == "native_messages" {
-						require.Equal(t, "/anthropic/v1/messages", upstream.lastReq.URL.Path)
+					if destination == "ark_responses" && inbound == "/v1/chat/completions" {
+						require.Equal(t, "original plan", gjson.GetBytes(wire, "messages.#(role==assistant).reasoning_content").String())
+						require.Equal(t, "high", gjson.GetBytes(wire, "reasoning_effort").String())
+					} else if destination == "native_messages" || destination == "ark_responses" && inbound == "/v1/messages" {
+						require.True(t, strings.HasSuffix(upstream.lastReq.URL.Path, "/v1/messages"))
 						require.Equal(t, "high", gjson.GetBytes(wire, "output_config.effort").String())
 						var thought, callID, resultID string
 						for _, message := range gjson.GetBytes(wire, "messages").Array() {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -21,6 +22,42 @@ func (a *Account) IsDeepSeekVolcengineCompatibilityEnabled() bool {
 	}
 	enabled, _ := a.Credentials[DeepSeekVolcengineCompatibilityCredential].(bool)
 	return enabled
+}
+
+// Legacy Ark accounts only configured a Responses base. Chat shares that API
+// root; Messages has a separate root. An arbitrary relay must configure its
+// Messages base explicitly. Never fall back to the DeepSeek platform defaults.
+func (a *Account) volcengineProtocolBaseURL(protocol string) string {
+	baseURLs, _ := a.Credentials["api_base_urls"].(map[string]any)
+	base, _ := baseURLs[protocol].(string)
+	if strings.TrimSpace(base) != "" {
+		if isDeepSeekAPIHost(base) {
+			return ""
+		}
+		return strings.TrimSpace(base)
+	}
+	base, _ = baseURLs[APIProtocolResponses].(string)
+	if strings.TrimSpace(base) == "" {
+		base = a.GetCredential("base_url")
+	}
+	base = strings.TrimSpace(base)
+	if base == "" || isDeepSeekAPIHost(base) {
+		return ""
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return ""
+	}
+	if protocol == APIProtocolAnthropic {
+		if u.Hostname() != "ark.cn-beijing.volces.com" || u.Scheme != "https" {
+			return ""
+		}
+		u.Path = "/api/compatible"
+	} else {
+		u.Path = strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(u.Path, "/"), "/responses"), "/chat/completions")
+	}
+	u.RawPath = ""
+	return u.String()
 }
 
 // normalizeVolcengineRequestBody only translates known compatibility aliases.
@@ -127,6 +164,14 @@ func normalizeVolcengineReasoning(request map[string]any, protocol string) {
 		}
 		return
 	}
+	if protocol == APIProtocolChatCompletions {
+		// Chat already uses the same fields as DeepSeek. Keep its flat effort
+		// and explicit thinking control, including native empty tool turns.
+		if effort := volcengineEffort(request["reasoning_effort"]); effort != "" {
+			request["reasoning_effort"] = effort
+		}
+		return
+	}
 	// Native nested effort wins over the legacy flat alias, as in the bridges.
 	reasoning, _ := request["reasoning"].(map[string]any)
 	effort := volcengineEffort(reasoning["effort"])
@@ -151,7 +196,7 @@ func normalizeVolcengineReasoning(request map[string]any, protocol string) {
 	delete(request, "reasoning_effort")
 }
 
-// Apply the final Responses adaptation before gzip, including admin probes.
+// Apply the final native-protocol adaptation before gzip, including admin probes.
 // Account scope also works when the next hop is another relay.
 func accountVolcengineHTTP(upstream HTTPUpstream, account *Account) HTTPUpstream {
 	if !account.IsDeepSeekVolcengineCompatibilityEnabled() {
@@ -187,13 +232,16 @@ func (u *volcengineHTTP) send(req *http.Request, send func(*http.Request) (*http
 	case strings.HasSuffix(path, "/responses"):
 		protocol = APIProtocolResponses
 	case strings.HasSuffix(path, "/chat/completions"):
-		return nil, fmt.Errorf("volcengine compatibility only supports Responses upstream; Chat Completions is disabled")
+		protocol = APIProtocolChatCompletions
 	case strings.HasSuffix(path, "/messages"):
-		return nil, fmt.Errorf("volcengine compatibility only supports Responses upstream; Anthropic Messages must be converted first")
+		protocol = APIProtocolAnthropic
 	case strings.HasSuffix(path, "/responses/compact"):
 		return nil, fmt.Errorf("volcengine compatibility does not support /responses/compact")
 	default:
 		return send(req)
+	}
+	if u.account.volcengineProtocolBaseURL(protocol) == "" {
+		return nil, fmt.Errorf("Volcengine account %d requires a %s base URL; DeepSeek default endpoints cannot be used", u.account.ID, protocol)
 	}
 	if req.GetBody == nil {
 		return nil, fmt.Errorf("normalize Volcengine request: JSON request body must be replayable")
@@ -213,8 +261,10 @@ func (u *volcengineHTTP) send(req *http.Request, send func(*http.Request) (*http
 	if err != nil {
 		return nil, err
 	}
-	if err := validateVolcengineResponsesRequest(u.account, body); err != nil {
-		return nil, err
+	if protocol == APIProtocolResponses {
+		if err := validateVolcengineResponsesRequest(u.account, body); err != nil {
+			return nil, err
+		}
 	}
 	body, err = normalizeVolcengineRequestBody(u.account, body, protocol)
 	if err != nil {
@@ -226,7 +276,7 @@ func (u *volcengineHTTP) send(req *http.Request, send func(*http.Request) (*http
 	prepared.ContentLength = int64(len(body))
 	prepared.TransferEncoding = nil
 	prepared.Header.Del("Content-Length")
-	if isVolcengineTextCompaction(body) {
+	if protocol == APIProtocolResponses && isVolcengineTextCompaction(body) {
 		return forwardVolcengineTextCompaction(prepared, body, func(attempt *http.Request) (*http.Response, error) {
 			resp, err := send(attempt)
 			if err == nil && resp != nil && resp.Body != nil && isEventStreamResponse(resp.Header) {

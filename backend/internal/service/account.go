@@ -1628,11 +1628,7 @@ func (a *Account) IsOpenAIApiKey() bool {
 // grok 走 GetGrokBaseURL，此处对 grok 返回 "" 以保持原有行为。
 func (a *Account) GetOpenAIBaseURL() string {
 	if a.IsDeepSeekVolcengineCompatibilityEnabled() {
-		if baseURLs, ok := a.Credentials["api_base_urls"].(map[string]any); ok {
-			if baseURL, ok := baseURLs[APIProtocolResponses].(string); ok && strings.TrimSpace(baseURL) != "" {
-				return strings.TrimSpace(baseURL)
-			}
-		}
+		return a.volcengineProtocolBaseURL(APIProtocolChatCompletions)
 	}
 	if !a.IsOpenAI() && !a.IsMultiProtocolAPIKey() {
 		return ""
@@ -1680,7 +1676,7 @@ func (a *Account) IsCodingPlan() bool {
 // Responses 端点，适配 Codex）；zhipu 无此端点。
 func (a *Account) GetAPIProtocol() string {
 	if a.IsDeepSeekVolcengineCompatibilityEnabled() {
-		return APIProtocolResponses
+		return APIProtocolAdaptive
 	}
 	if a == nil || !a.IsMultiProtocolAPIKey() {
 		return APIProtocolChatCompletions
@@ -1734,6 +1730,9 @@ func (a *Account) IsAdaptiveAPIProtocol() bool {
 // adaptive 账号优先使用 api_base_urls 中的分协议地址，缺失时按平台和
 // account_mode 使用官方默认端点。base_url 继续作为 Chat Completions 地址兼容旧字段。
 func (a *Account) GetCNProtocolBaseURL(protocol string) string {
+	if a.IsDeepSeekVolcengineCompatibilityEnabled() {
+		return a.volcengineProtocolBaseURL(protocol)
+	}
 	if a == nil || !a.IsMultiProtocolAPIKey() {
 		return ""
 	}

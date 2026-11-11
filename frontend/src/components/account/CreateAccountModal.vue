@@ -4356,6 +4356,7 @@ import {
   getBrowserTimeZone,
   parseDateTimeLocalInput
 } from '@/utils/format'
+import { volcengineBaseUrls } from '@/utils/volcengine'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { supportsAccountQuota } from '@/utils/accountQuota'
 import { getAccountExpiryTimestamp } from '@/components/account/accountExpiry'
@@ -4640,7 +4641,7 @@ const cnAdaptiveProtocolOptions = computed<Array<{ value: CnNativeApiProtocol; l
 // 可选的协议档：adaptive 加上各原生协议（responses 仅 deepseek / kimi 等提供原生端点的供应商）。
 const cnProtocolOptions = computed<Array<{ value: CnApiProtocol; labelKey: string }>>(() => [
   { value: 'adaptive', labelKey: 'adaptive' },
-  ...cnAdaptiveProtocolOptions.value
+  ...(form.platform === 'deepseek' && deepseekVolcengineCompatibility.value ? [] : cnAdaptiveProtocolOptions.value)
 ])
 
 function resetAdaptiveBaseUrls(platform: string, mode: string) {
@@ -4763,8 +4764,15 @@ watch(accountMode, (mode, previousMode) => {
   }
   apiKeyBaseUrl.value = defaultCNBaseUrl(form.platform, mode, apiProtocol.value)
 })
+watch(deepseekVolcengineCompatibility, (enabled) => {
+  if (!enabled || form.platform !== 'deepseek') return
+  adaptiveBaseUrls.value = volcengineBaseUrls(apiKeyBaseUrl.value, adaptiveBaseUrls.value)
+  apiProtocol.value = 'adaptive'
+  apiKeyBaseUrl.value = adaptiveBaseUrls.value.chat_completions
+})
 watch(apiProtocol, (protocol) => {
   if (!isMultiProtocolPlatform.value) return
+  if (form.platform === 'deepseek' && deepseekVolcengineCompatibility.value) return
   if (protocol === 'adaptive') {
     const defaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, currentOpenCodeOrCNMode())
     for (const item of cnAdaptiveProtocolOptions.value) {
@@ -6485,7 +6493,7 @@ const handleSubmit = async () => {
       )
       const protocolBaseUrls: Record<string, string> = {}
       for (const item of cnAdaptiveProtocolOptions.value) {
-        protocolBaseUrls[item.value] = (adaptiveBaseUrls.value[item.value] || defaults[item.value]).trim()
+        protocolBaseUrls[item.value] = (adaptiveBaseUrls.value[item.value] || (form.platform === 'deepseek' && deepseekVolcengineCompatibility.value ? '' : defaults[item.value])).trim()
       }
       credentials.api_base_urls = protocolBaseUrls
       credentials.base_url = protocolBaseUrls.chat_completions

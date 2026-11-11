@@ -917,6 +917,16 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       type: 'apikey',
       credentials: { deepseek_volcengine_compatibility: enabled }
     })
+    if (enabled) {
+      expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({
+        api_protocol: 'adaptive',
+        api_base_urls: {
+          chat_completions: 'https://ark.cn-beijing.volces.com/api/v3',
+          responses: 'https://ark.cn-beijing.volces.com/api/v3',
+          anthropic: 'https://ark.cn-beijing.volces.com/api/compatible'
+        }
+      })
+    }
   })
 
   it('submits OpenCode Zen default protocol rules with adaptive endpoints', async () => {

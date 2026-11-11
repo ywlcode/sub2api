@@ -108,11 +108,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		return nil, admissionErr
 	}
 	account = latest
-	if account.IsDeepSeekVolcengineCompatibilityEnabled() {
-		err := errors.New("chat completions is not supported for this Volcengine account; use /v1/responses or /v1/messages")
-		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
-		return nil, err
-	}
+
 	// Some clients send a Responses-shaped body to /v1/chat/completions.
 	// Preserve its native reasoning fields during compatibility adaptation too.
 	isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
