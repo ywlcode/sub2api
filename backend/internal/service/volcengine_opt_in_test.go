@@ -180,6 +180,8 @@ func volcengineSuccessFixture(stream bool) (string, string) {
 func TestVolcengineGatewayRejectsUnsupportedRequestsBeforeUpstream(t *testing.T) {
 	for _, tc := range []struct{ path, body, errorText string }{
 		{"/v1/responses", `{"model":"ep-ark","input":[{"type":"reasoning","id":"lost"}]}`, "complete reasoning history"},
+		{"/v1/responses", `{"model":"ep-ark","input":[{"type":"reasoning","encrypted_content":"foreign"}]}`, "complete reasoning history"},
+		{"/v1/responses", `{"model":"ep-ark","input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"abbreviated"}],"encrypted_content":"foreign"}]}`, "complete reasoning history"},
 		{"/v1/responses", `{"model":"ep-ark","input":"hi","previous_response_id":"old"}`, "stateless full history"},
 		{"/v1/responses/compact", `{"model":"ep-ark","input":"hi"}`, "does not support /responses/compact"},
 		{"/v1/responses", `{"model":"ep-ark","input":[{"type":"additional_tools","tools":"bad"}]}`, "additional_tools.tools must be an array"},

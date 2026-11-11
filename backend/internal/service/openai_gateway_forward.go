@@ -1923,7 +1923,9 @@ func isDeepSeekSemanticsAccount(account *Account) bool {
 // 降级成 function_call（Codex 判 unsupported call）。
 func shouldAdaptDeepSeekResponsesClientTools(account *Account, body []byte, compactPath bool) bool {
 	if account.IsDeepSeekVolcengineCompatibilityEnabled() {
-		return !compactPath && gjson.GetBytes(body, "tools.#(type==tool_search)").Exists()
+		return !compactPath && (gjson.GetBytes(body, "tools.#(type==tool_search)").Exists() ||
+			gjson.GetBytes(body, "input.#(type==tool_search_call)").Exists() ||
+			gjson.GetBytes(body, "input.#(type==tool_search_output)").Exists())
 	}
 	return account != nil &&
 		account.Platform == PlatformDeepseek &&

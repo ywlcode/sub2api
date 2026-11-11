@@ -27,7 +27,16 @@ func AdaptResponsesClientTools(req map[string]any) (ResponsesClientToolMapping, 
 // AdaptResponsesToolSearch lowers only client-side tool discovery. Ark already
 // supports custom and namespace tools, so their wire format must stay intact.
 func AdaptResponsesToolSearch(req map[string]any) (ResponsesClientToolMapping, bool, error) {
-	return adaptResponsesClientTools(req, true)
+	mapping, changed, err := adaptResponsesClientTools(req, true)
+	if err != nil {
+		return mapping, changed, err
+	}
+	// Compaction and later turns can omit the current tool declaration while
+	// retaining earlier search history. Lower that history without enabling
+	// tools or restoring future ordinary function calls as built-in searches.
+	history := ResponsesClientToolMapping{ToolSearch: true, nativeTools: true}
+	historyChanged, err := rewriteClientToolHistory(req["input"], &history)
+	return mapping, changed || historyChanged, err
 }
 
 func adaptResponsesClientTools(req map[string]any, nativeTools bool) (ResponsesClientToolMapping, bool, error) {
@@ -262,7 +271,7 @@ func rewriteClientToolHistory(value any, adapter *ResponsesClientToolMapping) (b
 				normalizeClientToolOutput(typed)
 				changed = true
 			case "tool_search_call":
-				if adapter.ToolSearch {
+				if adapter.ToolSearch && !(adapter.nativeTools && isHostedToolSearchHistory(typed)) {
 					typed["type"] = "function_call"
 					typed["name"] = toolSearchProxyName
 					typed["arguments"] = rawObjectString(typed["arguments"])
@@ -271,7 +280,7 @@ func rewriteClientToolHistory(value any, adapter *ResponsesClientToolMapping) (b
 					changed = true
 				}
 			case "tool_search_output":
-				if adapter.ToolSearch {
+				if adapter.ToolSearch && !(adapter.nativeTools && isHostedToolSearchHistory(typed)) {
 					callID := strings.TrimSpace(stringValue(typed["call_id"]))
 					if callID == "" {
 						return fmt.Errorf("tool_search_output requires a non-empty string call_id before it can be lowered to function_call_output")
@@ -301,6 +310,12 @@ func rewriteClientToolHistory(value any, adapter *ResponsesClientToolMapping) (b
 		return false, err
 	}
 	return changed, nil
+}
+
+// Native hosted search has no client call_id; execution may be omitted in replay.
+func isHostedToolSearchHistory(item map[string]any) bool {
+	execution := stringValue(item["execution"])
+	return execution == "server" || execution == "" && stringValue(item["call_id"]) == ""
 }
 
 // normalizeLoweredFunctionItemID reconciles Codex client-only item IDs such as
