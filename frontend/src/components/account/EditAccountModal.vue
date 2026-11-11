@@ -3796,6 +3796,7 @@ import QwenCacheSettings from './QwenCacheSettings.vue'
 import { applyQwenCacheSettings } from './qwenCacheSettings'
 import OpenAIRequestTimezoneField from '@/components/account/OpenAIRequestTimezoneField.vue'
 import ExtraImageModelsField from '@/components/account/ExtraImageModelsField.vue'
+import { volcengineBaseUrls } from '@/utils/volcengine'
 import { parseExtraImageModels, readExtraImageModels } from '@/utils/extraImageModels'
 import SIWCAccountSettings from './SIWCAccountSettings.vue'
 import OpenAIAuthConnections from './OpenAIAuthConnections.vue'
@@ -4217,10 +4218,17 @@ const editAdaptiveProtocolOptions = computed<Array<{ value: CnNativeApiProtocol;
 )
 const cnProtocolOptions = computed<Array<{ value: CnApiProtocol; labelKey: string }>>(() => [
   { value: 'adaptive', labelKey: 'adaptive' },
-  ...editAdaptiveProtocolOptions.value
+  ...(props.account?.platform === 'deepseek' && deepseekVolcengineCompatibility.value ? [] : editAdaptiveProtocolOptions.value)
 ])
+watch(deepseekVolcengineCompatibility, (enabled) => {
+  if (!enabled || syncingForm.value || props.account?.platform !== 'deepseek') return
+  editAdaptiveBaseUrls.value = volcengineBaseUrls(editBaseUrl.value, editAdaptiveBaseUrls.value)
+  editApiProtocol.value = 'adaptive'
+  editBaseUrl.value = editAdaptiveBaseUrls.value.chat_completions
+})
 watch(editApiProtocol, (protocol, previousProtocol) => {
   if (!isCNApiKeyAccount.value || syncingForm.value) return
+  if (props.account?.platform === 'deepseek' && deepseekVolcengineCompatibility.value) return
   if (protocol === 'adaptive') {
     const defaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, currentOpenCodeOrCNMode())
     for (const item of editAdaptiveProtocolOptions.value) {
@@ -5582,7 +5590,14 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       if (legacyBaseUrl && !storedLegacyBaseUrl) {
         nextAdaptiveBaseUrls[legacyProtocol] = legacyBaseUrl
       }
-      editAdaptiveBaseUrls.value = nextAdaptiveBaseUrls
+      if (deepseekVolcengineCompatibility.value) {
+        editAdaptiveBaseUrls.value = volcengineBaseUrls(legacyBaseUrl, {
+          chat_completions: storedChatBaseUrl, responses: storedResponsesBaseUrl, anthropic: storedAnthropicBaseUrl
+        })
+        editApiProtocol.value = 'adaptive'
+      } else {
+        editAdaptiveBaseUrls.value = nextAdaptiveBaseUrls
+      }
       // 智谱团队版 Coding Plan：回填组织/项目 ID
       if (newAccount.platform === 'zhipu') {
         editZhipuOrganization.value = typeof credentials.zhipu_organization === 'string' ? credentials.zhipu_organization : ''
@@ -6502,7 +6517,7 @@ const handleSubmit = async () => {
           const defaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, currentOpenCodeOrCNMode())
           const protocolBaseUrls: Record<string, string> = {}
           for (const item of editAdaptiveProtocolOptions.value) {
-            protocolBaseUrls[item.value] = (editAdaptiveBaseUrls.value[item.value] || defaults[item.value]).trim()
+            protocolBaseUrls[item.value] = (editAdaptiveBaseUrls.value[item.value] || (props.account.platform === 'deepseek' && deepseekVolcengineCompatibility.value ? '' : defaults[item.value])).trim()
           }
           newCredentials.api_base_urls = protocolBaseUrls
           newCredentials.base_url = protocolBaseUrls.chat_completions
