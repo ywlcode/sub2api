@@ -85,3 +85,52 @@ func TestAdaptResponsesToolSearchDoesNotRewriteCustomResultContents(t *testing.T
 	require.NoError(t, err)
 	require.JSONEq(t, string(original), string(after))
 }
+
+func TestAdaptResponsesToolSearchHistoryWithoutDeclaration(t *testing.T) {
+	for _, declaration := range []string{"", `"tools":null,`, `"tools":[],`, `"tools":[{"type":"function","name":"tool_search","parameters":{"type":"object"}}],`} {
+		t.Run(declaration, func(t *testing.T) {
+			body := []byte(`{` + declaration + `"input":[{"type":"tool_search_call","id":"tsc_history","call_id":"search_pair","arguments":{"query":"lookup"}},{"type":"tool_search_output","call_id":"search_pair","tools":[{"type":"function","name":"old_discovery","parameters":{"type":"object"}}]}]}`)
+			var request map[string]any
+			require.NoError(t, json.Unmarshal(body, &request))
+			mapping, changed, err := AdaptResponsesToolSearch(request)
+			require.NoError(t, err)
+			require.True(t, changed)
+			require.False(t, mapping.ToolSearch, "history alone must not change current response restoration")
+			encoded, err := json.Marshal(request)
+			require.NoError(t, err)
+			beforeTools, afterTools := gjson.GetBytes(body, "tools"), gjson.GetBytes(encoded, "tools")
+			require.Equal(t, beforeTools.Exists(), afterTools.Exists())
+			if beforeTools.Exists() {
+				require.JSONEq(t, beforeTools.Raw, afterTools.Raw)
+			}
+			require.Equal(t, "function_call", gjson.GetBytes(encoded, "input.0.type").String())
+			require.Equal(t, "fc_history", gjson.GetBytes(encoded, "input.0.id").String())
+			require.Equal(t, "function_call_output", gjson.GetBytes(encoded, "input.1.type").String())
+			require.Equal(t, "search_pair", gjson.GetBytes(encoded, "input.1.call_id").String())
+			_, changed, err = AdaptResponsesToolSearch(request)
+			require.NoError(t, err)
+			require.False(t, changed, "normalization must be idempotent")
+
+			// The general adapter used by other providers retains its policy.
+			require.NoError(t, json.Unmarshal(body, &request))
+			_, changed, err = AdaptResponsesClientTools(request)
+			require.NoError(t, err)
+			require.False(t, changed)
+		})
+	}
+}
+
+func TestAdaptResponsesToolSearchPreservesHostedHistory(t *testing.T) {
+	for _, declaration := range []string{"", `"tools":[],`, `"tools":[{"type":"tool_search","execution":"client"}],`} {
+		t.Run(declaration, func(t *testing.T) {
+			body := []byte(`{` + declaration + `"input":[{"type":"tool_search_call","execution":"server","call_id":null,"arguments":{"paths":["lookup"]},"status":"completed"},{"type":"tool_search_output","execution":"server","call_id":null,"status":"completed","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}]}`)
+			var request map[string]any
+			require.NoError(t, json.Unmarshal(body, &request))
+			_, _, err := AdaptResponsesToolSearch(request)
+			require.NoError(t, err)
+			encoded, err := json.Marshal(request)
+			require.NoError(t, err)
+			require.JSONEq(t, gjson.GetBytes(body, "input").Raw, gjson.GetBytes(encoded, "input").Raw)
+		})
+	}
+}
