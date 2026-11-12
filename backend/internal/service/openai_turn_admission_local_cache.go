@@ -51,7 +51,7 @@ func (s *OpenAIGatewayService) openAITurnAdmissionCacheTTL() time.Duration {
 	if s == nil || s.cfg == nil {
 		return 0
 	}
-	return time.Duration(s.cfg.Gateway.Scheduling.OpenAITurnAdmissionCacheTTLSeconds) * time.Second
+	return time.Duration(s.cfg.RequestGateway().Scheduling.OpenAITurnAdmissionCacheTTLSeconds) * time.Second
 }
 
 func cloneOpenAITurnAdmissionAccount(account *Account) *Account {

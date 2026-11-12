@@ -99,7 +99,7 @@ func (s *GeminiQuotaService) Policy(ctx context.Context) *GeminiQuotaPolicy {
 
 	now := time.Now()
 	s.mu.Lock()
-	if s.policy != nil && now.Sub(s.cachedAt) < geminiQuotaCacheTTL {
+	if !s.cfg.IsSecondary() && s.policy != nil && now.Sub(s.cachedAt) < geminiQuotaCacheTTL {
 		policy := s.policy
 		s.mu.Unlock()
 		return policy
@@ -108,9 +108,9 @@ func (s *GeminiQuotaService) Policy(ctx context.Context) *GeminiQuotaPolicy {
 
 	policy := newGeminiQuotaPolicy()
 	if s.cfg != nil {
-		policy.ApplyOverrides(s.cfg.Gemini.Quota.Tiers)
-		if strings.TrimSpace(s.cfg.Gemini.Quota.Policy) != "" {
-			raw := []byte(s.cfg.Gemini.Quota.Policy)
+		policy.ApplyOverrides(s.cfg.RequestGemini().Quota.Tiers)
+		if strings.TrimSpace(s.cfg.RequestGemini().Quota.Policy) != "" {
+			raw := []byte(s.cfg.RequestGemini().Quota.Policy)
 			var overridesV2 geminiQuotaOverridesV2
 			if err := json.Unmarshal(raw, &overridesV2); err == nil && len(overridesV2.QuotaRules) > 0 {
 				policy.ApplyQuotaRulesOverrides(overridesV2.QuotaRules)

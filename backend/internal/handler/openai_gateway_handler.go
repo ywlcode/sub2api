@@ -651,8 +651,8 @@ func NewOpenAIGatewayHandler(
 	maxAccountSwitches := 3
 	if cfg != nil {
 		pingInterval = time.Duration(cfg.Concurrency.PingInterval) * time.Second
-		if cfg.Gateway.MaxAccountSwitches > 0 {
-			maxAccountSwitches = cfg.Gateway.MaxAccountSwitches
+		if cfg.RequestGateway().MaxAccountSwitches > 0 {
+			maxAccountSwitches = cfg.RequestGateway().MaxAccountSwitches
 		}
 	}
 	return &OpenAIGatewayHandler{
@@ -1479,7 +1479,7 @@ func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, sta
 		zap.Int("status_code", status),
 		zap.Int64("latency_ms", latencyMs),
 		zap.String("path", path),
-		zap.Bool("force_codex_cli", h != nil && h.cfg != nil && h.cfg.Gateway.ForceCodexCLI),
+		zap.Bool("force_codex_cli", h != nil && h.cfg != nil && h.cfg.RequestGateway().ForceCodexCLI),
 	}
 
 	if c != nil {
@@ -2910,7 +2910,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	ctx := clientLifecycleCtx
 	maxIngressConnections := 0
 	if h.cfg != nil {
-		maxIngressConnections = h.cfg.Gateway.OpenAIWS.MaxIngressConnectionsPerAPIKey
+		maxIngressConnections = h.cfg.RequestGateway().OpenAIWS.MaxIngressConnectionsPerAPIKey
 	}
 	ingressLease, ingressLeaseAcquired, ingressLeaseErr := h.concurrencyHelper.AcquireOpenAIWSIngressLease(ctx, apiKey.ID, maxIngressConnections)
 	if ingressLeaseErr != nil {
@@ -4256,7 +4256,7 @@ func (h *OpenAIGatewayHandler) acquireImageGenerationSlot(c *gin.Context, stream
 	if h == nil || h.cfg == nil || h.imageLimiter == nil {
 		return nil, true
 	}
-	imageConcurrency := h.cfg.Gateway.ImageConcurrency
+	imageConcurrency := h.cfg.RequestGateway().ImageConcurrency
 	wait := strings.TrimSpace(imageConcurrency.OverflowMode) == config.ImageConcurrencyOverflowModeWait
 	release, acquired := h.imageLimiter.Acquire(
 		c.Request.Context(),
@@ -4671,10 +4671,10 @@ func (h *OpenAIGatewayHandler) errorResponse(c *gin.Context, status int, errType
 // openAICompactKeepaliveInterval 复用流式 keepalive 配置作为 compact 下游
 // 心跳间隔；0 表示禁用（与流式路径语义一致）。
 func (h *OpenAIGatewayHandler) openAICompactKeepaliveInterval() time.Duration {
-	if h.cfg == nil || h.cfg.Gateway.StreamKeepaliveInterval <= 0 {
+	if h.cfg == nil || h.cfg.RequestGateway().StreamKeepaliveInterval <= 0 {
 		return 0
 	}
-	return time.Duration(h.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+	return time.Duration(h.cfg.RequestGateway().StreamKeepaliveInterval) * time.Second
 }
 
 func setOpenAIClientTransportHTTP(c *gin.Context) {

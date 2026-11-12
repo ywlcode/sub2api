@@ -114,7 +114,7 @@ func (s *SubscriptionService) Stop() {
 
 // initSubCache 初始化订阅 L1 缓存
 func (s *SubscriptionService) initSubCache(cfg *config.Config) {
-	if cfg == nil {
+	if cfg == nil || cfg.IsSecondary() {
 		return
 	}
 	sc := cfg.SubscriptionCache

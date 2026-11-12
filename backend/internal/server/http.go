@@ -3,6 +3,7 @@ package server
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"github.com/Wei-Shaw/sub2api/internal/serverless"
 	"log"
@@ -52,6 +53,11 @@ func ProvideRouter(
 	compositeResolver *service.CompositeRouteResolver,
 	redisClient *redis.Client,
 	lifecycle *Lifecycle,
+	db *sql.DB,
+	billingCache *service.BillingCacheService,
+	channels *service.ChannelService,
+	pricing *service.PricingService,
+	errorPassthrough *service.ErrorPassthroughService,
 ) *gin.Engine {
 	if cfg.Server.Mode == "release" {
 		gin.SetMode(gin.ReleaseMode)
@@ -129,7 +135,10 @@ func ProvideRouter(
 		}
 	}
 	r.GET("/internal/serverless/probe", manager.ProbeHandler)
-	return SetupRouter(r, handlers, jwtAuth, optionalJWTAuth, adminAuth, apiKeyAuth, auditLog, stepUpAuth, apiKeyService, subscriptionService, opsService, settingService, compositeResolver, cfg, redisClient)
+	siteIngress, siteRecorder, startSites := configureSites(r, cfg, lifecycle, db, apiKeyService, billingCache, channels, pricing, errorPassthrough, settingService, opsService, handlers)
+	router := SetupRouter(r, handlers, jwtAuth, optionalJWTAuth, adminAuth, apiKeyAuth, auditLog, stepUpAuth, apiKeyService, subscriptionService, opsService, settingService, compositeResolver, cfg, redisClient, siteIngress, siteRecorder)
+	startSites()
+	return router
 }
 
 func configureTrustedProxies(r *gin.Engine, cfg config.ServerConfig) {
@@ -182,9 +191,21 @@ func ProvideHTTPServer(cfg *config.Config, router *gin.Engine, lifecycle *Lifecy
 
 	globalMaxSize := cfg.Server.MaxRequestBodySize
 	if globalMaxSize <= 0 {
-		globalMaxSize = cfg.Gateway.MaxBodySize
+		globalMaxSize = cfg.RequestGateway().MaxBodySize
 	}
-	if globalMaxSize > 0 {
+	if cfg.IsSecondary() && cfg.Server.MaxRequestBodySize <= 0 {
+		// An explicit server cap is node-local. Its gateway fallback must follow
+		// the primary policy, including increases after the first sync.
+		next := httpHandler
+		httpHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if limit := cfg.RequestGateway().MaxBodySize; limit > 0 {
+				http.MaxBytesHandler(next, limit).ServeHTTP(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+		log.Printf("Global max request body size follows synchronized gateway policy")
+	} else if globalMaxSize > 0 {
 		httpHandler = http.MaxBytesHandler(httpHandler, globalMaxSize)
 		log.Printf("Global max request body size: %d bytes (%.2f MB)", globalMaxSize, float64(globalMaxSize)/(1<<20))
 	}

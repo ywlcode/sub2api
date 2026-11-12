@@ -85,11 +85,11 @@ func NewGatewayHandler(
 	maxAccountSwitchesGemini := 3
 	if cfg != nil {
 		pingInterval = time.Duration(cfg.Concurrency.PingInterval) * time.Second
-		if cfg.Gateway.MaxAccountSwitches > 0 {
-			maxAccountSwitches = cfg.Gateway.MaxAccountSwitches
+		if cfg.RequestGateway().MaxAccountSwitches > 0 {
+			maxAccountSwitches = cfg.RequestGateway().MaxAccountSwitches
 		}
-		if cfg.Gateway.MaxAccountSwitchesGemini > 0 {
-			maxAccountSwitchesGemini = cfg.Gateway.MaxAccountSwitchesGemini
+		if cfg.RequestGateway().MaxAccountSwitchesGemini > 0 {
+			maxAccountSwitchesGemini = cfg.RequestGateway().MaxAccountSwitchesGemini
 		}
 	}
 
@@ -2482,7 +2482,7 @@ func (h *GatewayHandler) metadataBridgeEnabled() bool {
 	if h == nil || h.cfg == nil {
 		return true
 	}
-	return h.cfg.Gateway.OpenAIWS.MetadataBridgeEnabled
+	return h.cfg.RequestGateway().OpenAIWS.MetadataBridgeEnabled
 }
 
 func (h *GatewayHandler) maybeLogCompatibilityFallbackMetrics(reqLog *zap.Logger) {

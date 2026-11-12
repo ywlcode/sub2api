@@ -41,8 +41,8 @@ type cachedOpenAIResponseHeaderTimeoutSettings struct {
 func DefaultOpenAIResponseHeaderTimeoutSettings(cfg *config.Config) *OpenAIResponseHeaderTimeoutSettings {
 	seconds := openAIResponseHeaderTimeoutDefaultSeconds
 	enabled := false
-	if cfg != nil && cfg.Gateway.OpenAIResponseHeaderTimeout > 0 {
-		seconds = cfg.Gateway.OpenAIResponseHeaderTimeout
+	if cfg != nil && cfg.RequestGateway().OpenAIResponseHeaderTimeout > 0 {
+		seconds = cfg.RequestGateway().OpenAIResponseHeaderTimeout
 		enabled = true
 	}
 	return &OpenAIResponseHeaderTimeoutSettings{Enabled: enabled, Seconds: seconds}

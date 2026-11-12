@@ -9,12 +9,18 @@ import (
 	"strings"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
 type usageBillingRepository struct {
-	db *sql.DB
+	db        *sql.DB
+	secondary bool
+}
+
+func ProvideUsageBillingRepository(_ *dbent.Client, db *sql.DB, cfg *config.Config) service.UsageBillingRepository {
+	return &usageBillingRepository{db: db, secondary: cfg.IsSecondary()}
 }
 
 func NewUsageBillingRepository(_ *dbent.Client, sqlDB *sql.DB) service.UsageBillingRepository {

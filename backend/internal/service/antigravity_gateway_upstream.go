@@ -171,8 +171,8 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
-	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
+	if s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().MaxLineSize > 0 {
+		maxLineSize = s.settingService.cfg.RequestGateway().MaxLineSize
 	}
 	scanner.Buffer(make([]byte, 64*1024), maxLineSize)
 
@@ -207,8 +207,8 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 	defer close(done)
 
 	streamInterval := time.Duration(0)
-	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.settingService.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	if s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().StreamDataIntervalTimeout > 0 {
+		streamInterval = time.Duration(s.settingService.cfg.RequestGateway().StreamDataIntervalTimeout) * time.Second
 	}
 	var intervalTicker *time.Ticker
 	if streamInterval > 0 {
@@ -222,8 +222,8 @@ func (s *AntigravityGatewayService) streamUpstreamResponse(c *gin.Context, resp 
 
 	// 下游 keepalive：防止代理/Cloudflare Tunnel 因连接空闲而断开
 	keepaliveInterval := time.Duration(0)
-	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.StreamKeepaliveInterval > 0 {
-		keepaliveInterval = time.Duration(s.settingService.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+	if s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().StreamKeepaliveInterval > 0 {
+		keepaliveInterval = time.Duration(s.settingService.cfg.RequestGateway().StreamKeepaliveInterval) * time.Second
 	}
 	var keepaliveTicker *time.Ticker
 	if keepaliveInterval > 0 {

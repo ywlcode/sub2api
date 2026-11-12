@@ -1,5 +1,9 @@
 export default {
     accounts: {
+      secondaryProcessing: {
+        title: 'Allow direct processing on secondary sites',
+        hint: 'Allow paired secondary sites to use this account and its supported models. The primary can still use it. Changes sync automatically; the upstream must be reachable from secondary sites.'
+      },
       requestGzip: {
         title: 'Gzip request bodies',
         hint: 'Off by default. Enable only when the upstream accepts gzip request bodies. Compresses JSON HTTP requests of at least 1 KiB when compression reduces their size. Does not apply to WebSocket or file uploads.'

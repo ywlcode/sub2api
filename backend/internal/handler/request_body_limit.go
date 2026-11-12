@@ -37,5 +37,5 @@ func gatewayMaxBodySize(cfg *config.Config) int64 {
 	if cfg == nil {
 		return 0
 	}
-	return cfg.Gateway.MaxBodySize
+	return cfg.RequestGateway().MaxBodySize
 }

@@ -934,8 +934,8 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	scanner := s.newUpstreamSSEScanner(resp.Body)
 
 	streamInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	if s.cfg != nil && s.cfg.RequestGateway().StreamDataIntervalTimeout > 0 {
+		streamInterval = time.Duration(s.cfg.RequestGateway().StreamDataIntervalTimeout) * time.Second
 	}
 	var intervalTicker *time.Ticker
 	if streamInterval > 0 {
@@ -1261,8 +1261,8 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 
 	// Determine keepalive interval
 	keepaliveInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
-		keepaliveInterval = time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+	if s.cfg != nil && s.cfg.RequestGateway().StreamKeepaliveInterval > 0 {
+		keepaliveInterval = time.Duration(s.cfg.RequestGateway().StreamKeepaliveInterval) * time.Second
 	}
 
 	// No keepalive: fast synchronous path

@@ -1079,8 +1079,8 @@ func (s *httpUpstreamService) applyProfilePoolSettings(settings poolSettings, pr
 			if seconds, enabled := s.openAIResponseHeaderTimeoutProvider.GetOpenAIResponseHeaderTimeoutCached(context.Background()); enabled && seconds > 0 {
 				settings.responseHeaderTimeout = time.Duration(seconds) * time.Second
 			}
-		} else if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIResponseHeaderTimeout > 0 {
-			settings.responseHeaderTimeout = time.Duration(s.cfg.Gateway.OpenAIResponseHeaderTimeout) * time.Second
+		} else if s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIResponseHeaderTimeout > 0 {
+			settings.responseHeaderTimeout = time.Duration(s.cfg.RequestGateway().OpenAIResponseHeaderTimeout) * time.Second
 		}
 	case service.HTTPUpstreamProfileGrok:
 		// Grok can stall before its first byte under capacity pressure. Keep the
@@ -1088,7 +1088,7 @@ func (s *httpUpstreamService) applyProfilePoolSettings(settings poolSettings, pr
 		// resource hold; streaming after headers is unaffected.
 		settings.responseHeaderTimeout = 120 * time.Second
 		if s != nil && s.cfg != nil {
-			settings.responseHeaderTimeout = time.Duration(s.cfg.Gateway.GrokResponseHeaderTimeout) * time.Second
+			settings.responseHeaderTimeout = time.Duration(s.cfg.RequestGateway().GrokResponseHeaderTimeout) * time.Second
 		}
 	}
 	return settings
@@ -1152,7 +1152,7 @@ func (s *httpUpstreamService) resolveOpenAIHTTP2Settings() openAIHTTP2Settings {
 	if s == nil || s.cfg == nil {
 		return settings
 	}
-	cfg := s.cfg.Gateway.OpenAIHTTP2
+	cfg := s.cfg.RequestGateway().OpenAIHTTP2
 	settings.enabled = cfg.Enabled
 	settings.allowProxyFallbackToHTTP1 = cfg.AllowProxyFallbackToHTTP1
 	if cfg.FallbackErrorThreshold > 0 {
@@ -1451,8 +1451,8 @@ func defaultPoolSettings(cfg *config.Config) poolSettings {
 		if cfg.Gateway.IdleConnTimeoutSeconds > 0 {
 			idleConnTimeout = time.Duration(cfg.Gateway.IdleConnTimeoutSeconds) * time.Second
 		}
-		if cfg.Gateway.ResponseHeaderTimeout >= 0 {
-			responseHeaderTimeout = time.Duration(cfg.Gateway.ResponseHeaderTimeout) * time.Second
+		if cfg.RequestGateway().ResponseHeaderTimeout >= 0 {
+			responseHeaderTimeout = time.Duration(cfg.RequestGateway().ResponseHeaderTimeout) * time.Second
 		}
 	}
 

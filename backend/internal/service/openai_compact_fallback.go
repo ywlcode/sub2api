@@ -67,7 +67,7 @@ func (s *OpenAIGatewayService) resolveOpenAICompactFallbackModel(account *Accoun
 	if s == nil || s.cfg == nil {
 		return ""
 	}
-	fallback := strings.TrimSpace(s.cfg.Gateway.OpenAICompactModel)
+	fallback := strings.TrimSpace(s.cfg.RequestGateway().OpenAICompactModel)
 	if fallback == "" {
 		return ""
 	}

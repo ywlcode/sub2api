@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/site"
 	"github.com/dgraph-io/ristretto"
 )
 
@@ -338,6 +339,9 @@ func (s *APIKeyService) loadUserGroupDeniedModels(ctx context.Context, apiKey *A
 func (s *APIKeyService) lookupAPIKeyForAuth(ctx context.Context, key string) (*APIKey, error) {
 	if s == nil || s.apiKeyRepo == nil {
 		return nil, ErrAPIKeyNotFound
+	}
+	if s.cfg.IsSecondary() {
+		key = site.KeyDigest(s.cfg.Site.Token, key)
 	}
 	if s.authLookupSlots == nil {
 		return s.apiKeyRepo.GetByKeyForAuth(ctx, key)

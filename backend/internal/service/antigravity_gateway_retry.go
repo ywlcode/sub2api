@@ -1286,8 +1286,8 @@ func (s *AntigravityGatewayService) handleUpstreamError(
 // getDefaultRateLimitDuration 获取默认限流时间
 func (s *AntigravityGatewayService) getDefaultRateLimitDuration() time.Duration {
 	defaultDur := antigravityDefaultRateLimitDuration
-	if s.settingService != nil && s.settingService.cfg != nil && s.settingService.cfg.Gateway.AntigravityFallbackCooldownMinutes > 0 {
-		defaultDur = time.Duration(s.settingService.cfg.Gateway.AntigravityFallbackCooldownMinutes) * time.Minute
+	if s.settingService != nil && s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().AntigravityFallbackCooldownMinutes > 0 {
+		defaultDur = time.Duration(s.settingService.cfg.RequestGateway().AntigravityFallbackCooldownMinutes) * time.Minute
 	}
 	if override, ok := antigravityFallbackCooldownSeconds(); ok {
 		defaultDur = override

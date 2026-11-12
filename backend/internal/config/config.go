@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/upstreamroute"
+	"github.com/Wei-Shaw/sub2api/internal/site"
 	"github.com/spf13/viper"
 	"golang.org/x/net/http/httpguts"
 )
@@ -68,6 +69,9 @@ const DefaultUpstreamResponseReadMaxBytes int64 = 128 * 1024 * 1024
 const DefaultModelsListReadMaxBytes int64 = 8 * 1024 * 1024
 
 type Config struct {
+	siteRequestPolicy       atomic.Pointer[siteRequestRuntime]
+	siteRateMultiplier      atomic.Pointer[float64]
+	Site                    site.Config   `mapstructure:"site"`
 	Runtime                 RuntimeConfig `mapstructure:"runtime"`
 	astraRoutingLoader      atomic.Pointer[astraRoutingLoader]
 	Server                  ServerConfig                  `mapstructure:"server"`
@@ -2298,6 +2302,12 @@ func configureConfigSource(setConfigFile, addConfigPath func(string)) {
 func setDefaults() {
 	viper.SetDefault("gateway.upstream_routing.enabled", false)
 	viper.SetDefault("runtime.role", RuntimeRoleFull)
+	viper.SetDefault("site.mode", site.Standalone)
+	viper.SetDefault("site.id", "")
+	viper.SetDefault("site.primary_url", "")
+	viper.SetDefault("site.token", "")
+	viper.SetDefault("site.allow_http", false)
+	viper.SetDefault("site.peers", []site.Peer{})
 	viper.SetDefault("runtime.node_id", "")
 	viper.SetDefault("runtime.image_relay_owner_origin", "")
 	viper.SetDefault("runtime.ws_node_owner.enabled", false)

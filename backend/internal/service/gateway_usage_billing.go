@@ -853,7 +853,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	ctx = withModelBillingConfig(ctx, s.settingService)
 	multiplier := 1.0
 	if s.cfg != nil {
-		multiplier = s.cfg.Default.RateMultiplier
+		multiplier = s.cfg.DefaultUsageRateMultiplier()
 	}
 	if apiKey.GroupID != nil && apiKey.Group != nil {
 		groupDefault := apiKey.Group.RateMultiplier
@@ -1009,7 +1009,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 func (s *GatewayService) recordUsageMultipliers(ctx context.Context, apiKey *APIKey, user *User, pricingAt time.Time, accounts ...*Account) (float64, float64, time.Time) {
 	multiplier := 1.0
 	if s.cfg != nil {
-		multiplier = s.cfg.Default.RateMultiplier
+		multiplier = s.cfg.DefaultUsageRateMultiplier()
 	}
 	if apiKey.GroupID != nil && apiKey.Group != nil {
 		multiplier = apiKey.Group.RateMultiplier

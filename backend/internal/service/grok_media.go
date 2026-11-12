@@ -313,8 +313,8 @@ func (s *OpenAIGatewayService) BindGrokMediaVideoRequestAccount(
 	// Video jobs may complete well after WS sticky TTL (default 1h). Bind at least
 	// as long as the pending-billing snapshot so late status/content polls resolve.
 	ttl := grokVideoPendingBillingTTL(s.cfg)
-	if s.cfg != nil && s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds > 0 {
-		if sticky := time.Duration(s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds) * time.Second; sticky > ttl {
+	if s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.StickySessionTTLSeconds > 0 {
+		if sticky := time.Duration(s.cfg.RequestGateway().OpenAIWS.StickySessionTTLSeconds) * time.Second; sticky > ttl {
 			ttl = sticky
 		}
 	}

@@ -82,28 +82,28 @@ func openAIWSHTTPBridgeToolUpstreamName(account *Account) string {
 // ResolveOpenAIWSClientFirstMessageTimeout returns the effective client ingress deadline.
 func ResolveOpenAIWSClientFirstMessageTimeout(cfg *config.Config) time.Duration {
 	seconds := config.DefaultOpenAIWSClientFirstMessageTimeoutSeconds
-	if cfg != nil && cfg.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds > 0 {
-		seconds = cfg.Gateway.OpenAIWS.ClientFirstMessageTimeoutSeconds
+	if cfg != nil && cfg.RequestGateway().OpenAIWS.ClientFirstMessageTimeoutSeconds > 0 {
+		seconds = cfg.RequestGateway().OpenAIWS.ClientFirstMessageTimeoutSeconds
 	}
 	return time.Duration(seconds) * time.Second
 }
 
 func ResolveOpenAIWSClientReadLimitBytes(cfg *config.Config) int64 {
-	if cfg == nil || cfg.Gateway.OpenAIWS.ClientReadLimitBytes <= 0 {
+	if cfg == nil || cfg.RequestGateway().OpenAIWS.ClientReadLimitBytes <= 0 {
 		return openAIWSClientReadLimitBytesDefault
 	}
-	return cfg.Gateway.OpenAIWS.ClientReadLimitBytes
+	return cfg.RequestGateway().OpenAIWS.ClientReadLimitBytes
 }
 
 func (s *OpenAIGatewayService) openAIWSHTTPBridgeEnabled() bool {
-	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.HTTPBridgeEnabled
+	return s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.HTTPBridgeEnabled
 }
 
 func (s *OpenAIGatewayService) openAIWSHTTPBridgeThresholdBytes() int64 {
-	if s == nil || s.cfg == nil || s.cfg.Gateway.OpenAIWS.HTTPBridgeThresholdBytes <= 0 {
+	if s == nil || s.cfg == nil || s.cfg.RequestGateway().OpenAIWS.HTTPBridgeThresholdBytes <= 0 {
 		return openAIWSHTTPBridgeThresholdBytesDefault
 	}
-	return s.cfg.Gateway.OpenAIWS.HTTPBridgeThresholdBytes
+	return s.cfg.RequestGateway().OpenAIWS.HTTPBridgeThresholdBytes
 }
 
 func (s *OpenAIGatewayService) shouldBridgeOpenAIWSHTTP(account *Account, payloadBytes int, previousResponseID string) bool {
@@ -783,8 +783,8 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	}
 
 	maxLineSize := defaultMaxLineSize
-	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.cfg.Gateway.MaxLineSize
+	if s.cfg != nil && s.cfg.RequestGateway().MaxLineSize > 0 {
+		maxLineSize = s.cfg.RequestGateway().MaxLineSize
 	}
 	if hasResponsesClientToolMapping(clientToolMapping) {
 		resp.Body = newResponsesClientToolStreamBody(resp.Body, clientToolMapping, maxLineSize)

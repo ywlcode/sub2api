@@ -78,14 +78,14 @@ func (s *OpenAIGatewayService) openAISessionHashReadOldFallbackEnabled() bool {
 	if s == nil || s.cfg == nil {
 		return true
 	}
-	return s.cfg.Gateway.OpenAIWS.SessionHashReadOldFallback
+	return s.cfg.RequestGateway().OpenAIWS.SessionHashReadOldFallback
 }
 
 func (s *OpenAIGatewayService) openAISessionHashDualWriteOldEnabled() bool {
 	if s == nil || s.cfg == nil {
 		return true
 	}
-	return s.cfg.Gateway.OpenAIWS.SessionHashDualWriteOld
+	return s.cfg.RequestGateway().OpenAIWS.SessionHashDualWriteOld
 }
 
 func (s *OpenAIGatewayService) openAISessionCacheKey(sessionHash string) string {

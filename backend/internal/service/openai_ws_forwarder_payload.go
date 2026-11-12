@@ -185,7 +185,7 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 			headers.Set("user-agent", ua)
 		}
 	}
-	if s != nil && s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().ForceCodexCLI {
 		headers.Set("user-agent", CodexCanonicalUserAgent())
 	}
 	// 终态收口：WS 握手与 HTTP 出站共用同一套身份语义，账号级自定义 UA 同样作为
@@ -268,7 +268,7 @@ func (s *OpenAIGatewayService) isOpenAIWSStoreRecoveryAllowed(account *Account) 
 	if account != nil && account.IsOpenAIWSAllowStoreRecoveryEnabled() {
 		return true
 	}
-	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.AllowStoreRecovery {
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.AllowStoreRecovery {
 		return true
 	}
 	return false
@@ -313,13 +313,13 @@ func (s *OpenAIGatewayService) openAIWSStoreDisabledConnMode() string {
 	if s == nil || s.cfg == nil {
 		return openAIWSStoreDisabledConnModeStrict
 	}
-	mode := strings.ToLower(strings.TrimSpace(s.cfg.Gateway.OpenAIWS.StoreDisabledConnMode))
+	mode := strings.ToLower(strings.TrimSpace(s.cfg.RequestGateway().OpenAIWS.StoreDisabledConnMode))
 	switch mode {
 	case openAIWSStoreDisabledConnModeStrict, openAIWSStoreDisabledConnModeAdaptive, openAIWSStoreDisabledConnModeOff:
 		return mode
 	case "":
 		// 兼容旧配置：仅配置了布尔开关时按旧语义推导。
-		if s.cfg.Gateway.OpenAIWS.StoreDisabledForceNewConn {
+		if s.cfg.RequestGateway().OpenAIWS.StoreDisabledForceNewConn {
 			return openAIWSStoreDisabledConnModeStrict
 		}
 		return openAIWSStoreDisabledConnModeOff

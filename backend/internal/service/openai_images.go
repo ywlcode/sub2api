@@ -1300,17 +1300,17 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 }
 
 func (s *OpenAIGatewayService) openAIImageStreamDataInterval() time.Duration {
-	if s == nil || s.cfg == nil || s.cfg.Gateway.ImageStreamDataIntervalTimeout <= 0 {
+	if s == nil || s.cfg == nil || s.cfg.RequestGateway().ImageStreamDataIntervalTimeout <= 0 {
 		return 0
 	}
-	return time.Duration(s.cfg.Gateway.ImageStreamDataIntervalTimeout) * time.Second
+	return time.Duration(s.cfg.RequestGateway().ImageStreamDataIntervalTimeout) * time.Second
 }
 
 func (s *OpenAIGatewayService) openAIImageStreamKeepaliveInterval() time.Duration {
-	if s == nil || s.cfg == nil || s.cfg.Gateway.ImageStreamKeepaliveInterval <= 0 {
+	if s == nil || s.cfg == nil || s.cfg.RequestGateway().ImageStreamKeepaliveInterval <= 0 {
 		return 0
 	}
-	return time.Duration(s.cfg.Gateway.ImageStreamKeepaliveInterval) * time.Second
+	return time.Duration(s.cfg.RequestGateway().ImageStreamKeepaliveInterval) * time.Second
 }
 
 func extractOpenAIImagesBillableCountFromJSONBytes(body []byte) int {

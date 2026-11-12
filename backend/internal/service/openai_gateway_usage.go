@@ -161,6 +161,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if result == nil {
 		return errors.New("openai usage result is nil")
 	}
+	if s.cfg.IsSecondary() && (result.UsageUnavailable || (result.Usage.InputTokens == 0 && result.Usage.OutputTokens == 0 && result.Usage.CacheReadInputTokens == 0 && result.Usage.CacheCreationInputTokens == 0 && result.ImageCount == 0 && result.VideoCount == 0 && result.AudioUsage == nil && result.SearchCount == 0 && result.WebSearchCalls == 0 && result.MiniMaxH3BaseCost == nil)) {
+		return recordSiteUsageIssue(ctx, s.usageBillingRepo, input.APIKey, input.Account, result.RequestID, result.Model, "upstream_usage_unavailable")
+	}
 	if result.RegionalMetered {
 		return nil
 	}
@@ -216,7 +219,7 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	// Get rate multiplier
 	multiplier := 1.0
 	if s.cfg != nil {
-		multiplier = s.cfg.Default.RateMultiplier
+		multiplier = s.cfg.DefaultUsageRateMultiplier()
 	}
 	if apiKey.GroupID != nil && apiKey.Group != nil {
 		multiplier = s.ResolveUserGroupRateMultiplier(ctx, user.ID, *apiKey.GroupID, apiKey.Group.RateMultiplier)
@@ -298,6 +301,9 @@ func (s *OpenAIGatewayService) RecordUsage(ctx context.Context, input *OpenAIRec
 	if err != nil {
 		if !isUsagePricingUnavailableError(err) {
 			return err
+		}
+		if s.cfg.IsSecondary() {
+			return recordSiteUsageIssue(ctx, s.usageBillingRepo, apiKey, account, result.RequestID, result.Model, "pricing_unavailable")
 		}
 		logger.L().With(
 			zap.String("component", "service.openai_gateway"),

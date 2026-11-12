@@ -542,7 +542,7 @@ func ProvideConcurrencyService(cache ConcurrencyCache, accountRepo AccountReposi
 	// This scans shared expired-slot indexes, not this process's live requests.
 	// Keep request leases and regional runtime active on every role; let full
 	// nodes maintain the shared backlog instead of repeating scans per gateway.
-	if cfg.RunsBackgroundJobs() {
+	if cfg.RunsBackgroundJobs() || cfg.IsSecondary() {
 		if err := svc.CleanupStaleProcessSlots(context.Background()); err != nil {
 			logger.LegacyPrintf("service.concurrency", "Warning: startup cleanup stale process slots failed: %v", err)
 		}
@@ -552,9 +552,9 @@ func ProvideConcurrencyService(cache ConcurrencyCache, accountRepo AccountReposi
 			MaxWaiting: cfg.Gateway.APIKeyQueue.MaxWaiting,
 			Timeout:    cfg.Gateway.APIKeyQueue.Timeout(),
 		})
-		svc.SetAccountLoadBatchCacheTTL(time.Duration(cfg.Gateway.Scheduling.LoadBatchCacheTTLMS) * time.Millisecond)
-		if cfg.RunsBackgroundJobs() {
-			svc.StartSlotCleanupWorker(accountRepo, cfg.Gateway.Scheduling.SlotCleanupInterval)
+		svc.SetAccountLoadBatchCacheTTL(time.Duration(cfg.RequestGateway().Scheduling.LoadBatchCacheTTLMS) * time.Millisecond)
+		if cfg.RunsBackgroundJobs() || cfg.IsSecondary() {
+			svc.StartSlotCleanupWorker(accountRepo, cfg.RequestGateway().Scheduling.SlotCleanupInterval)
 		}
 	}
 	return svc
@@ -1013,7 +1013,7 @@ func ProvideAPIKeyService(
 			svc.localAuth = reader
 		}
 	}
-	if cfg == nil || cfg.Runtime.Role != config.RuntimeRoleGateway {
+	if cfg.RunsBackgroundJobs() {
 		svc.SetAutoCredit(autoCredit, billingCacheService)
 	}
 	return svc, nil

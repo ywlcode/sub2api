@@ -9,7 +9,13 @@ import (
 
 // RequestBodyLimit 使用 MaxBytesReader 限制请求体大小。
 func RequestBodyLimit(maxBytes int64) gin.HandlerFunc {
+	return RequestBodyLimitFrom(func() int64 { return maxBytes })
+}
+
+// RequestBodyLimitFrom reads an immutable live policy once per request.
+func RequestBodyLimitFrom(limit func() int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		maxBytes := limit()
 		defer func() { requestmodel.Release(c.Request) }()
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
 		c.Next()

@@ -155,8 +155,8 @@ func (p *anthropicNativeLinePump) stop() {
 // anthropicNativeStreamInterval 返回 Anthropic 上游协议转换路径适用的读间隔上限；
 // gateway.stream_data_interval_timeout <= 0 时视为禁用。
 func anthropicNativeStreamInterval(cfg *config.Config) time.Duration {
-	if cfg != nil && cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		return time.Duration(cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	if cfg != nil && cfg.RequestGateway().StreamDataIntervalTimeout > 0 {
+		return time.Duration(cfg.RequestGateway().StreamDataIntervalTimeout) * time.Second
 	}
 	return 0
 }

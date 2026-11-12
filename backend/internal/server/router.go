@@ -36,6 +36,8 @@ func SetupRouter(
 	compositeResolver *service.CompositeRouteResolver,
 	cfg *config.Config,
 	redisClient *redis.Client,
+	siteIngress gin.HandlerFunc,
+	siteRecorder middleware2.ConnectionTraceRecorder,
 ) *gin.Engine {
 	middleware2.SetIngressRejectRecorder(opsService)
 	// 缓存 iframe 页面的 origin 列表，用于动态注入 CSP frame-src
@@ -65,7 +67,16 @@ func SetupRouter(
 	if handlers.Admin != nil && handlers.Admin.Usage != nil {
 		connectionRecorder = handlers.Admin.Usage
 	}
+	if siteRecorder != nil {
+		connectionRecorder = siteRecorder
+	}
 	r.Use(middleware2.RequestTiming(connectionRecorder))
+	// Collect upload time before model inspection consumes the request body;
+	// keep proxy failures/expired replicas visible without authenticating GPT
+	// twice or waiting for a primary RPC on the domestic request path.
+	if siteIngress != nil {
+		r.Use(siteIngress)
+	}
 	r.Use(middleware2.CORS(cfg.CORS))
 	r.Use(middleware2.SecurityHeaders(cfg.Security.CSP, func() []string {
 		if p := cachedFrameOrigins.Load(); p != nil {
@@ -125,7 +136,7 @@ func registerRoutes(
 ) {
 	// 通用路由（健康检查、状态等）
 	routes.RegisterCommonRoutes(r)
-	if cfg.Runtime.Role == config.RuntimeRoleGateway {
+	if cfg.Runtime.Role == config.RuntimeRoleGateway || cfg.IsSecondary() {
 		if cfg.Runtime.RegionalSchedulerFile != "" || cfg.Runtime.RegionalAuthFile != "" {
 			if cfg.Runtime.RegionalAuthFile != "" {
 				r.Use(middleware2.RegionalAPIKeyAuth(apiKeyService, cfg))

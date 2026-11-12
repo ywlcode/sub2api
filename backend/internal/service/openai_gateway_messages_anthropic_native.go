@@ -367,8 +367,8 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
-	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.cfg.Gateway.MaxLineSize
+	if s.cfg != nil && s.cfg.RequestGateway().MaxLineSize > 0 {
+		maxLineSize = s.cfg.RequestGateway().MaxLineSize
 	}
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
@@ -405,8 +405,8 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	defer close(done)
 
 	streamInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	if s.cfg != nil && s.cfg.RequestGateway().StreamDataIntervalTimeout > 0 {
+		streamInterval = time.Duration(s.cfg.RequestGateway().StreamDataIntervalTimeout) * time.Second
 	}
 	var intervalTicker *time.Ticker
 	if streamInterval > 0 {
@@ -419,8 +419,8 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	}
 
 	keepaliveInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
-		keepaliveInterval = time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+	if s.cfg != nil && s.cfg.RequestGateway().StreamKeepaliveInterval > 0 {
+		keepaliveInterval = time.Duration(s.cfg.RequestGateway().StreamKeepaliveInterval) * time.Second
 	}
 	var keepaliveTimer *time.Timer
 	if keepaliveInterval > 0 {

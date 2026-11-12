@@ -750,7 +750,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 	if resp.StatusCode >= 400 {
 		// 可选：对部分 400 触发 failover（默认关闭以保持语义）
-		if resp.StatusCode == 400 && s.cfg != nil && s.cfg.Gateway.FailoverOn400 {
+		if resp.StatusCode == 400 && s.cfg != nil && s.cfg.RequestGateway().FailoverOn400 {
 			respBody, readErr := s.readUpstreamErrorBody(resp)
 			if readErr != nil {
 				// ReadAll failed, fall back to normal error handling without consuming the stream

@@ -1222,8 +1222,8 @@ func normalizeVisibleMethodSettingSource(method, source string, enabled bool) (s
 }
 
 func (s *SettingService) openAIAdvancedSchedulerEffectiveLBTopK() string {
-	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.LBTopK > 0 {
-		return strconv.Itoa(s.cfg.Gateway.OpenAIWS.LBTopK)
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.LBTopK > 0 {
+		return strconv.Itoa(s.cfg.RequestGateway().OpenAIWS.LBTopK)
 	}
 	return "7"
 }
@@ -1245,7 +1245,7 @@ func (s *SettingService) openAIAdvancedSchedulerEffectiveWeights() config.Gatewa
 		return defaults
 	}
 
-	weights := s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights
+	weights := s.cfg.RequestGateway().OpenAIWS.SchedulerScoreWeights
 	if !weights.IsValid() {
 		return defaults
 	}

@@ -760,8 +760,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	scanner := bufio.NewScanner(resp.Body)
 	// 设置更大的buffer以处理长行
 	maxLineSize := defaultMaxLineSize
-	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.cfg.Gateway.MaxLineSize
+	if s.cfg != nil && s.cfg.RequestGateway().MaxLineSize > 0 {
+		maxLineSize = s.cfg.RequestGateway().MaxLineSize
 	}
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
@@ -799,8 +799,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 	defer close(done)
 
 	streamInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	if s.cfg != nil && s.cfg.RequestGateway().StreamDataIntervalTimeout > 0 {
+		streamInterval = time.Duration(s.cfg.RequestGateway().StreamDataIntervalTimeout) * time.Second
 	}
 	// 仅监控上游数据间隔超时，避免下游写入阻塞导致误判
 	var intervalTicker *time.Ticker
@@ -815,8 +815,8 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 
 	// 下游 keepalive：防止代理/Cloudflare Tunnel 因连接空闲而断开
 	keepaliveInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
-		keepaliveInterval = time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+	if s.cfg != nil && s.cfg.RequestGateway().StreamKeepaliveInterval > 0 {
+		keepaliveInterval = time.Duration(s.cfg.RequestGateway().StreamKeepaliveInterval) * time.Second
 	}
 	var keepaliveTimer *time.Timer
 	if keepaliveInterval > 0 {

@@ -40,7 +40,7 @@ func (s *SettingService) SetAstraRouting(ctx context.Context, value config.Astra
 		return value, err
 	}
 	if value.WSSession.Enabled && s.cfg != nil {
-		ws := s.cfg.Gateway.OpenAIWS
+		ws := s.cfg.RequestGateway().OpenAIWS
 		if ws.ForceHTTP || !ws.Enabled || !ws.OAuthEnabled || !ws.ResponsesWebsocketsV2 {
 			return value, fmt.Errorf("astra_global_ws_disabled")
 		}

@@ -543,10 +543,10 @@ func openAIWSRejectedFieldRetryHTTPStatus(message []byte) int {
 }
 
 func (s *OpenAIGatewayService) openAIWSIngressInterTurnIdleTimeout() time.Duration {
-	if s == nil || s.cfg == nil || s.cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds <= 0 {
+	if s == nil || s.cfg == nil || s.cfg.RequestGateway().OpenAIWS.IngressInterTurnIdleTimeoutSeconds <= 0 {
 		return 0
 	}
-	return time.Duration(s.cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds) * time.Second
+	return time.Duration(s.cfg.RequestGateway().OpenAIWS.IngressInterTurnIdleTimeoutSeconds) * time.Second
 }
 
 // newOpenAIWSDownstreamWriteContext binds writes directly to the client
@@ -677,7 +677,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	var smartSession *openAISmartProtocolSession
 	smartStrict := false
 	legacyBridge := forceHTTPBridge
-	if s.cfg != nil && s.cfg.Gateway.OpenAIWS.SmartProtocol.Enabled {
+	if s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.SmartProtocol.Enabled {
 		var decision openAISmartProtocolDecision
 		if value, ok := c.Get(smartProtocolSessionKey); ok {
 			smartSession, _ = value.(*openAISmartProtocolSession)
@@ -712,10 +712,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}()
 	}
-	modeRouterV2Enabled := s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled
+	modeRouterV2Enabled := s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.ModeRouterV2Enabled
 	ingressMode := OpenAIWSIngressModeCtxPool
 	if modeRouterV2Enabled && !forceHTTPBridge {
-		ingressMode = account.ResolveOpenAIResponsesWebSocketV2Mode(s.cfg.Gateway.OpenAIWS.IngressModeDefault)
+		ingressMode = account.ResolveOpenAIResponsesWebSocketV2Mode(s.cfg.RequestGateway().OpenAIWS.IngressModeDefault)
 		if ingressMode == OpenAIWSIngressModeOff {
 			return NewOpenAIWSClientCloseError(
 				coderws.StatusPolicyViolation,
@@ -826,7 +826,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 	}
 	debugEnabled := isOpenAIWSModeDebugEnabled()
-	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
+	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.RequestGateway().ForceCodexCLI)
 
 	type openAIWSClientPayload struct {
 		clientPayloadRaw         []byte

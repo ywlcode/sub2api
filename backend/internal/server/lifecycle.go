@@ -55,7 +55,7 @@ func ProvideLifecycle(cfg *config.Config, db *sql.DB, cache *redis.Client, sched
 		}
 		return cache.Ping(ctx).Err()
 	}, func(ctx context.Context) error {
-		if cfg == nil || !cfg.Runtime.SchedulerReadiness.Enabled {
+		if cfg == nil || cfg.IsSecondary() || !cfg.Runtime.SchedulerReadiness.Enabled {
 			return nil
 		}
 		if scheduler == nil {

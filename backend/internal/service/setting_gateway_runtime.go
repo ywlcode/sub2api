@@ -1009,6 +1009,10 @@ func normalizedCodexClientMarkers(markers []string) map[string]struct{} {
 // 仅在调用方已确认账号 codex_cli_only 开启时读取；进程内 atomic.Value 缓存（60s TTL）避免热路径访问 DB。
 // 任意键缺失/解析失败 → 安全默认：空名单、空版本、默认种子指纹信号。
 func (s *SettingService) GetCodexRestrictionPolicy(ctx context.Context) CodexRestrictionPolicy {
+	if s.cfg.IsSecondary() {
+		s.siteReplicaMu.RLock()
+		defer s.siteReplicaMu.RUnlock()
+	}
 	if cached, ok := s.codexRestrictionPolicyCache.Load().(*cachedCodexRestrictionPolicy); ok && cached != nil {
 		if time.Now().UnixNano() < cached.expiresAt {
 			return cached.value
@@ -1170,6 +1174,10 @@ type gatewayForwardingSettingsResult struct {
 }
 
 func (s *SettingService) getGatewayForwardingSettingsCached(ctx context.Context) gatewayForwardingSettingsResult {
+	if s.cfg.IsSecondary() {
+		s.siteReplicaMu.RLock()
+		defer s.siteReplicaMu.RUnlock()
+	}
 	if cached, ok := gatewayForwardingCache.Load().(*cachedGatewayForwardingSettings); ok && cached != nil {
 		if time.Now().UnixNano() < cached.expiresAt {
 			return gatewayForwardingSettingsResult{
@@ -1328,6 +1336,10 @@ func (s *SettingService) GetClaudeOAuthSystemPromptInjectionSettings(ctx context
 // singleflight 防止缓存过期时 thundering herd
 // 返回空字符串表示不做对应方向的版本检查
 func (s *SettingService) GetClaudeCodeVersionBounds(ctx context.Context) (min, max string) {
+	if s.cfg.IsSecondary() {
+		s.siteReplicaMu.RLock()
+		defer s.siteReplicaMu.RUnlock()
+	}
 	if cached, ok := versionBoundsCache.Load().(*cachedVersionBounds); ok {
 		if time.Now().UnixNano() < cached.expiresAt {
 			return cached.min, cached.max

@@ -319,6 +319,11 @@ func NewPricingService(cfg *config.Config, remoteClient PricingRemoteClient) *Pr
 
 // Initialize 初始化价格服务
 func (s *PricingService) Initialize() error {
+	// A secondary receives the primary's effective pricing projection before
+	// admission. It must not refresh a different catalog in the background.
+	if s.cfg.IsSecondary() {
+		return nil
+	}
 	// 确保数据目录存在
 	if err := os.MkdirAll(s.cfg.Pricing.DataDir, 0755); err != nil {
 		logger.LegacyPrintf("service.pricing", "[Pricing] Failed to create data directory: %v", err)

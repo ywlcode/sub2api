@@ -17,8 +17,8 @@ var ErrUpstreamResponseBodyTooLarge = errors.New("upstream response body too lar
 const defaultUpstreamResponseReadMaxBytes = config.DefaultUpstreamResponseReadMaxBytes
 
 func resolveUpstreamResponseReadLimit(cfg *config.Config) int64 {
-	if cfg != nil && cfg.Gateway.UpstreamResponseReadMaxBytes > 0 {
-		return cfg.Gateway.UpstreamResponseReadMaxBytes
+	if cfg != nil && cfg.RequestGateway().UpstreamResponseReadMaxBytes > 0 {
+		return cfg.RequestGateway().UpstreamResponseReadMaxBytes
 	}
 	return defaultUpstreamResponseReadMaxBytes
 }

@@ -84,6 +84,8 @@ const (
 
 // GetWebSearchEmulationConfig returns the configuration with in-process cache + singleflight.
 func (s *SettingService) GetWebSearchEmulationConfig(ctx context.Context) (*WebSearchEmulationConfig, error) {
+	s.siteReplicaMu.RLock()
+	defer s.siteReplicaMu.RUnlock()
 	if cached := webSearchEmulationCache.Load(); cached != nil {
 		if c, ok := cached.(*cachedWebSearchEmulationConfig); ok && time.Now().UnixNano() < c.expiresAt {
 			return c.config, nil

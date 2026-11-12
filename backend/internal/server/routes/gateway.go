@@ -57,8 +57,8 @@ func RegisterGatewayRoutes(
 		trafficRecorder = h.Admin.Usage
 	}
 	traffic := middleware.UserTraffic(trafficRecorder)
-	bodyLimit := middleware.RequestBodyLimit(cfg.Gateway.MaxBodySize)
-	textBodyLimit := middleware.RequestBodyLimit(cfg.Gateway.TextMaxBodySize)
+	bodyLimit := middleware.RequestBodyLimitFrom(func() int64 { return cfg.RequestGateway().MaxBodySize })
+	textBodyLimit := middleware.RequestBodyLimitFrom(func() int64 { return cfg.RequestGateway().TextMaxBodySize })
 	imageAdmission := middleware.ExcelBPSImageAdmission()
 	clientRequestID := middleware.ClientRequestID()
 	opsErrorLogger := handler.OpsErrorLoggerMiddleware(opsService)

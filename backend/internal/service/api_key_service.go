@@ -782,6 +782,9 @@ func (s *APIKeyService) GetByID(ctx context.Context, id int64) (*APIKey, error) 
 
 // GetByKey 根据Key字符串获取API Key（用于认证）
 func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, error) {
+	if s.cfg.IsSecondary() {
+		return s.GetByKeyUncached(ctx, key)
+	}
 	if s.localAuth != nil {
 		return s.localAuth.GetByKey(ctx, key)
 	}

@@ -492,10 +492,10 @@ func (h *OpenAIGatewayHandler) Images(c *gin.Context) {
 }
 
 func (h *OpenAIGatewayHandler) openAIImagesJSONKeepaliveInterval() time.Duration {
-	if h.cfg == nil || h.cfg.Gateway.ImageNonstreamKeepaliveInterval <= 0 {
+	if h.cfg == nil || h.cfg.RequestGateway().ImageNonstreamKeepaliveInterval <= 0 {
 		return 0
 	}
-	return time.Duration(h.cfg.Gateway.ImageNonstreamKeepaliveInterval) * time.Second
+	return time.Duration(h.cfg.RequestGateway().ImageNonstreamKeepaliveInterval) * time.Second
 }
 
 func isMultipartImagesContentType(contentType string) bool {

@@ -254,6 +254,9 @@ func newOpenAIRecordUsageServiceForTest(usageRepo UsageLogRepository, userRepo U
 		nil,
 		"service.openai_gateway.test",
 	)
+	// Billing fixtures mutate dependencies below; they do not exercise the
+	// independent ticket harvester. Join it before returning the fixture.
+	svc.StopOpenAICodexTicketHarvester()
 	return svc
 }
 

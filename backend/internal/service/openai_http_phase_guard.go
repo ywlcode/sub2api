@@ -43,7 +43,7 @@ func (s *OpenAIGatewayService) withOpenAIHTTPBudget(ctx context.Context, c *gin.
 	if budget == nil {
 		budget = &openAIHTTPBudget{started: time.Now(), progress: make(chan struct{})}
 		if s != nil && s.cfg != nil {
-			budget.preOutputLimit = time.Duration(s.cfg.Gateway.OpenAIPreOutputBudgetSeconds) * time.Second
+			budget.preOutputLimit = time.Duration(s.cfg.RequestGateway().OpenAIPreOutputBudgetSeconds) * time.Second
 		}
 		if c != nil {
 			c.Set(openAIHTTPBudgetGinKey, budget)
@@ -61,7 +61,7 @@ func observeOpenAIHTTPProgress(ctx context.Context) {
 func (s *OpenAIGatewayService) openAIUploadTimeout(account *Account) time.Duration {
 	seconds := 0
 	if s != nil && s.cfg != nil {
-		seconds = s.cfg.Gateway.OpenAIUploadTimeoutSeconds
+		seconds = s.cfg.RequestGateway().OpenAIUploadTimeoutSeconds
 	}
 	if account != nil {
 		// An explicit zero disables the global upload limit for this account.

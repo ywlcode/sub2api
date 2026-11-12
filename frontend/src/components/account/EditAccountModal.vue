@@ -2003,6 +2003,7 @@
       />
 
       <RequestGzipField v-if="account.type === 'apikey'" v-model="requestGzipEnabled" />
+      <SecondaryProcessingField v-if="account.type === 'apikey' && !account.parent_account_id" v-model="secondaryProcessingEnabled" />
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
@@ -3762,6 +3763,7 @@ import Select from '@/components/common/Select.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import RequestGzipField from '@/components/account/RequestGzipField.vue'
+import SecondaryProcessingField from '@/components/account/SecondaryProcessingField.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import APIKeyHealthSettings from '@/components/account/APIKeyHealthSettings.vue'
 import { defaultAPIKeyHealthConfig, readAPIKeyHealthConfig, applyAPIKeyHealthConfig } from '@/components/account/apiKeyHealth'
@@ -4504,6 +4506,7 @@ const mixedScheduling = ref(false) // For antigravity accounts: enable mixed sch
 // 上游ID：直接上游声明请求标识的响应头名，留空不记录。
 const upstreamRequestIdHeader = ref('')
 const requestGzipEnabled = ref(false)
+const secondaryProcessingEnabled = ref(false)
 const readUpstreamRequestIdHeader = (extra: unknown): string => {
   const value = (extra as Record<string, unknown> | undefined)?.upstream_request_id_header
   return typeof value === 'string' ? value : ''
@@ -5123,6 +5126,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 	allowOverages.value = extra?.allow_overages === true
 	upstreamRequestIdHeader.value = readUpstreamRequestIdHeader(extra)
 	requestGzipEnabled.value = extra?.request_gzip_enabled === true
+	secondaryProcessingEnabled.value = extra?.site_secondary_enabled === true
 	openAIImagesUrlToB64JsonEnabled.value = extra?.images_url_to_b64_json === true
 	autoPause5hThreshold.value = typeof extra?.auto_pause_5h_threshold === 'number' ? extra.auto_pause_5h_threshold * 100 : null
 	autoPause7dThreshold.value = typeof extra?.auto_pause_7d_threshold === 'number' ? extra.auto_pause_7d_threshold * 100 : null
@@ -7116,6 +7120,13 @@ const handleSubmit = async () => {
       // Quota notify config
       writeQuotaNotifyToExtra(newExtra, 'update')
       updatePayload.extra = newExtra
+    }
+
+    if (props.account.type === 'apikey' && !props.account.parent_account_id && secondaryProcessingEnabled.value !== (props.account.extra?.site_secondary_enabled === true)) {
+      updatePayload.extra = {
+        ...(updatePayload.extra || props.account.extra || {}),
+        site_secondary_enabled: secondaryProcessingEnabled.value
+      }
     }
 
     if (props.account.type === 'apikey' && requestGzipEnabled.value !== (props.account.extra?.request_gzip_enabled === true)) {

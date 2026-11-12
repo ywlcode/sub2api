@@ -393,7 +393,7 @@ func (s *OpenAIGatewayService) forwardExcelBPS(ctx context.Context, c *gin.Conte
 	var catalog *basispoints.CatalogCache
 	if identity != "" {
 		replay, catalog = &excelBPSReplay, &excelBPSCatalog
-		if s.cfg != nil && s.cfg.Gateway.ExcelBPSStateRedisEnabled && !transient {
+		if s.cfg != nil && s.cfg.RequestGateway().ExcelBPSStateRedisEnabled && !transient {
 			store, ok := s.cache.(basispoints.StateStore)
 			if !ok {
 				return fail(503, "basispoints_state_unavailable", basispoints.ErrStateUnavailable.Error())

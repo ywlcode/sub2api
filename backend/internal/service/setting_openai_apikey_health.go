@@ -43,6 +43,8 @@ func (s *SettingService) GetOpenAIAPIKeyHealthBreakerSettings(ctx context.Contex
 	if s == nil || s.settingRepo == nil {
 		return DefaultOpenAIAPIKeyHealthBreakerSettings(), nil
 	}
+	s.siteReplicaMu.RLock()
+	defer s.siteReplicaMu.RUnlock()
 	if cached, ok := s.openAIAPIKeyHealthBreakerCache.Load().(*cachedOpenAIAPIKeyHealthBreakerSettings); ok && cached != nil && time.Now().Before(cached.expiresAt) {
 		result := cached.settings
 		return &result, nil

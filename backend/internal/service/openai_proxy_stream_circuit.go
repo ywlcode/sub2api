@@ -64,7 +64,7 @@ func resolveOpenAIProxyStreamCircuitSettings(s *OpenAIGatewayService) openAIProx
 	if s == nil || s.cfg == nil {
 		return settings
 	}
-	cfg := s.cfg.Gateway.OpenAIProxyStreamCircuit
+	cfg := s.cfg.RequestGateway().OpenAIProxyStreamCircuit
 	settings.disabled = cfg.Disabled
 	if cfg.FailureThreshold > 0 {
 		settings.failureThreshold = cfg.FailureThreshold

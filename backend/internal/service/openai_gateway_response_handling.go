@@ -120,8 +120,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		return nil, errors.New("streaming not supported")
 	}
 	maxLineSize := defaultMaxLineSize
-	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.cfg.Gateway.MaxLineSize
+	if s.cfg != nil && s.cfg.RequestGateway().MaxLineSize > 0 {
+		maxLineSize = s.cfg.RequestGateway().MaxLineSize
 	}
 	var firstTokenMs *int
 	// Delivery keeps the historical TTFT guard independently of the metric.
@@ -189,8 +189,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	}
 
 	streamInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	if s.cfg != nil && s.cfg.RequestGateway().StreamDataIntervalTimeout > 0 {
+		streamInterval = time.Duration(s.cfg.RequestGateway().StreamDataIntervalTimeout) * time.Second
 	}
 	// Grok: always enforce an upstream-read idle so hung SSE bodies fail over
 	// instead of holding the OAuth slot until the client cancels. Prefer the
@@ -198,7 +198,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	if account != nil && account.Platform == PlatformGrok {
 		cfgSec := 0
 		if s.cfg != nil {
-			cfgSec = s.cfg.Gateway.StreamDataIntervalTimeout
+			cfgSec = s.cfg.RequestGateway().StreamDataIntervalTimeout
 		}
 		streamInterval = resolveGrokStreamIdleTimeout(cfgSec)
 	}
@@ -214,8 +214,8 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	}
 
 	keepaliveInterval := time.Duration(0)
-	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
-		keepaliveInterval = time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+	if s.cfg != nil && s.cfg.RequestGateway().StreamKeepaliveInterval > 0 {
+		keepaliveInterval = time.Duration(s.cfg.RequestGateway().StreamKeepaliveInterval) * time.Second
 	}
 	// 下游 keepalive 仅用于防止代理空闲断开
 	var keepaliveTicker *time.Ticker

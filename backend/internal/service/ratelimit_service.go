@@ -2127,7 +2127,7 @@ func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
 	}
 	// 回退到配置文件
 	if settings == nil {
-		cooldown := s.cfg.RateLimit.OverloadCooldownMinutes
+		cooldown := s.cfg.RequestRateLimit().OverloadCooldownMinutes
 		if cooldown <= 0 {
 			cooldown = 10
 		}

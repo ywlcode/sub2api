@@ -182,6 +182,9 @@ func (s *SettingService) prioritySchedulingRuntimeConfig() PrioritySchedulingCon
 	cache := &s.prioritySchedulingConfig
 	cache.mu.Lock()
 	defer cache.mu.Unlock()
+	if s.cfg.IsSecondary() {
+		return cache.config
+	}
 	now := time.Now()
 	if !cache.refreshing && now.After(cache.expires) {
 		cache.refreshing = true

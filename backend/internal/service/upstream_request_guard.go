@@ -95,9 +95,9 @@ type upstreamRequestGuard struct {
 func newUpstreamRequestGuard(req *http.Request, cfg *config.Config) (*http.Request, *upstreamRequestGuard) {
 	upload, headers, drain := 120*time.Second, 600*time.Second, 30*time.Second
 	if cfg != nil {
-		upload = time.Duration(cfg.Gateway.UpstreamUploadTimeoutSeconds) * time.Second
-		headers = time.Duration(cfg.Gateway.ResponseHeaderTimeout) * time.Second
-		drain = time.Duration(cfg.Gateway.UpstreamClientDisconnectGraceSeconds) * time.Second
+		upload = time.Duration(cfg.RequestGateway().UpstreamUploadTimeoutSeconds) * time.Second
+		headers = time.Duration(cfg.RequestGateway().ResponseHeaderTimeout) * time.Second
+		drain = time.Duration(cfg.RequestGateway().UpstreamClientDisconnectGraceSeconds) * time.Second
 	}
 	// Detachment preserves the original caller for health attribution. Use the
 	// same signal to stop abandoned uploads and bound post-response billing drains.

@@ -161,7 +161,7 @@ func (s *OpsService) RequireMonitoringEnabled(ctx context.Context) error {
 func (s *OpsService) IsMonitoringEnabled(ctx context.Context) bool {
 	_ = ctx
 	// Hard switch: disable ops entirely.
-	if s.cfg != nil && !s.cfg.Ops.Enabled {
+	if s.cfg != nil && !s.cfg.RequestOpsEnabled() {
 		return false
 	}
 	if snapshot := s.runtimeSettings.Load(); snapshot != nil {

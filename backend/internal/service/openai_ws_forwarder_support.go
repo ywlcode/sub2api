@@ -15,7 +15,7 @@ import (
 )
 
 func (s *OpenAIGatewayService) isOpenAIWSGeneratePrewarmEnabled() bool {
-	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.PrewarmGenerateEnabled
+	return s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.PrewarmGenerateEnabled
 }
 
 // performOpenAIWSGeneratePrewarm 在 WSv2 下执行可选的 generate=false 预热。
@@ -837,7 +837,7 @@ func (s *OpenAIGatewayService) openAIWSFallbackCooldown() time.Duration {
 	if s == nil || s.cfg == nil {
 		return 30 * time.Second
 	}
-	seconds := s.cfg.Gateway.OpenAIWS.FallbackCooldownSeconds
+	seconds := s.cfg.RequestGateway().OpenAIWS.FallbackCooldownSeconds
 	if seconds <= 0 {
 		return 0
 	}

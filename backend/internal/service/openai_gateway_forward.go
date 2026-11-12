@@ -52,7 +52,7 @@ func normalizeOpenAIResponsesNamespaces(c *gin.Context, account *Account, body [
 }
 
 func accountUsesPrismBrowser(account *Account, cfg *config.Config) bool {
-	return accountHasPrismBrowser(account) && cfg != nil && cfg.Gateway.PrismBrowser.Enabled
+	return accountHasPrismBrowser(account) && cfg != nil && cfg.RequestGateway().PrismBrowser.Enabled
 }
 
 func accountHasPrismBrowser(account *Account) bool {
@@ -65,7 +65,7 @@ func accountHasPrismBrowser(account *Account) bool {
 
 func (s *OpenAIGatewayService) prismBrowserGloballyEnabled(ctx context.Context) bool {
 	if s == nil || s.settingService == nil {
-		return s != nil && s.cfg != nil && s.cfg.Gateway.PrismBrowser.Enabled
+		return s != nil && s.cfg != nil && s.cfg.RequestGateway().PrismBrowser.Enabled
 	}
 	return s.settingService.GetPrismBrowserRuntime(ctx).Enabled
 }
@@ -430,7 +430,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	compatMessagesBridge := isOpenAICompatMessagesBridgeBody(body)
 	setOpenAICompatMessagesBridgeContext(c, compatMessagesBridge)
 
-	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
+	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.RequestGateway().ForceCodexCLI)
 	codexImageGenerationExplicitToolPolicy := codexImageGenerationExplicitToolPolicyAllow
 	if isCodexCLI {
 		codexImageGenerationExplicitToolPolicy = account.CodexImageGenerationExplicitToolPolicy()
@@ -1550,8 +1550,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 		if mapping, ok := openAIResponsesClientToolMapping(c); ok && isEventStreamResponse(resp.Header) {
 			maxLineSize := defaultMaxLineSize
-			if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-				maxLineSize = s.cfg.Gateway.MaxLineSize
+			if s.cfg != nil && s.cfg.RequestGateway().MaxLineSize > 0 {
+				maxLineSize = s.cfg.RequestGateway().MaxLineSize
 			}
 			resp.Body = newResponsesClientToolStreamBody(resp.Body, mapping, maxLineSize, requesttiming.ResponseContext(ctx, resp))
 		}
@@ -2073,7 +2073,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 
 	// 若开启 ForceCodexCLI，则强制将上游 User-Agent 伪装为规范 Codex 身份。
 	// 用于网关未透传/改写 User-Agent 时，仍能命中 Codex 侧识别逻辑。
-	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+	if s.cfg != nil && s.cfg.RequestGateway().ForceCodexCLI {
 		req.Header.Set("user-agent", CodexCanonicalUserAgent())
 	}
 
@@ -2127,7 +2127,7 @@ func (s *OpenAIGatewayService) codexIdentityOverrideUA(account *Account) string 
 	if account == nil {
 		return ""
 	}
-	if s != nil && s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().ForceCodexCLI {
 		return ""
 	}
 	return account.GetOpenAIUserAgent()

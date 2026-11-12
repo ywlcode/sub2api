@@ -645,7 +645,7 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 	if clientBeta != "" {
 		return stripBetaTokensWithSet(clientBeta, effectiveDropSet), true
 	}
-	if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
+	if s.cfg != nil && s.cfg.RequestGateway().InjectBetaForAPIKey {
 		if requestNeedsBetaFeatures(body) {
 			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
 				return beta, true
@@ -702,7 +702,7 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 	if clientBeta != "" {
 		return stripBetaTokensWithSet(clientBeta, effectiveDropSet), true
 	}
-	if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
+	if s.cfg != nil && s.cfg.RequestGateway().InjectBetaForAPIKey {
 		if requestNeedsBetaFeatures(body) {
 			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
 				return beta, true

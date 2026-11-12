@@ -143,6 +143,18 @@ func InitEnt(cfg *config.Config) (*ent.Client, *sql.DB, error) {
 	}
 
 	// 创建 Ent 客户端，绑定到已配置的数据库驱动。
+	// A replica database must never become an autonomous primary just because
+	// its configuration file or environment was omitted on restart.
+	var replicaID string
+	identityErr := drv.DB().QueryRowContext(migrationCtx, `SELECT node_id FROM site_identity WHERE singleton AND mode='secondary'`).Scan(&replicaID)
+	if identityErr != nil && !errors.Is(identityErr, sql.ErrNoRows) {
+		_ = drv.Close()
+		return nil, nil, identityErr
+	}
+	if identityErr == nil && (!cfg.IsSecondary() || cfg.Site.ID != replicaID) {
+		_ = drv.Close()
+		return nil, nil, fmt.Errorf("secondary database identity does not match site configuration")
+	}
 	client := ent.NewClient(ent.Driver(drv))
 
 	// 启动阶段：从配置或数据库中确保系统密钥可用。

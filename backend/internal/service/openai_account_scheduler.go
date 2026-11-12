@@ -2324,6 +2324,11 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerSettingRepo() SettingRepos
 }
 
 func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx context.Context) openAIAdvancedSchedulerRuntimeSettings {
+	if s != nil && s.rateLimitService != nil && s.rateLimitService.settingService != nil {
+		ss := s.rateLimitService.settingService
+		ss.siteReplicaMu.RLock()
+		defer ss.siteReplicaMu.RUnlock()
+	}
 	if cached, ok := openAIAdvancedSchedulerSettingCache.Load().(*cachedOpenAIAdvancedSchedulerSetting); ok && cached != nil {
 		if time.Now().UnixNano() < cached.expiresAt {
 			return openAIAdvancedSchedulerRuntimeSettings{
@@ -3000,10 +3005,10 @@ func (s *OpenAIGatewayService) isOpenAIAccountTransportCompatible(account *Accou
 		return false
 	}
 	if requiredTransport == OpenAIUpstreamTransportResponsesWebsocketV2Ingress {
-		if s.cfg == nil || !s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled {
+		if s.cfg == nil || !s.cfg.RequestGateway().OpenAIWS.ModeRouterV2Enabled {
 			return s.getOpenAIWSProtocolResolver().Resolve(account).Transport == OpenAIUpstreamTransportResponsesWebsocketV2
 		}
-		mode := account.ResolveOpenAIResponsesWebSocketV2Mode(s.cfg.Gateway.OpenAIWS.IngressModeDefault)
+		mode := account.ResolveOpenAIResponsesWebSocketV2Mode(s.cfg.RequestGateway().OpenAIWS.IngressModeDefault)
 		switch mode {
 		case OpenAIWSIngressModeCtxPool, OpenAIWSIngressModePassthrough, OpenAIWSIngressModeHTTPBridge, OpenAIWSIngressModeShared, OpenAIWSIngressModeDedicated:
 			return true
@@ -3077,15 +3082,15 @@ func (s *OpenAIGatewayService) SnapshotOpenAIAccountSchedulerMetrics() OpenAIAcc
 }
 
 func (s *OpenAIGatewayService) openAIWSSessionStickyTTL() time.Duration {
-	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds > 0 {
-		return time.Duration(s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds) * time.Second
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.StickySessionTTLSeconds > 0 {
+		return time.Duration(s.cfg.RequestGateway().OpenAIWS.StickySessionTTLSeconds) * time.Second
 	}
 	return openaiStickySessionTTL
 }
 
 func (s *OpenAIGatewayService) openAIWSLBTopK() int {
-	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.LBTopK > 0 {
-		return s.cfg.Gateway.OpenAIWS.LBTopK
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.LBTopK > 0 {
+		return s.cfg.RequestGateway().OpenAIWS.LBTopK
 	}
 	return 7
 }
@@ -3106,7 +3111,7 @@ func (s *OpenAIGatewayService) openAIWSLBTopKForRequest(ctx context.Context) int
 
 func (s *OpenAIGatewayService) openAIStickyEscapeConfig() openAIStickyEscapeConfig {
 	if s != nil && s.cfg != nil {
-		cfg := s.cfg.Gateway.OpenAIScheduler
+		cfg := s.cfg.RequestGateway().OpenAIScheduler
 		enabled := cfg.StickyEscapeEnabled
 		if !enabled && cfg.StickyEscapeTTFTMs == 0 && cfg.StickyEscapeErrorRate == 0 {
 			enabled = true
@@ -3138,16 +3143,16 @@ func (s *OpenAIGatewayService) openAIStickyEscapeConfig() openAIStickyEscapeConf
 func (s *OpenAIGatewayService) openAIWSSchedulerWeights() GatewayOpenAIWSSchedulerScoreWeightsView {
 	if s != nil && s.cfg != nil {
 		return GatewayOpenAIWSSchedulerScoreWeightsView{
-			Priority:      s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Priority,
-			Load:          s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Load,
-			Queue:         s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Queue,
-			ErrorRate:     s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.ErrorRate,
-			TTFT:          s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.TTFT,
-			Reset:         s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.Reset,
-			QuotaHeadroom: s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.QuotaHeadroom,
-			UpstreamCost:  s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.UpstreamCost,
-			Previous:      s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.PreviousResponse,
-			SessionSticky: s.cfg.Gateway.OpenAIWS.SchedulerScoreWeights.SessionSticky,
+			Priority:      s.cfg.RequestGateway().OpenAIWS.SchedulerScoreWeights.Priority,
+			Load:          s.cfg.RequestGateway().OpenAIWS.SchedulerScoreWeights.Load,
+			Queue:         s.cfg.RequestGateway().OpenAIWS.SchedulerScoreWeights.Queue,
+			ErrorRate:     s.cfg.RequestGateway().OpenAIWS.SchedulerScoreWeights.ErrorRate,
+			TTFT:          s.cfg.RequestGateway().OpenAIWS.SchedulerScoreWeights.TTFT,
+			Reset:         s.cfg.RequestGateway().OpenAIWS.SchedulerScoreWeights.Reset,
+			QuotaHeadroom: s.cfg.RequestGateway().OpenAIWS.SchedulerScoreWeights.QuotaHeadroom,
+			UpstreamCost:  s.cfg.RequestGateway().OpenAIWS.SchedulerScoreWeights.UpstreamCost,
+			Previous:      s.cfg.RequestGateway().OpenAIWS.SchedulerScoreWeights.PreviousResponse,
+			SessionSticky: s.cfg.RequestGateway().OpenAIWS.SchedulerScoreWeights.SessionSticky,
 		}
 	}
 	return GatewayOpenAIWSSchedulerScoreWeightsView{

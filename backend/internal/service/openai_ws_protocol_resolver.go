@@ -49,7 +49,7 @@ func (r *defaultOpenAIWSProtocolResolver) Resolve(account *Account) OpenAIWSProt
 		return openAIWSHTTPDecision("config_missing")
 	}
 
-	wsCfg := r.cfg.Gateway.OpenAIWS
+	wsCfg := r.cfg.RequestGateway().OpenAIWS
 	if wsCfg.ForceHTTP {
 		return openAIWSHTTPDecision("global_force_http")
 	}

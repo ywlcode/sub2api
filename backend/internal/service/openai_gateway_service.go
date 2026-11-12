@@ -687,7 +687,7 @@ func NewOpenAIGatewayService(
 	// enforceCodexIdentityHeaders 是 HTTP / 透传 / WS / 探针 等出站路径共用的纯函数收口点，
 	// 拿不到配置，故在此发布进程级开关快照。配置取反义，零值即「强制统一出口开启」。
 	if cfg != nil {
-		SetCodexIdentityEnforcementEnabled(!cfg.Gateway.DisableCodexIdentityEnforcement)
+		SetCodexIdentityEnforcementEnabled(!cfg.RequestGateway().DisableCodexIdentityEnforcement)
 	}
 	svc := &OpenAIGatewayService{
 		accountRepo:         accountRepo,
@@ -704,7 +704,7 @@ func NewOpenAIGatewayService(
 		billingService:      billingService,
 		rateLimitService:    rateLimitService,
 		billingCacheService: billingCacheService,
-		userGroupRateResolver: newUserGroupRateResolver(
+		userGroupRateResolver: newSiteAwareUserGroupRateResolver(cfg,
 			userGroupRateRepo,
 			nil,
 			resolveUserGroupRateCacheTTL(cfg),
@@ -794,7 +794,7 @@ func (s *OpenAIGatewayService) isCodexImageGenerationBridgeEnabled(ctx context.C
 			return *override
 		}
 	}
-	return s != nil && s.cfg != nil && s.cfg.Gateway.CodexImageGenerationBridgeEnabled
+	return s != nil && s.cfg != nil && s.cfg.RequestGateway().CodexImageGenerationBridgeEnabled
 }
 
 func (s *OpenAIGatewayService) checkChannelPricingRestriction(ctx context.Context, groupID *int64, requestedModel string) bool {
@@ -907,7 +907,7 @@ func (s *OpenAIGatewayService) logOpenAIWSModeBootstrap() {
 	if s == nil || s.cfg == nil {
 		return
 	}
-	wsCfg := s.cfg.Gateway.OpenAIWS
+	wsCfg := s.cfg.RequestGateway().OpenAIWS
 	logOpenAIWSModeInfo(
 		"bootstrap enabled=%v oauth_enabled=%v apikey_enabled=%v force_http=%v responses_websockets_v2=%v responses_websockets=%v payload_log_sample_rate=%.3f event_flush_batch_size=%d event_flush_interval_ms=%d prewarm_cooldown_ms=%d retry_backoff_initial_ms=%d retry_backoff_max_ms=%d retry_jitter_ratio=%.3f retry_total_budget_ms=%d ws_read_limit_bytes=%d",
 		wsCfg.Enabled,
@@ -1147,7 +1147,7 @@ func (s *OpenAIGatewayService) openAIWSRetryBackoff(attempt int) time.Duration {
 	maxBackoff := openAIWSRetryBackoffMaxDefault
 	jitterRatio := openAIWSRetryJitterRatioDefault
 	if s != nil && s.cfg != nil {
-		wsCfg := s.cfg.Gateway.OpenAIWS
+		wsCfg := s.cfg.RequestGateway().OpenAIWS
 		if wsCfg.RetryBackoffInitialMS > 0 {
 			initial = time.Duration(wsCfg.RetryBackoffInitialMS) * time.Millisecond
 		}
@@ -1202,7 +1202,7 @@ func (s *OpenAIGatewayService) openAIWSRetryBackoff(attempt int) time.Duration {
 
 func (s *OpenAIGatewayService) openAIWSRetryTotalBudget() time.Duration {
 	if s != nil && s.cfg != nil {
-		ms := s.cfg.Gateway.OpenAIWS.RetryTotalBudgetMS
+		ms := s.cfg.RequestGateway().OpenAIWS.RetryTotalBudgetMS
 		if ms <= 0 {
 			return 0
 		}

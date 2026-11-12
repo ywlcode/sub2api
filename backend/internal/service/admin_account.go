@@ -429,6 +429,9 @@ func normalizeOpenAILongContextBillingUpdateExtra(account *Account, input *Updat
 // Grok media eligibility helpers live in account_grok_media_eligibility.go.
 
 func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]any) (*Account, error) {
+	if err := ValidateSecondaryAccountExtra(input.Type, false, accountExtra); err != nil {
+		return nil, err
+	}
 	if err := ValidateRequestGzipExtra(accountExtra); err != nil {
 		return nil, err
 	}
@@ -516,6 +519,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
+	if err := ValidateSecondaryAccountExtra(input.Type, false, input.Extra); err != nil {
+		return nil, err
+	}
 	defer s.invalidateRequestCatalog() // Also invalidate after partial writes.
 
 	if err := ValidateAccountCostMultiplierExtra(input.Extra); err != nil {
@@ -662,6 +668,17 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	}
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
+		return nil, err
+	}
+	effectiveSiteType := account.Type
+	if input.Type != "" {
+		effectiveSiteType = input.Type
+	}
+	siteExtra := input.Extra
+	if siteExtra == nil {
+		siteExtra = account.Extra
+	}
+	if err := ValidateSecondaryAccountExtra(effectiveSiteType, account.IsShadow(), siteExtra); err != nil {
 		return nil, err
 	}
 	if (account.Platform == PlatformTypeSafe || account.Platform == PlatformMistral) && input.Type != "" && input.Type != AccountTypeAPIKey {
@@ -1064,6 +1081,15 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 	if err := ValidateRequestGzipExtra(updates); err != nil {
 		return err
 	}
+	if _, changed := updates[AccountExtraSecondaryEnabled]; changed {
+		account, err := s.accountRepo.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
+		if err := ValidateSecondaryAccountExtra(account.Type, account.IsShadow(), updates); err != nil {
+			return err
+		}
+	}
 	// Ordinary partial saves cannot write server-owned quality isolation.
 	// Dedicated quality restore/runtime paths use their own transaction/UpdateExtra.
 	updates = maps.Clone(updates)
@@ -1178,6 +1204,17 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 		}
 	}
 
+	if _, changed := input.Extra[AccountExtraSecondaryEnabled]; changed {
+		accounts, err := s.accountRepo.GetByIDs(ctx, input.AccountIDs)
+		if err != nil {
+			return nil, err
+		}
+		for _, account := range accounts {
+			if err := ValidateSecondaryAccountExtra(account.Type, account.IsShadow(), input.Extra); err != nil {
+				return nil, err
+			}
+		}
+	}
 	result := &BulkUpdateAccountsResult{
 		SuccessIDs: make([]int64, 0, len(input.AccountIDs)),
 		FailedIDs:  make([]int64, 0, len(input.AccountIDs)),

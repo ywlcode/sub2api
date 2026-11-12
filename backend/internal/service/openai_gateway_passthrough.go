@@ -479,8 +479,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 		if mapping, ok := openAIResponsesClientToolMapping(c); ok && isEventStreamResponse(resp.Header) {
 			maxLineSize := defaultMaxLineSize
-			if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-				maxLineSize = s.cfg.Gateway.MaxLineSize
+			if s.cfg != nil && s.cfg.RequestGateway().MaxLineSize > 0 {
+				maxLineSize = s.cfg.RequestGateway().MaxLineSize
 			}
 			resp.Body = newGrokResponsesClientToolStreamBody(resp.Body, mapping, maxLineSize)
 		}
@@ -793,7 +793,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	if customUA != "" {
 		req.Header.Set("user-agent", customUA)
 	}
-	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+	if s.cfg != nil && s.cfg.RequestGateway().ForceCodexCLI {
 		req.Header.Set("user-agent", CodexCanonicalUserAgent())
 	}
 	if s.harvestPinnedSessionForModel(ctx, account, extractOpenAICodexTicketModel(body)) == "" {
@@ -1143,7 +1143,7 @@ func isOpenAIPassthroughTimeoutHeader(lowerKey string) bool {
 }
 
 func (s *OpenAIGatewayService) isOpenAIPassthroughTimeoutHeadersAllowed() bool {
-	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIPassthroughAllowTimeoutHeaders
+	return s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIPassthroughAllowTimeoutHeaders
 }
 
 func collectOpenAIPassthroughTimeoutHeaders(h http.Header) []string {
@@ -2189,8 +2189,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	// heartbeat delivery or the configured upstream/first-output deadlines.
 	var keepaliveTicker *time.Ticker
 	var keepaliveCh <-chan time.Time
-	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
-		keepaliveTicker = time.NewTicker(time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second)
+	if s.cfg != nil && s.cfg.RequestGateway().StreamKeepaliveInterval > 0 {
+		keepaliveTicker = time.NewTicker(time.Duration(s.cfg.RequestGateway().StreamKeepaliveInterval) * time.Second)
 		keepaliveCh = keepaliveTicker.C
 	}
 	stopKeepalive := func() {
@@ -2281,8 +2281,8 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 	}
 
 	maxLineSize := defaultMaxLineSize
-	if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.cfg.Gateway.MaxLineSize
+	if s.cfg != nil && s.cfg.RequestGateway().MaxLineSize > 0 {
+		maxLineSize = s.cfg.RequestGateway().MaxLineSize
 	}
 	documentScanner := newOpenAISSEReadPump(resp.Body, maxLineSize)
 	defer documentScanner.Close()
@@ -2742,8 +2742,8 @@ func (s *OpenAIGatewayService) openAIPassthroughStreamDataInterval(imageBillingM
 		// endpoint instead of applying the ordinary 180s interval.
 		return s.openAIImageStreamDataInterval()
 	}
-	if s != nil && s.cfg != nil && s.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		return time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().StreamDataIntervalTimeout > 0 {
+		return time.Duration(s.cfg.RequestGateway().StreamDataIntervalTimeout) * time.Second
 	}
 	return 0
 }

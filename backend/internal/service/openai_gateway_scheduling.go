@@ -247,8 +247,8 @@ func (s *OpenAIGatewayService) BindStickySession(ctx context.Context, groupID *i
 		return nil
 	}
 	ttl := openaiStickySessionTTL
-	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds > 0 {
-		ttl = time.Duration(s.cfg.Gateway.OpenAIWS.StickySessionTTLSeconds) * time.Second
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.StickySessionTTLSeconds > 0 {
+		ttl = time.Duration(s.cfg.RequestGateway().OpenAIWS.StickySessionTTLSeconds) * time.Second
 	}
 	return s.setStickySessionAccountID(ctx, groupID, sessionHash, accountID, ttl)
 }
@@ -1955,7 +1955,7 @@ func markStickySessionHit(selection *AccountSelectionResult, hit bool) *AccountS
 
 func (s *OpenAIGatewayService) schedulingConfig() config.GatewaySchedulingConfig {
 	if s.cfg != nil {
-		return s.cfg.Gateway.Scheduling
+		return s.cfg.RequestGateway().Scheduling
 	}
 	return config.GatewaySchedulingConfig{
 		StickySessionMaxWaiting:  3,

@@ -359,7 +359,7 @@ func (s *OpenAIGatewayService) callPrismBrowserForCaller(ctx context.Context, ac
 	if s.settingService != nil {
 		runtime = s.settingService.GetPrismBrowserRuntime(ctx)
 	} else if s.cfg != nil {
-		runtime = PrismBrowserRuntime{Enabled: s.cfg.Gateway.PrismBrowser.Enabled, BaseURL: s.cfg.Gateway.PrismBrowser.BaseURL, APIKey: s.cfg.Gateway.PrismBrowser.APIKey}
+		runtime = PrismBrowserRuntime{Enabled: s.cfg.RequestGateway().PrismBrowser.Enabled, BaseURL: s.cfg.RequestGateway().PrismBrowser.BaseURL, APIKey: s.cfg.RequestGateway().PrismBrowser.APIKey}
 	}
 	if !accountHasPrismBrowser(account) || !runtime.Enabled {
 		return nil, nil, 0, errors.New("prism adapter is disabled; native fallback is prohibited")

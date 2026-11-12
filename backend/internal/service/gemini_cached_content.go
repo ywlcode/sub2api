@@ -676,8 +676,8 @@ func (s *GeminiCachedContentService) Now() time.Time {
 
 // MaxTTL 返回单次创建或延长允许的最长有效期。
 func (s *GeminiCachedContentService) MaxTTL() time.Duration {
-	if s.cfg != nil && s.cfg.Gateway.GeminiCachedContentMaxTTLSeconds > 0 {
-		return time.Duration(s.cfg.Gateway.GeminiCachedContentMaxTTLSeconds) * time.Second
+	if s.cfg != nil && s.cfg.RequestGateway().GeminiCachedContentMaxTTLSeconds > 0 {
+		return time.Duration(s.cfg.RequestGateway().GeminiCachedContentMaxTTLSeconds) * time.Second
 	}
 	return geminiCachedContentDefaultMaxTTL
 }

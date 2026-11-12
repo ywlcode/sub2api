@@ -324,8 +324,8 @@ func (s *AntigravityGatewayService) startAntigravityCompatScanner(
 	body io.Reader,
 ) (<-chan antigravityCompatScanEvent, func(), int) {
 	maxLineSize := defaultMaxLineSize
-	if s.settingService != nil && s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
+	if s.settingService != nil && s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().MaxLineSize > 0 {
+		maxLineSize = s.settingService.cfg.RequestGateway().MaxLineSize
 	}
 	scanner := bufio.NewScanner(body)
 	scanBuf := getSSEScannerBuf64K()
@@ -360,14 +360,14 @@ func (s *AntigravityGatewayService) antigravityCompatStreamTimeout() time.Durati
 	if s.settingService == nil || s.settingService.cfg == nil {
 		return 0
 	}
-	return time.Duration(s.settingService.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	return time.Duration(s.settingService.cfg.RequestGateway().StreamDataIntervalTimeout) * time.Second
 }
 
 func (s *AntigravityGatewayService) newAntigravityCompatKeepaliveTicker() (*time.Ticker, <-chan time.Time) {
 	if s.settingService == nil || s.settingService.cfg == nil {
 		return nil, nil
 	}
-	interval := time.Duration(s.settingService.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+	interval := time.Duration(s.settingService.cfg.RequestGateway().StreamKeepaliveInterval) * time.Second
 	if interval <= 0 {
 		return nil, nil
 	}

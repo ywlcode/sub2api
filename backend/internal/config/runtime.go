@@ -31,10 +31,13 @@ type RuntimeConfig struct {
 }
 
 func (c *Config) RunsBackgroundJobs() bool {
-	return c == nil || c.Runtime.Role != RuntimeRoleGateway
+	return c == nil || (c.Runtime.Role != RuntimeRoleGateway && !c.IsSecondary())
 }
 
 func (c *Config) validateRuntime() error {
+	if err := c.validateSite(); err != nil {
+		return err
+	}
 	if c.Runtime.NodeID != "" {
 		if err := (WSNodeOwnerConfig{Enabled: true, NodeID: c.Runtime.NodeID}).Validate(); err != nil {
 			return fmt.Errorf("runtime.node_id requires 1 to 64 lowercase identifier characters")

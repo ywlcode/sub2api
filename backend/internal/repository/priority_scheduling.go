@@ -123,6 +123,7 @@ func (r *usageLogRepository) ReadPrioritySchedulingSignals(ctx context.Context, 
    AND error_phase='upstream'
   GROUP BY account_id
  ), rounds AS (
+  SELECT account_id,quality_round_id,observed_at,failed,passed FROM (
   SELECT p.account_id, r.quality_round_id, MAX(r.created_at) AS observed_at,
    bool_or(r.quality_judgment->>'verdict'='incorrect' AND r.status='failed'
     AND r.error_message IN ('answer_mismatch','state_degraded')
@@ -142,6 +143,14 @@ func (r *usageLogRepository) ReadPrioritySchedulingSignals(ctx context.Context, 
     AND COALESCE(r.pelican_config->>'parallel_count','1') ~ '^[1-8]$')
    AND COUNT(*) = MAX(CASE WHEN COALESCE(r.pelican_config->>'parallel_count','1') ~ '^[1-8]$'
     THEN COALESCE(r.pelican_config->>'parallel_count','1')::int END)
+  ) primary_rounds WHERE NOT EXISTS(SELECT 1 FROM site_identity WHERE singleton AND mode='secondary')
+  UNION ALL
+  SELECT (value->>'account_id')::bigint, value->>'quality_round_id', (value->>'observed_at')::timestamptz,
+    (value->>'failed')::boolean, (value->>'passed')::boolean
+  FROM site_replica_rows
+  WHERE table_name='$quality' AND (value->>'account_id')::bigint=ANY($1)
+    AND value->>'model'=$10 AND (value->>'observed_at')::timestamptz >= $4
+    AND EXISTS(SELECT 1 FROM site_identity WHERE singleton AND mode='secondary')
  ), latest_quality AS (
   SELECT DISTINCT ON (account_id) account_id, (passed AND NOT COALESCE(failed,false)) AS passed
   FROM rounds WHERE passed OR failed
