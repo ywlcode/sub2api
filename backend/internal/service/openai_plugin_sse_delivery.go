@@ -27,7 +27,7 @@ func markOpenAIPluginSSEPreflight(resp *http.Response, req *http.Request, instal
 }
 
 func (s *OpenAIGatewayService) openAIPluginSSEEarlyEvents(resp *http.Response, account *Account) bool {
-	if s == nil || s.cfg == nil || !s.cfg.Gateway.OpenAIPluginSSEEarlyEventsEnabled ||
+	if s == nil || s.cfg == nil || !s.cfg.RequestGateway().OpenAIPluginSSEEarlyEventsEnabled ||
 		account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth ||
 		resp == nil || resp.Request == nil {
 		return false

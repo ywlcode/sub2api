@@ -276,7 +276,7 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(c
 	} else {
 		req.Header.Set("User-Agent", canonical.userAgent)
 	}
-	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+	if s.cfg != nil && s.cfg.RequestGateway().ForceCodexCLI {
 		req.Header.Set("User-Agent", canonical.userAgent)
 	}
 	apiKeyID := getAPIKeyIDFromContext(c)
@@ -423,7 +423,7 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 		} else {
 			req.Header.Set("User-Agent", canonical.userAgent)
 		}
-		if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+		if s.cfg != nil && s.cfg.RequestGateway().ForceCodexCLI {
 			req.Header.Set("User-Agent", canonical.userAgent)
 		}
 		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))

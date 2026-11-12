@@ -5,17 +5,25 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	gocache "github.com/patrickmn/go-cache"
 	"golang.org/x/sync/singleflight"
 )
 
 type userGroupRateResolver struct {
+	uncached     bool
 	repo         UserGroupRateRepository
 	cache        *gocache.Cache
 	cacheTTL     time.Duration
 	sf           *singleflight.Group
 	logComponent string
+}
+
+func newSiteAwareUserGroupRateResolver(cfg *config.Config, repo UserGroupRateRepository, cache *gocache.Cache, ttl time.Duration, sf *singleflight.Group, component string) *userGroupRateResolver {
+	r := newUserGroupRateResolver(repo, cache, ttl, sf, component)
+	r.uncached = cfg.IsSecondary()
+	return r
 }
 
 func newUserGroupRateResolver(repo UserGroupRateRepository, cache *gocache.Cache, cacheTTL time.Duration, sf *singleflight.Group, logComponent string) *userGroupRateResolver {
@@ -43,6 +51,14 @@ func newUserGroupRateResolver(repo UserGroupRateRepository, cache *gocache.Cache
 
 func (r *userGroupRateResolver) Resolve(ctx context.Context, userID, groupID int64, groupDefaultMultiplier float64) float64 {
 	if r == nil || userID <= 0 || groupID <= 0 {
+		return groupDefaultMultiplier
+	}
+	if r.uncached {
+		if r.repo != nil {
+			if rate, err := r.repo.GetByUserAndGroup(ctx, userID, groupID); err == nil && rate != nil {
+				return *rate
+			}
+		}
 		return groupDefaultMultiplier
 	}
 

@@ -86,7 +86,7 @@ func NewUserPlatformQuotaUsageFlusher(cfg *config.Config, cache BillingCache, qu
 		cache:        cache,
 		quotaRepo:    quotaRepo,
 		timingWheel:  tw,
-		enabled:      cfg.Database.UserPlatformQuotaFlusherEnabled,
+		enabled:      cfg.Database.UserPlatformQuotaFlusherEnabled && !cfg.IsSecondary(),
 		interval:     interval,
 		batchSize:    batchSize,
 		flushTimeout: 3 * time.Second,

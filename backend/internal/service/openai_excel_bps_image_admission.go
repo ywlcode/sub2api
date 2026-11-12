@@ -130,8 +130,8 @@ func (s *OpenAIGatewayService) excelBPSImageMaxBodyBytes(settings ExcelBPSImageR
 	if ceiling := int64(basispoints.MaxImageBodyMiB) << 20; maxBody > ceiling {
 		maxBody = ceiling
 	}
-	if s != nil && s.cfg != nil && s.cfg.Gateway.MaxBodySize > 0 && s.cfg.Gateway.MaxBodySize < maxBody {
-		maxBody = s.cfg.Gateway.MaxBodySize
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().MaxBodySize > 0 && s.cfg.RequestGateway().MaxBodySize < maxBody {
+		maxBody = s.cfg.RequestGateway().MaxBodySize
 	}
 	return maxBody
 }

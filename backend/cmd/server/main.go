@@ -183,7 +183,7 @@ func runMainServer() {
 	if err := bepusdt.Resume(); err != nil {
 		log.Printf("Built-in BEpusdt unavailable: %v", err)
 	}
-	if app.PluginManager != nil {
+	if app.PluginManager != nil && !cfg.IsSecondary() {
 		if err := app.PluginManager.Start(context.Background()); err != nil {
 			log.Printf("Plugin manager started in degraded state: %v", err)
 		}

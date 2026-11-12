@@ -128,7 +128,7 @@ func (w *openAIHeaderWaitWriter) writeFailure(body []byte) (int, error) {
 // armed, the request goroutine does not access Gin/writer state. Stop joins the
 // existing guarded heartbeat writer before response/error processing resumes.
 func (s *OpenAIGatewayService) startOpenAIHeaderWaitKeepalive(c *gin.Context, stream bool) func() {
-	if !stream || c == nil || s == nil || s.cfg == nil || s.cfg.Gateway.StreamKeepaliveInterval <= 0 {
+	if !stream || c == nil || s == nil || s.cfg == nil || s.cfg.RequestGateway().StreamKeepaliveInterval <= 0 {
 		return func() {}
 	}
 	raw, ok := c.Get(openAIHeaderWaitWriterKey)
@@ -139,7 +139,7 @@ func (s *OpenAIGatewayService) startOpenAIHeaderWaitKeepalive(c *gin.Context, st
 	if existing, ok := c.Get(openAICompactSSEKeepaliveKey); ok && existing != nil {
 		return func() {}
 	}
-	return startOpenAIHeaderWaitKeepaliveInterval(c, w, time.Duration(s.cfg.Gateway.StreamKeepaliveInterval)*time.Second)
+	return startOpenAIHeaderWaitKeepaliveInterval(c, w, time.Duration(s.cfg.RequestGateway().StreamKeepaliveInterval)*time.Second)
 }
 
 func startOpenAIHeaderWaitKeepaliveInterval(c *gin.Context, w *openAIHeaderWaitWriter, interval time.Duration) func() {

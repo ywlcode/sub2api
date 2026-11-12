@@ -94,8 +94,8 @@ func (s *APIKeyService) CanRecoverAutoCreditAdmission(ctx context.Context, key *
 		return false, nil
 	}
 	minimum := 0.0
-	if s.cfg != nil && s.cfg.Billing.MinimumBalanceReserve > 0 {
-		minimum = s.cfg.Billing.MinimumBalanceReserve
+	if s.cfg != nil && s.cfg.RequestBilling().MinimumBalanceReserve > 0 {
+		minimum = s.cfg.RequestBilling().MinimumBalanceReserve
 	}
 	return s.autoCredit.CanRecover(ctx, key.UserID, strconv.FormatFloat(minimum, 'f', -1, 64))
 }

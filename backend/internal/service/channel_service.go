@@ -167,8 +167,9 @@ type ChannelService struct {
 	pricingService       *PricingService // 用于「可用渠道」展示时回落到全局定价；可为 nil（测试场景）
 	cachePubSub          ChannelCachePubSub
 
-	cache   atomic.Value // *channelCache
-	cacheSF singleflight.Group
+	cache       atomic.Value // *channelCache
+	cacheSF     singleflight.Group
+	siteReplica atomic.Bool // only the synchronous replica installer publishes this cache
 }
 
 // NewChannelService 创建渠道服务实例。
@@ -188,6 +189,12 @@ func NewChannelService(repo ChannelRepository, groupRepo GroupRepository, authCa
 
 // loadCache 加载或返回缓存的渠道数据
 func (s *ChannelService) loadCache(ctx context.Context) (*channelCache, error) {
+	if s.siteReplica.Load() {
+		if cached, ok := s.cache.Load().(*channelCache); ok && cached != nil {
+			return cached, nil
+		}
+		return nil, fmt.Errorf("site channel snapshot is not installed")
+	}
 	if cached, ok := s.cache.Load().(*channelCache); ok && cached != nil {
 		if time.Since(cached.loadedAt) < channelCacheTTL {
 			return cached, nil
@@ -410,6 +417,9 @@ func (s *ChannelService) invalidateCache() {
 // invalidateCache prevents notifications received from Redis from being
 // published again in a loop.
 func (s *ChannelService) clearCache() {
+	if s.siteReplica.Load() {
+		return
+	}
 	s.cache.Store((*channelCache)(nil))
 	s.cacheSF.Forget("channel_cache")
 }

@@ -1175,6 +1175,8 @@ func (s *SettingService) GetAccountSchedulingThresholds(ctx context.Context) map
 	if s == nil || s.settingRepo == nil {
 		return defaultAccountSchedulingThresholds()
 	}
+	s.siteReplicaMu.RLock()
+	defer s.siteReplicaMu.RUnlock()
 	if cached, ok := accountSchedulingThresholdsCache.Load().(*cachedAccountSchedulingThresholds); ok {
 		if cached != nil && len(cached.thresholds) > 0 && time.Now().UnixNano() < cached.expiresAt {
 			return cloneAccountSchedulingThresholds(cached.thresholds)

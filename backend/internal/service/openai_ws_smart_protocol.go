@@ -66,7 +66,7 @@ func smartProtocolHTTPSupported(a *Account) bool {
 }
 
 func (s *OpenAIGatewayService) decideOpenAIWSUpstreamProtocol(a *Account, payload []byte) openAISmartProtocolDecision {
-	cfg := s.cfg.Gateway.OpenAIWS.SmartProtocol
+	cfg := s.cfg.RequestGateway().OpenAIWS.SmartProtocol
 	mode := cfg.Mode
 	if mode == "" {
 		mode = "auto"

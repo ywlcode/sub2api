@@ -133,6 +133,7 @@ type WebSearchManagerBuilder func(cfg *WebSearchEmulationConfig, proxyURLs map[i
 
 // SettingService 系统设置服务
 type SettingService struct {
+	siteReplicaMu                      sync.RWMutex
 	scopedAdminKeyRepo                 ScopedAdminKeyRepository
 	IPRisk                             *iprisk.Manager     // Initialized before requests start.
 	Serverless                         *serverless.Manager // Initialized before requests start.

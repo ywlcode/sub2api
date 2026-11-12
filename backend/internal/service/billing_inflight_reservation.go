@@ -214,7 +214,7 @@ func (s *BillingCacheService) inflightReservationConfig() (config.InflightReserv
 	if s == nil || s.cfg == nil {
 		return config.InflightReservationConfig{}, false
 	}
-	cfg := s.cfg.Billing.InflightReservation
+	cfg := s.cfg.RequestBilling().InflightReservation
 	if !cfg.Enabled || s.cfg.RunMode == config.RunModeSimple {
 		return cfg, false
 	}
@@ -491,8 +491,8 @@ func inflightBillingModelCandidates(ctx context.Context, deps inflightEstimateDe
 
 func (d inflightEstimateDeps) rates(ctx context.Context, apiKey *APIKey) (text, image float64) {
 	rate := 1.0
-	if d.cfg != nil && d.cfg.Default.RateMultiplier > 0 {
-		rate = d.cfg.Default.RateMultiplier
+	if d.cfg != nil && d.cfg.DefaultUsageRateMultiplier() > 0 {
+		rate = d.cfg.DefaultUsageRateMultiplier()
 	}
 	if apiKey != nil && apiKey.GroupID != nil && apiKey.Group != nil {
 		rate = apiKey.Group.RateMultiplier
@@ -713,7 +713,7 @@ func inflightReservationCfg(cfg *config.Config) config.InflightReservationConfig
 	if cfg == nil {
 		return config.InflightReservationConfig{}
 	}
-	return cfg.Billing.InflightReservation
+	return cfg.RequestBilling().InflightReservation
 }
 
 func (s *GatewayService) inflightEstimateDeps() inflightEstimateDeps {

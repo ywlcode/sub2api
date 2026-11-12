@@ -3287,6 +3287,7 @@
       />
 
       <RequestGzipField v-if="form.type === 'apikey'" v-model="requestGzipEnabled" />
+      <SecondaryProcessingField v-if="form.type === 'apikey'" v-model="secondaryProcessingEnabled" />
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
@@ -4447,6 +4448,7 @@ import OpenAIProxySettings from '@/components/account/OpenAIProxySettings.vue'
 import { NEW_FEATURE_NOTICES } from '@/constants/newFeatureNotices'
 import UpstreamRequestIdHeaderField from '@/components/account/UpstreamRequestIdHeaderField.vue'
 import RequestGzipField from '@/components/account/RequestGzipField.vue'
+import SecondaryProcessingField from '@/components/account/SecondaryProcessingField.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import ProxySelector from '@/components/common/ProxySelector.vue'
@@ -4550,6 +4552,7 @@ const oauthStepTitle = computed(() => {
 const costMultiplier = ref(DEFAULT_ACCOUNT_COST_MULTIPLIER)
 const upstreamRequestIdHeader = ref('')
 const requestGzipEnabled = ref(false)
+const secondaryProcessingEnabled = ref(false)
 const withAccountExtraSettings = (extra?: Record<string, unknown>): Record<string, unknown> => {
   if (!isValidAccountCostMultiplier(costMultiplier.value)) {
     throw new Error(t('admin.accounts.costMultiplierInvalid'))
@@ -4558,6 +4561,7 @@ const withAccountExtraSettings = (extra?: Record<string, unknown>): Record<strin
   return {
     ...(extra || {}),
     cost_multiplier: costMultiplier.value,
+    ...(form.type === 'apikey' && secondaryProcessingEnabled.value ? { site_secondary_enabled: true } : {}),
     ...(name ? { upstream_request_id_header: name } : {}),
     ...(form.type === 'apikey' && requestGzipEnabled.value ? { request_gzip_enabled: true } : {})
   }
@@ -6199,6 +6203,7 @@ const resetForm = () => {
   apiKeyValue.value = ''
   upstreamRequestIdHeader.value = ''
   requestGzipEnabled.value = false
+  secondaryProcessingEnabled.value = false
   upstreamBillingAutoProbeEnabled.value = true
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null

@@ -1,4 +1,15 @@
-# Process role: full retains the dashboard and global background jobs (default).
+# Site topology (independent databases): standalone / primary / secondary.
+# Default preserves existing installations. See deploy/SITES.md for pairing.
+site:
+  mode: "standalone"
+  id: ""
+  primary_url: ""
+  token: ""
+  allow_http: false
+  peers: []
+
+# Process role within a site: full retains dashboard/global jobs (default).
+# primary/secondary site modes require full; secondary suppresses global jobs.
 # gateway exposes model gateway APIs only and keeps request-local workers running.
 # Keep exactly one full instance until every enabled global job has a shared lease.
 runtime:

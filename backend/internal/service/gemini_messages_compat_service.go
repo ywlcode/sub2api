@@ -1711,7 +1711,7 @@ func (s *GeminiMessagesCompatService) geminiMaxAttemptsPerAccount() int {
 	if s == nil || s.cfg == nil {
 		return geminiDefaultSameAccountRetries + 1
 	}
-	return s.cfg.Gateway.MaxSameAccountRetriesGemini + 1
+	return s.cfg.RequestGateway().MaxSameAccountRetriesGemini + 1
 }
 
 func (s *GeminiMessagesCompatService) shouldRetryGeminiUpstreamError(account *Account, statusCode int) bool {

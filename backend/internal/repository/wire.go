@@ -16,9 +16,9 @@ import (
 // ProvideConcurrencyCache 创建并发控制缓存，从配置读取 TTL 参数
 // 性能优化：TTL 可配置，支持长时间运行的 LLM 请求场景
 func ProvideConcurrencyCache(rdb *redis.Client, cfg *config.Config, db *sql.DB) (service.ConcurrencyCache, error) {
-	waitTTLSeconds := int(cfg.Gateway.Scheduling.StickySessionWaitTimeout.Seconds())
-	if cfg.Gateway.Scheduling.FallbackWaitTimeout > cfg.Gateway.Scheduling.StickySessionWaitTimeout {
-		waitTTLSeconds = int(cfg.Gateway.Scheduling.FallbackWaitTimeout.Seconds())
+	waitTTLSeconds := int(cfg.RequestGateway().Scheduling.StickySessionWaitTimeout.Seconds())
+	if cfg.RequestGateway().Scheduling.FallbackWaitTimeout > cfg.RequestGateway().Scheduling.StickySessionWaitTimeout {
+		waitTTLSeconds = int(cfg.RequestGateway().Scheduling.FallbackWaitTimeout.Seconds())
 	}
 	if waitTTLSeconds <= 0 {
 		waitTTLSeconds = cfg.Gateway.ConcurrencySlotTTLMinutes * 60
@@ -56,22 +56,25 @@ func ProvidePricingRemoteClient(cfg *config.Config) service.PricingRemoteClient 
 // 用于 Anthropic OAuth/SetupToken 账号的并发会话数量控制
 func ProvideSessionLimitCache(rdb *redis.Client, cfg *config.Config) service.SessionLimitCache {
 	defaultIdleTimeoutMinutes := 5 // 默认 5 分钟空闲超时
-	if cfg != nil && cfg.Gateway.SessionIdleTimeoutMinutes > 0 {
-		defaultIdleTimeoutMinutes = cfg.Gateway.SessionIdleTimeoutMinutes
+	if cfg != nil && cfg.RequestGateway().SessionIdleTimeoutMinutes > 0 {
+		defaultIdleTimeoutMinutes = cfg.RequestGateway().SessionIdleTimeoutMinutes
 	}
 	return NewSessionLimitCache(rdb, defaultIdleTimeoutMinutes)
 }
 
 // ProvideSchedulerCache 创建调度快照缓存，并注入快照分块参数。
 func ProvideSchedulerCache(rdb *redis.Client, cfg *config.Config) service.SchedulerCache {
+	if cfg.IsSecondary() {
+		return nil
+	}
 	mgetChunkSize := defaultSchedulerSnapshotMGetChunkSize
 	writeChunkSize := defaultSchedulerSnapshotWriteChunkSize
 	if cfg != nil {
-		if cfg.Gateway.Scheduling.SnapshotMGetChunkSize > 0 {
-			mgetChunkSize = cfg.Gateway.Scheduling.SnapshotMGetChunkSize
+		if cfg.RequestGateway().Scheduling.SnapshotMGetChunkSize > 0 {
+			mgetChunkSize = cfg.RequestGateway().Scheduling.SnapshotMGetChunkSize
 		}
-		if cfg.Gateway.Scheduling.SnapshotWriteChunkSize > 0 {
-			writeChunkSize = cfg.Gateway.Scheduling.SnapshotWriteChunkSize
+		if cfg.RequestGateway().Scheduling.SnapshotWriteChunkSize > 0 {
+			writeChunkSize = cfg.RequestGateway().Scheduling.SnapshotWriteChunkSize
 		}
 	}
 	return newSchedulerCacheWithChunkSizes(rdb, mgetChunkSize, writeChunkSize)
@@ -108,7 +111,7 @@ var ProviderSet = wire.NewSet(
 	NewAnnouncementRepository,
 	NewAnnouncementReadRepository,
 	NewUsageLogRepository,
-	NewUsageBillingRepository,
+	ProvideUsageBillingRepository,
 	NewBatchImageRepository,
 	NewGeminiCachedContentRepository,
 	NewIdempotencyRepository,

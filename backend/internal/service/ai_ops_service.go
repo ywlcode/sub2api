@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 )
 
@@ -17,7 +16,7 @@ import (
 // upgrade never opts a deployment into production account modifications.
 func (s *OpsService) AIOpsControlEnabled() bool {
 	return s != nil && os.Getenv("SUB2API_AI_OPS_CONTROL_ENABLED") == "true" &&
-		(s.cfg == nil || (s.cfg.Runtime.Role != config.RuntimeRoleGateway && s.cfg.Runtime.RegionalSchedulerFile == ""))
+		(s.cfg == nil || (s.cfg.RunsBackgroundJobs() && s.cfg.Runtime.RegionalSchedulerFile == ""))
 }
 
 func (s *OpsService) AIOpsRepository() (AIOpsRepository, error) {
