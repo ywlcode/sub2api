@@ -271,7 +271,7 @@ func rewriteClientToolHistory(value any, adapter *ResponsesClientToolMapping) (b
 				normalizeClientToolOutput(typed)
 				changed = true
 			case "tool_search_call":
-				if adapter.ToolSearch && !(adapter.nativeTools && isHostedToolSearchHistory(typed)) {
+				if adapter.ToolSearch && (!adapter.nativeTools || !isHostedToolSearchHistory(typed)) {
 					typed["type"] = "function_call"
 					typed["name"] = toolSearchProxyName
 					typed["arguments"] = rawObjectString(typed["arguments"])
@@ -280,7 +280,7 @@ func rewriteClientToolHistory(value any, adapter *ResponsesClientToolMapping) (b
 					changed = true
 				}
 			case "tool_search_output":
-				if adapter.ToolSearch && !(adapter.nativeTools && isHostedToolSearchHistory(typed)) {
+				if adapter.ToolSearch && (!adapter.nativeTools || !isHostedToolSearchHistory(typed)) {
 					callID := strings.TrimSpace(stringValue(typed["call_id"]))
 					if callID == "" {
 						return fmt.Errorf("tool_search_output requires a non-empty string call_id before it can be lowered to function_call_output")
