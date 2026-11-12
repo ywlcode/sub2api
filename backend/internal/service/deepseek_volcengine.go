@@ -241,7 +241,7 @@ func (u *volcengineHTTP) send(req *http.Request, send func(*http.Request) (*http
 		return send(req)
 	}
 	if u.account.volcengineProtocolBaseURL(protocol) == "" {
-		return nil, fmt.Errorf("Volcengine account %d requires a %s base URL; DeepSeek default endpoints cannot be used", u.account.ID, protocol)
+		return nil, fmt.Errorf("volcengine account %d requires a %s base URL; DeepSeek default endpoints cannot be used", u.account.ID, protocol)
 	}
 	if req.GetBody == nil {
 		return nil, fmt.Errorf("normalize Volcengine request: JSON request body must be replayable")

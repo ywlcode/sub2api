@@ -99,7 +99,7 @@ func TestVolcengineRequestHistoryPolicy(t *testing.T) {
 		{"tool_result_without_call", `{"input":[{"type":"function_call_output","call_id":"1"}]}`, "complete tool history"},
 		{"tool_without_result", `{"input":[{"type":"function_call","call_id":"1"}]}`, "missing results"},
 		{"duplicate_call", `{"input":[{"type":"function_call","call_id":"1"},{"type":"function_call","call_id":"1"}]}`, "duplicate call_id"},
-		{"chat_shape", `{"messages":[{"role":"user","content":"hi"}]}`, "Responses requires input"},
+		{"chat_shape", `{"messages":[{"role":"user","content":"hi"}]}`, "responses requires input"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateVolcengineResponsesRequest(volcengineTestAccount(), []byte(tc.body))
@@ -211,7 +211,7 @@ func TestVolcengineOptInDoesNotAffectOtherChatAccounts(t *testing.T) {
 		_, err := svc.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
 		require.Error(t, err)
 		require.Len(t, upstream.requests, 1)
-		require.NotContains(t, err.Error(), "Responses requires input")
+		require.NotContains(t, err.Error(), "responses requires input")
 	}
 }
 
