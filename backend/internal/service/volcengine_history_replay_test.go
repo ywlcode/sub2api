@@ -78,7 +78,7 @@ func TestVolcengineGatewayPlaintextHistoryReplay(t *testing.T) {
 						reasoning := gjson.GetBytes(upstream.lastBody, "input.#(type==reasoning)")
 						var text strings.Builder
 						for _, part := range reasoning.Get("summary").Array() {
-							text.WriteString(part.Get("text").String())
+							_, _ = text.WriteString(part.Get("text").String())
 						}
 						require.Equal(t, history.text, text.String())
 						require.Empty(t, reasoning.Get("encrypted_content").String())

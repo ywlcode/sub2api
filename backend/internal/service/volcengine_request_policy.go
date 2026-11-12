@@ -33,7 +33,7 @@ func validateVolcengineResponsesRequest(account *Account, body []byte) error {
 		return err
 	}
 	if fields["messages"].Exists() {
-		return fmt.Errorf("Responses requires input; send Chat messages to /v1/chat/completions")
+		return fmt.Errorf("responses requires input; send Chat messages to /v1/chat/completions")
 	}
 	reasoning := normalizationObjectFields(fields["reasoning"])
 	thinking := normalizationObjectFields(fields["thinking"])
