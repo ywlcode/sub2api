@@ -24,7 +24,7 @@ import (
 // Soft-gate applies only to *explicit* free OAuth (subscription_tier/plan_type ==
 // "free"). Media/cache free detection uses isKnownGrokFreeAccount instead.
 // Admin paths (QueryQuota / import probe) never call this filter.
-// Defaults live on config.Gateway.Grok (see config load defaults / tests).
+// Defaults live on config.RequestGateway().Grok (see config load defaults / tests).
 
 type GrokFreeQuotaPolicy struct {
 	Enabled         bool  `json:"enabled"`
@@ -51,13 +51,13 @@ var grokFreeQuotaGateQueryFailureTotal atomic.Int64
 var grokFreeQuotaGateBlockedTotal atomic.Int64
 
 func resolveGrokFreeQuotaGateSettings(cfg *config.Config) (grokFreeQuotaGateSettings, bool) {
-	if cfg == nil || !cfg.Gateway.Grok.FreeQuotaSoftGateEnabled {
+	if cfg == nil || !cfg.RequestGateway().Grok.FreeQuotaSoftGateEnabled {
 		return grokFreeQuotaGateSettings{}, false
 	}
-	limit := cfg.Gateway.Grok.FreeQuotaTokenLimit
-	percent := cfg.Gateway.Grok.FreeQuotaSoftGatePercent
-	windowHours := cfg.Gateway.Grok.FreeQuotaWindowHours
-	cacheSeconds := cfg.Gateway.Grok.FreeQuotaStatsCacheSeconds
+	limit := cfg.RequestGateway().Grok.FreeQuotaTokenLimit
+	percent := cfg.RequestGateway().Grok.FreeQuotaSoftGatePercent
+	windowHours := cfg.RequestGateway().Grok.FreeQuotaWindowHours
+	cacheSeconds := cfg.RequestGateway().Grok.FreeQuotaStatsCacheSeconds
 	if limit <= 0 || percent < 1 || percent > 100 || windowHours <= 0 || cacheSeconds < 0 {
 		return grokFreeQuotaGateSettings{}, false
 	}

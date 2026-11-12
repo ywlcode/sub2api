@@ -823,7 +823,7 @@ func (s *GatewayService) tryAcquireByLegacyOrder(ctx context.Context, candidates
 
 func (s *GatewayService) schedulingConfig() config.GatewaySchedulingConfig {
 	if s.cfg != nil {
-		return s.cfg.Gateway.Scheduling
+		return s.cfg.RequestGateway().Scheduling
 	}
 	return config.GatewaySchedulingConfig{
 		StickySessionMaxWaiting:  3,

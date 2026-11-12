@@ -19,6 +19,9 @@ type userGroupPolicyReader interface {
 }
 
 func (s *APIKeyService) requestConfigCacheReady() bool {
+	if s != nil && s.cfg.IsSecondary() {
+		return false
+	}
 	return s.localAuth == nil && s.cache != nil && s.authInvalidationConnected.Load()
 }
 

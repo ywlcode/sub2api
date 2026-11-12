@@ -378,7 +378,7 @@ func (s *OpenAIGatewayService) getOpenAIWSStateStore() OpenAIWSStateStore {
 
 func (s *OpenAIGatewayService) openAIWSResponseStickyTTL() time.Duration {
 	if s != nil && s.cfg != nil {
-		seconds := s.cfg.Gateway.OpenAIWS.StickyResponseIDTTLSeconds
+		seconds := s.cfg.RequestGateway().OpenAIWS.StickyResponseIDTTLSeconds
 		if seconds > 0 {
 			return time.Duration(seconds) * time.Second
 		}
@@ -388,14 +388,14 @@ func (s *OpenAIGatewayService) openAIWSResponseStickyTTL() time.Duration {
 
 func (s *OpenAIGatewayService) openAIWSIngressPreviousResponseRecoveryEnabled() bool {
 	if s != nil && s.cfg != nil {
-		return s.cfg.Gateway.OpenAIWS.IngressPreviousResponseRecoveryEnabled
+		return s.cfg.RequestGateway().OpenAIWS.IngressPreviousResponseRecoveryEnabled
 	}
 	return true
 }
 
 func (s *OpenAIGatewayService) openAIWSReadTimeout() time.Duration {
-	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ReadTimeoutSeconds > 0 {
-		return time.Duration(s.cfg.Gateway.OpenAIWS.ReadTimeoutSeconds) * time.Second
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.ReadTimeoutSeconds > 0 {
+		return time.Duration(s.cfg.RequestGateway().OpenAIWS.ReadTimeoutSeconds) * time.Second
 	}
 	return 15 * time.Minute
 }
@@ -408,32 +408,32 @@ func (s *OpenAIGatewayService) openAIWSPassthroughIdleTimeout() time.Duration {
 }
 
 func (s *OpenAIGatewayService) openAIWSWriteTimeout() time.Duration {
-	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.WriteTimeoutSeconds > 0 {
-		return time.Duration(s.cfg.Gateway.OpenAIWS.WriteTimeoutSeconds) * time.Second
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.WriteTimeoutSeconds > 0 {
+		return time.Duration(s.cfg.RequestGateway().OpenAIWS.WriteTimeoutSeconds) * time.Second
 	}
 	return 2 * time.Minute
 }
 
 func (s *OpenAIGatewayService) openAIWSEventFlushBatchSize() int {
-	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.EventFlushBatchSize > 0 {
-		return s.cfg.Gateway.OpenAIWS.EventFlushBatchSize
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.EventFlushBatchSize > 0 {
+		return s.cfg.RequestGateway().OpenAIWS.EventFlushBatchSize
 	}
 	return openAIWSEventFlushBatchSizeDefault
 }
 
 func (s *OpenAIGatewayService) openAIWSEventFlushInterval() time.Duration {
-	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.EventFlushIntervalMS >= 0 {
-		if s.cfg.Gateway.OpenAIWS.EventFlushIntervalMS == 0 {
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.EventFlushIntervalMS >= 0 {
+		if s.cfg.RequestGateway().OpenAIWS.EventFlushIntervalMS == 0 {
 			return 0
 		}
-		return time.Duration(s.cfg.Gateway.OpenAIWS.EventFlushIntervalMS) * time.Millisecond
+		return time.Duration(s.cfg.RequestGateway().OpenAIWS.EventFlushIntervalMS) * time.Millisecond
 	}
 	return openAIWSEventFlushIntervalDefault
 }
 
 func (s *OpenAIGatewayService) openAIWSPayloadLogSampleRate() float64 {
 	if s != nil && s.cfg != nil {
-		rate := s.cfg.Gateway.OpenAIWS.PayloadLogSampleRate
+		rate := s.cfg.RequestGateway().OpenAIWS.PayloadLogSampleRate
 		if rate < 0 {
 			return 0
 		}
@@ -468,8 +468,8 @@ func (s *OpenAIGatewayService) shouldEmitOpenAIWSPayloadSchema(attempt int) bool
 }
 
 func (s *OpenAIGatewayService) openAIWSDialTimeout() time.Duration {
-	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.DialTimeoutSeconds > 0 {
-		return time.Duration(s.cfg.Gateway.OpenAIWS.DialTimeoutSeconds) * time.Second
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.DialTimeoutSeconds > 0 {
+		return time.Duration(s.cfg.RequestGateway().OpenAIWS.DialTimeoutSeconds) * time.Second
 	}
 	return 10 * time.Second
 }

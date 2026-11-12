@@ -105,6 +105,11 @@ func (r *usageBillingRepository) ApplyStagedUsageBilling(ctx context.Context, ke
 	}
 	defer func() { _ = tx.Rollback() }()
 	var raw, resultRaw []byte
+	if r.secondary {
+		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1)`, siteFence); err != nil {
+			return nil, err
+		}
+	}
 	var state, fingerprint string
 	var version int
 	if err = tx.QueryRowContext(ctx, `SELECT schema_version,payload,state,result,request_fingerprint
@@ -160,7 +165,12 @@ func (r *usageBillingRepository) ApplyStagedUsageBilling(ctx context.Context, ke
 		return nil, service.ErrUsageBillingRequestConflict
 	}
 	recovered.Result.Applied = true
-	if err = r.applyUsageBillingEffects(ctx, tx, cmd, &recovered.Result); err != nil {
+	if r.secondary {
+		err = replaySiteDebit(ctx, tx, &recovered.Event)
+	} else {
+		err = r.applyUsageBillingEffects(ctx, tx, cmd, &recovered.Result)
+	}
+	if err != nil {
 		return nil, err
 	}
 	if err = insertUsageBillingQuote(ctx, tx, cmd); err != nil {

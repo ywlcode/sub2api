@@ -137,8 +137,8 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 	// 使用 Scanner 并限制单行大小，避免 ReadString 无上限导致 OOM
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
-	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
+	if s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().MaxLineSize > 0 {
+		maxLineSize = s.settingService.cfg.RequestGateway().MaxLineSize
 	}
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
@@ -179,8 +179,8 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 
 	// 上游数据间隔超时保护（防止上游挂起长期占用连接）
 	streamInterval := time.Duration(0)
-	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.settingService.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	if s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().StreamDataIntervalTimeout > 0 {
+		streamInterval = time.Duration(s.settingService.cfg.RequestGateway().StreamDataIntervalTimeout) * time.Second
 	}
 	var intervalTicker *time.Ticker
 	if streamInterval > 0 {
@@ -194,8 +194,8 @@ func (s *AntigravityGatewayService) handleGeminiStreamingResponse(c *gin.Context
 
 	// 下游 keepalive：防止代理/Cloudflare Tunnel 因连接空闲而断开
 	keepaliveInterval := time.Duration(0)
-	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.StreamKeepaliveInterval > 0 {
-		keepaliveInterval = time.Duration(s.settingService.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+	if s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().StreamKeepaliveInterval > 0 {
+		keepaliveInterval = time.Duration(s.settingService.cfg.RequestGateway().StreamKeepaliveInterval) * time.Second
 	}
 	// go-genai / python-genai 不会忽略 SSE 注释行，收到 ":\n\n" 会直接把整个流判成
 	// invalid stream chunk 而中断（Antigravity CLI 在用 go-genai）。对这类客户端宁可不发心跳。
@@ -340,8 +340,8 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
-	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
+	if s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().MaxLineSize > 0 {
+		maxLineSize = s.settingService.cfg.RequestGateway().MaxLineSize
 	}
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
@@ -388,8 +388,8 @@ func (s *AntigravityGatewayService) handleGeminiStreamToNonStreaming(c *gin.Cont
 
 	// 上游数据间隔超时保护（防止上游挂起长期占用连接）
 	streamInterval := time.Duration(0)
-	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.settingService.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	if s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().StreamDataIntervalTimeout > 0 {
+		streamInterval = time.Duration(s.settingService.cfg.RequestGateway().StreamDataIntervalTimeout) * time.Second
 	}
 	var intervalTicker *time.Ticker
 	if streamInterval > 0 {
@@ -751,8 +751,8 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, 
 	}
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
-	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
+	if s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().MaxLineSize > 0 {
+		maxLineSize = s.settingService.cfg.RequestGateway().MaxLineSize
 	}
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
@@ -799,8 +799,8 @@ func (s *AntigravityGatewayService) collectClaudeStreamResponse(c *gin.Context, 
 
 	// 上游数据间隔超时保护（防止上游挂起长期占用连接）
 	streamInterval := time.Duration(0)
-	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.settingService.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	if s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().StreamDataIntervalTimeout > 0 {
+		streamInterval = time.Duration(s.settingService.cfg.RequestGateway().StreamDataIntervalTimeout) * time.Second
 	}
 	var intervalTicker *time.Ticker
 	if streamInterval > 0 {
@@ -975,8 +975,8 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 	// 使用 Scanner 并限制单行大小，避免 ReadString 无上限导致 OOM
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
-	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = s.settingService.cfg.Gateway.MaxLineSize
+	if s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().MaxLineSize > 0 {
+		maxLineSize = s.settingService.cfg.RequestGateway().MaxLineSize
 	}
 	scanBuf := getSSEScannerBuf64K()
 	scanner.Buffer(scanBuf[:0], maxLineSize)
@@ -1027,8 +1027,8 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 	defer close(done)
 
 	streamInterval := time.Duration(0)
-	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.StreamDataIntervalTimeout > 0 {
-		streamInterval = time.Duration(s.settingService.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	if s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().StreamDataIntervalTimeout > 0 {
+		streamInterval = time.Duration(s.settingService.cfg.RequestGateway().StreamDataIntervalTimeout) * time.Second
 	}
 	var intervalTicker *time.Ticker
 	if streamInterval > 0 {
@@ -1042,8 +1042,8 @@ func (s *AntigravityGatewayService) handleClaudeStreamingResponse(c *gin.Context
 
 	// 下游 keepalive：防止代理/Cloudflare Tunnel 因连接空闲而断开
 	keepaliveInterval := time.Duration(0)
-	if s.settingService.cfg != nil && s.settingService.cfg.Gateway.StreamKeepaliveInterval > 0 {
-		keepaliveInterval = time.Duration(s.settingService.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+	if s.settingService.cfg != nil && s.settingService.cfg.RequestGateway().StreamKeepaliveInterval > 0 {
+		keepaliveInterval = time.Duration(s.settingService.cfg.RequestGateway().StreamKeepaliveInterval) * time.Second
 	}
 	var keepaliveTicker *time.Ticker
 	if keepaliveInterval > 0 {

@@ -226,7 +226,7 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 // Multi-group choice must use the same spendable floor as billing preflight;
 // authentication's <=0 threshold remains unchanged for ordinary single groups.
 func groupBalanceNeedsRecovery(balance float64, cfg *config.Config) bool {
-	return balance <= 0 || cfg != nil && cfg.Billing.MinimumBalanceReserve > 0 && balance < cfg.Billing.MinimumBalanceReserve
+	return balance <= 0 || cfg != nil && cfg.RequestBilling().MinimumBalanceReserve > 0 && balance < cfg.RequestBilling().MinimumBalanceReserve
 }
 
 // groupAllowsGooglePlatform 决定 Google 入站（/v1beta）能否使用这个分组。

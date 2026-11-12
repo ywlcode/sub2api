@@ -220,8 +220,8 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	var imageOutputSizes []string
 	if reqStream {
 		maxLineSize := defaultMaxLineSize
-		if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-			maxLineSize = s.cfg.Gateway.MaxLineSize
+		if s.cfg != nil && s.cfg.RequestGateway().MaxLineSize > 0 {
+			maxLineSize = s.cfg.RequestGateway().MaxLineSize
 		}
 		resp.Body = newGrokResponsesBillingPingFilterBody(resp.Body, account, maxLineSize)
 		if hasGrokResponsesClientToolMapping(clientToolMapping) {

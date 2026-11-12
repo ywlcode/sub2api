@@ -92,7 +92,7 @@ func (d *OpenAICodexClientRestrictionDetector) Detect(c *gin.Context, account *A
 		return CodexClientRestrictionDetectionResult{Enabled: false, Matched: false, Reason: CodexClientRestrictionReasonDisabled}
 	}
 
-	if d != nil && d.cfg != nil && d.cfg.Gateway.ForceCodexCLI {
+	if d != nil && d.cfg != nil && d.cfg.RequestGateway().ForceCodexCLI {
 		return CodexClientRestrictionDetectionResult{Enabled: true, Matched: true, Reason: CodexClientRestrictionReasonForceCodexCLI}
 	}
 

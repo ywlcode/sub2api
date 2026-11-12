@@ -6,8 +6,8 @@ import (
 )
 
 func configuredMinOutputTokens(cfg *config.Config) int {
-	if cfg != nil && cfg.Gateway.MinOutputTokens >= 16 {
-		return cfg.Gateway.MinOutputTokens
+	if cfg != nil && cfg.RequestGateway().MinOutputTokens >= 16 {
+		return cfg.RequestGateway().MinOutputTokens
 	}
 	return apicompat.DefaultMinMaxOutputTokens
 }

@@ -74,10 +74,10 @@ var errOpenAIWSSSEPayloadTooLarge = errors.New("HTTP SSE acceleration payload ex
 const openAIWSSSEMaxPayloadBytesDefault int64 = 15 * 1024 * 1024
 
 func (s *OpenAIGatewayService) openAIWSSSEMaxPayloadBytes() int64 {
-	if s == nil || s.cfg == nil || s.cfg.Gateway.OpenAIWS.SSEAccelerationMaxPayloadBytes <= 0 {
+	if s == nil || s.cfg == nil || s.cfg.RequestGateway().OpenAIWS.SSEAccelerationMaxPayloadBytes <= 0 {
 		return openAIWSSSEMaxPayloadBytesDefault
 	}
-	return s.cfg.Gateway.OpenAIWS.SSEAccelerationMaxPayloadBytes
+	return s.cfg.RequestGateway().OpenAIWS.SSEAccelerationMaxPayloadBytes
 }
 
 // encodeOpenAIWSSSEPayload uses the same Encoder write-through pattern as

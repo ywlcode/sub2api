@@ -96,8 +96,8 @@ func (s *OpenAIGatewayService) liveConcurrencyCache() (LiveConcurrencyCache, err
 }
 
 func (s *OpenAIGatewayService) liveMaxSessionDuration() time.Duration {
-	if s != nil && s.cfg != nil && s.cfg.Gateway.Live.MaxSessionDurationSeconds > 0 {
-		return time.Duration(s.cfg.Gateway.Live.MaxSessionDurationSeconds) * time.Second
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().Live.MaxSessionDurationSeconds > 0 {
+		return time.Duration(s.cfg.RequestGateway().Live.MaxSessionDurationSeconds) * time.Second
 	}
 	return defaultLiveMaxSessionDuration
 }

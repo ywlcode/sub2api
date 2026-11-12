@@ -1,5 +1,9 @@
 export default {
     accounts: {
+      secondaryProcessing: {
+        title: '允许从站直接处理',
+        hint: '允许已配对的从站使用此账号及其支持的模型，主站仍可正常使用。保存后自动同步；从站须能访问账号配置的上游地址。'
+      },
       requestGzip: {
         title: '请求体 gzip 压缩',
         hint: '默认关闭。仅在上游支持 gzip 请求体时开启；压缩不小于 1 KiB 且压缩后更小的 JSON HTTP 请求。WebSocket 和文件上传不受影响。'

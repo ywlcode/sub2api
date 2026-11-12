@@ -17,7 +17,7 @@ func (s *OpenAIGatewayService) guardExcelBPSProgress(ctx context.Context, respon
 	}
 	idle := 120 * time.Second
 	if s.cfg != nil {
-		idle = time.Duration(s.cfg.Gateway.ExcelBPSStreamDataIntervalTimeout) * time.Second
+		idle = time.Duration(s.cfg.RequestGateway().ExcelBPSStreamDataIntervalTimeout) * time.Second
 	}
 	response.Body = basispoints.WithProgressTimeout(ctx, response.Body, idle)
 }

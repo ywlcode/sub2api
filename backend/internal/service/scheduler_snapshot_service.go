@@ -165,7 +165,7 @@ func NewSchedulerSnapshotService(
 	}
 	maxQPS := 0
 	if cfg != nil {
-		maxQPS = cfg.Gateway.Scheduling.DbFallbackMaxQPS
+		maxQPS = cfg.RequestGateway().Scheduling.DbFallbackMaxQPS
 	}
 	return &SchedulerSnapshotService{
 		cache:         cache,
@@ -1484,14 +1484,14 @@ func (s *SchedulerSnapshotService) checkOutboxLag(ctx context.Context, watermark
 	}
 	lagSeconds := int(lag.Seconds())
 	lagWarning := ok && !oldestCreatedAt.IsZero() &&
-		s.cfg.Gateway.Scheduling.OutboxLagWarnSeconds > 0 &&
-		lagSeconds >= s.cfg.Gateway.Scheduling.OutboxLagWarnSeconds
+		s.cfg.RequestGateway().Scheduling.OutboxLagWarnSeconds > 0 &&
+		lagSeconds >= s.cfg.RequestGateway().Scheduling.OutboxLagWarnSeconds
 
 	lagDegraded := ok && !oldestCreatedAt.IsZero() &&
-		s.cfg.Gateway.Scheduling.OutboxLagRebuildSeconds > 0 &&
-		lagSeconds >= s.cfg.Gateway.Scheduling.OutboxLagRebuildSeconds
+		s.cfg.RequestGateway().Scheduling.OutboxLagRebuildSeconds > 0 &&
+		lagSeconds >= s.cfg.RequestGateway().Scheduling.OutboxLagRebuildSeconds
 
-	backlogThreshold := s.cfg.Gateway.Scheduling.OutboxBacklogRebuildRows
+	backlogThreshold := s.cfg.RequestGateway().Scheduling.OutboxBacklogRebuildRows
 	backlogKnown := true
 	var backlog int64
 	if backlogThreshold > 0 {
@@ -1540,7 +1540,7 @@ func (s *SchedulerSnapshotService) checkOutboxLag(ctx context.Context, watermark
 		s.lagFailures = 0
 	}
 	failures := s.lagFailures
-	lagReady := lagDegraded && failures >= s.cfg.Gateway.Scheduling.OutboxLagRebuildFailures
+	lagReady := lagDegraded && failures >= s.cfg.RequestGateway().Scheduling.OutboxLagRebuildFailures
 	retryDue := s.outboxRebuildRetryReason != "" &&
 		!s.outboxRebuildRetryAt.IsZero() && !now.Before(s.outboxRebuildRetryAt)
 
@@ -1779,10 +1779,13 @@ func (s *SchedulerSnapshotService) writesSnapshots() bool {
 }
 
 func (s *SchedulerSnapshotService) guardFallback(ctx context.Context) error {
+	if s.cfg.IsSecondary() {
+		return ctx.Err()
+	}
 	if !s.writesSnapshots() {
 		return ErrSchedulerCacheNotReady
 	}
-	if s.cfg == nil || s.cfg.Gateway.Scheduling.DbFallbackEnabled {
+	if s.cfg == nil || s.cfg.RequestGateway().Scheduling.DbFallbackEnabled {
 		if s.fallbackLimit == nil || s.fallbackLimit.Allow() {
 			return nil
 		}
@@ -1792,10 +1795,10 @@ func (s *SchedulerSnapshotService) guardFallback(ctx context.Context) error {
 }
 
 func (s *SchedulerSnapshotService) withFallbackTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
-	if s.cfg == nil || s.cfg.Gateway.Scheduling.DbFallbackTimeoutSeconds <= 0 {
+	if s.cfg == nil || s.cfg.RequestGateway().Scheduling.DbFallbackTimeoutSeconds <= 0 {
 		return context.WithCancel(ctx)
 	}
-	timeout := time.Duration(s.cfg.Gateway.Scheduling.DbFallbackTimeoutSeconds) * time.Second
+	timeout := time.Duration(s.cfg.RequestGateway().Scheduling.DbFallbackTimeoutSeconds) * time.Second
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
@@ -1816,7 +1819,7 @@ func (s *SchedulerSnapshotService) outboxPollInterval() time.Duration {
 	if s.cfg == nil {
 		return time.Second
 	}
-	sec := s.cfg.Gateway.Scheduling.OutboxPollIntervalSeconds
+	sec := s.cfg.RequestGateway().Scheduling.OutboxPollIntervalSeconds
 	if sec <= 0 {
 		return time.Second
 	}
@@ -1827,7 +1830,7 @@ func (s *SchedulerSnapshotService) fullRebuildInterval() time.Duration {
 	if s.cfg == nil {
 		return 0
 	}
-	sec := s.cfg.Gateway.Scheduling.FullRebuildIntervalSeconds
+	sec := s.cfg.RequestGateway().Scheduling.FullRebuildIntervalSeconds
 	if sec <= 0 {
 		return 0
 	}

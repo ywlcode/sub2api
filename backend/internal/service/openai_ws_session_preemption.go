@@ -92,8 +92,8 @@ func (s *OpenAIGatewayService) BeginOpenAIWSIngressSessionPreemptionWithClient(
 			_ = clientConn.Close(coderws.StatusTryAgainLater, openAIWSSessionPreemptedCloseReason)
 		}
 	}
-	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled && account != nil {
-		switch account.ResolveOpenAIResponsesWebSocketV2Mode(s.cfg.Gateway.OpenAIWS.IngressModeDefault) {
+	if s != nil && s.cfg != nil && s.cfg.RequestGateway().OpenAIWS.ModeRouterV2Enabled && account != nil {
+		switch account.ResolveOpenAIResponsesWebSocketV2Mode(s.cfg.RequestGateway().OpenAIWS.IngressModeDefault) {
 		case OpenAIWSIngressModePassthrough, OpenAIWSIngressModeHTTPBridge:
 			// These modes own their upstream transport and replay state per
 			// inbound connection. Sharing a sticky/cache identity does not mean

@@ -145,6 +145,9 @@ func NewBillingCacheService(
 	cfg *config.Config,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
 ) *BillingCacheService {
+	if cfg.IsSecondary() {
+		cache = nil
+	}
 	svc := &BillingCacheService{
 		cache:                 cache,
 		userRepo:              userRepo,
@@ -1025,10 +1028,10 @@ func (s *BillingCacheService) checkRPM(ctx context.Context, user *User, group *G
 }
 
 func (s *BillingCacheService) minimumBalanceReserve() float64 {
-	if s == nil || s.cfg == nil || s.cfg.Billing.MinimumBalanceReserve <= 0 {
+	if s == nil || s.cfg == nil || s.cfg.RequestBilling().MinimumBalanceReserve <= 0 {
 		return 0
 	}
-	return s.cfg.Billing.MinimumBalanceReserve
+	return s.cfg.RequestBilling().MinimumBalanceReserve
 }
 
 func (s *BillingCacheService) balanceBelowEligibilityThreshold(balance float64) bool {

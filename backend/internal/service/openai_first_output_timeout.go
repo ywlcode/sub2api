@@ -230,13 +230,13 @@ func (s *openAIFirstOutputStage) Close() error {
 }
 
 func (s *OpenAIGatewayService) openAIFirstOutputTimeout(reasoningEffort string) time.Duration {
-	if s == nil || s.cfg == nil || s.cfg.Gateway.OpenAIFirstOutputTimeoutSeconds <= 0 {
+	if s == nil || s.cfg == nil || s.cfg.RequestGateway().OpenAIFirstOutputTimeoutSeconds <= 0 {
 		return 0
 	}
-	seconds := s.cfg.Gateway.OpenAIFirstOutputTimeoutSeconds
+	seconds := s.cfg.RequestGateway().OpenAIFirstOutputTimeoutSeconds
 	switch strings.ToLower(strings.TrimSpace(reasoningEffort)) {
 	case "high", "xhigh", "max":
-		if override := s.cfg.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds; override > 0 {
+		if override := s.cfg.RequestGateway().OpenAIHighEffortFirstOutputTimeoutSeconds; override > 0 {
 			seconds = override
 		}
 	}

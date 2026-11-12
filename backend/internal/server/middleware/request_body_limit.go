@@ -10,7 +10,14 @@ import (
 
 // RequestBodyLimit 使用 MaxBytesReader 限制请求体大小。
 func RequestBodyLimit(maxBytes int64, budgets ...*pkghttputil.BodyMemoryBudget) gin.HandlerFunc {
+	return RequestBodyLimitFrom(func() int64 { return maxBytes }, budgets...)
+}
+
+// RequestBodyLimitFrom reads an immutable live policy once per request while
+// the shared ingress memory budget remains local to this process.
+func RequestBodyLimitFrom(limit func() int64, budgets ...*pkghttputil.BodyMemoryBudget) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		maxBytes := limit()
 		if len(budgets) > 0 {
 			ctx, release := pkghttputil.WithRequestBodyMemoryBudget(c.Request.Context(), budgets[0])
 			defer release()

@@ -63,8 +63,8 @@ type anthropicCompatStreamFailure struct {
 func newAnthropicCompatStream(cfg *config.Config, c *gin.Context, resp *http.Response, logPrefix, requestID string) *anthropicCompatStream {
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
-	if cfg != nil && cfg.Gateway.MaxLineSize > 0 {
-		maxLineSize = cfg.Gateway.MaxLineSize
+	if cfg != nil && cfg.RequestGateway().MaxLineSize > 0 {
+		maxLineSize = cfg.RequestGateway().MaxLineSize
 	}
 	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 	stream := &anthropicCompatStream{

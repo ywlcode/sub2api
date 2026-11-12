@@ -98,7 +98,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	pelicanGroupTestRepository := repository.NewPelicanGroupTestRepository(db)
 	usageLogRepository := repository.NewUsageLogRepository(client, db)
 	usageRequestPhaseCache := service.ProvideUsageRequestPhaseCache(usageLogRepository, redisClient, configConfig)
-	usageBillingRepository := repository.NewUsageBillingRepository(client, db)
+	usageBillingRepository := repository.ProvideUsageBillingRepository(client, db, configConfig)
 	gatewayCache := repository.NewGatewayCache(redisClient)
 	pricingRemoteClient := repository.ProvidePricingRemoteClient(configConfig)
 	pricingService, err := service.ProvidePricingService(configConfig, pricingRemoteClient)
@@ -438,7 +438,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	auditLogMiddleware := middleware.NewAuditLogMiddleware(auditLogService)
 	stepUpAuthMiddleware := middleware.NewStepUpAuthMiddleware(totpService, userService, settingService)
 	lifecycle := server.ProvideLifecycle(configConfig, db, redisClient, schedulerSnapshotService)
-	engine := server.ProvideRouter(configConfig, handlers, jwtAuthMiddleware, optionalJWTAuthMiddleware, adminAuthMiddleware, apiKeyAuthMiddleware, auditLogMiddleware, stepUpAuthMiddleware, apiKeyService, subscriptionService, opsService, settingService, compositeRouteResolver, redisClient, lifecycle)
+	engine := server.ProvideRouter(configConfig, handlers, jwtAuthMiddleware, optionalJWTAuthMiddleware, adminAuthMiddleware, apiKeyAuthMiddleware, auditLogMiddleware, stepUpAuthMiddleware, apiKeyService, subscriptionService, opsService, settingService, compositeRouteResolver, redisClient, lifecycle, db, billingCacheService, channelService, pricingService, errorPassthroughService)
 	httpServer := server.ProvideHTTPServer(configConfig, engine, lifecycle)
 	autoCreditEmailOutboxRepository, err := repository.ProvideAutoCreditEmailOutboxRepository(configConfig)
 	if err != nil {

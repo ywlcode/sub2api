@@ -56,7 +56,7 @@ func (s *GrokOAuthService) GetCapabilities() GrokOAuthCapabilities {
 }
 
 func (s *GrokOAuthService) passwordAuthEnabled() bool {
-	return s.config != nil && s.config.Gateway.Grok.PasswordAuthEnabled
+	return s.config != nil && s.config.RequestGateway().Grok.PasswordAuthEnabled
 }
 
 type GrokAuthURLResult struct {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/site"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -252,6 +253,58 @@ func TestHTTPServerGlobalBodyLimit(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.Handler.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+}
+
+func TestHTTPServerSecondaryBodyLimitFollowsPolicy(t *testing.T) {
+	for _, explicitCap := range []bool{false, true} {
+		name := "gateway fallback"
+		if explicitCap {
+			name = "explicit local cap"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := ingressTestConfig()
+			cfg.Site.Mode = site.Secondary
+			if !explicitCap {
+				cfg.Server.MaxRequestBodySize = 0
+			}
+			r := gin.New()
+			r.POST("/", func(c *gin.Context) {
+				_, err := io.ReadAll(c.Request.Body)
+				if err != nil {
+					var maxErr *http.MaxBytesError
+					require.ErrorAs(t, err, &maxErr)
+					c.Status(http.StatusRequestEntityTooLarge)
+					return
+				}
+				c.Status(http.StatusOK)
+			})
+			srv := ProvideHTTPServer(cfg, r, NewLifecycle())
+			request := func(want int) {
+				t.Helper()
+				rec := httptest.NewRecorder()
+				req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("x", 1500)))
+				srv.Handler.ServeHTTP(rec, req)
+				require.Equal(t, want, rec.Code)
+			}
+			request(http.StatusRequestEntityTooLarge)
+			primary := ingressTestConfig()
+			installLimit := func(limit int64) {
+				t.Helper()
+				primary.Gateway.MaxBodySize = limit
+				raw, err := primary.ExportSiteRequestPolicy()
+				require.NoError(t, err)
+				require.NoError(t, cfg.InstallSiteRequestPolicy(raw))
+			}
+			installLimit(4096)
+			if explicitCap {
+				request(http.StatusRequestEntityTooLarge)
+			} else {
+				request(http.StatusOK)
+			}
+			installLimit(1200)
+			request(http.StatusRequestEntityTooLarge)
+		})
+	}
 }
 
 func serveIngressTestServer(t *testing.T, srv *http.Server) (string, func()) {
