@@ -75,9 +75,11 @@ func isVolcengineTextCompaction(body []byte) bool {
 }
 
 type volcengineCompactionError struct {
-	reason string
-	usage  *apicompat.ResponsesUsage
-	status int
+	reason      string
+	usage       *apicompat.ResponsesUsage
+	status      int
+	cyberBody   []byte
+	cyberStatus int
 }
 
 func (e *volcengineCompactionError) Error() string {
@@ -126,11 +128,16 @@ func forwardVolcengineTextCompaction(req *http.Request, body []byte, send func(*
 		_ = prepared.Body.Close()
 		retryable, reason, status := true, "upstream connection failed", http.StatusBadGateway
 		var final *apicompat.ResponsesResponse
+		var cyberBody []byte
 		if resp != nil && resp.Body != nil {
 			stopClose := context.AfterFunc(ctx, func() { _ = resp.Body.Close() })
 			if err == nil && resp.StatusCode < 400 {
-				final, retryable, reason = readVolcengineCompaction(resp)
+				final, retryable, reason = readVolcengineCompactionWithCyber(resp, &cyberBody)
 			} else if err == nil {
+				errorBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+				if isCyberPolicyRejection(errorBody) {
+					cyberBody = errorBody
+				}
 				retryable = resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
 				reason, status = fmt.Sprintf("upstream HTTP %d", resp.StatusCode), mapUpstreamStatusCode(resp.StatusCode)
 			}
@@ -139,6 +146,9 @@ func forwardVolcengineTextCompaction(req *http.Request, body []byte, send func(*
 		}
 		if final != nil {
 			total = addVolcengineCompactionUsage(total, final.Usage)
+		}
+		if len(cyberBody) > 0 {
+			return nil, &volcengineCompactionError{reason: "upstream policy rejection", usage: total, status: http.StatusForbidden, cyberBody: cyberBody, cyberStatus: resp.StatusCode}
 		}
 		if ctx.Err() != nil {
 			return nil, &volcengineCompactionError{reason: "request canceled or deadline exceeded", usage: total, status: http.StatusGatewayTimeout}
@@ -241,6 +251,10 @@ func (s *volcengineCompactionText) text() string {
 // A completed transport event alone is insufficient for a text summary. Never
 // promote reasoning into output_text, or accept truncated/refused/tool output.
 func readVolcengineCompaction(resp *http.Response) (*apicompat.ResponsesResponse, bool, string) {
+	return readVolcengineCompactionWithCyber(resp, nil)
+}
+
+func readVolcengineCompactionWithCyber(resp *http.Response, cyberBody *[]byte) (*apicompat.ResponsesResponse, bool, string) {
 	var final *apicompat.ResponsesResponse
 	var text volcengineCompactionText
 	terminal := ""
@@ -251,6 +265,14 @@ func readVolcengineCompaction(resp *http.Response) (*apicompat.ResponsesResponse
 		}
 		if err != nil {
 			return nil, true, "upstream response ended unexpectedly"
+		}
+		if isCyberPolicyRejection(body) {
+			if cyberBody != nil {
+				*cyberBody = body
+			}
+			final = &apicompat.ResponsesResponse{}
+			_ = json.Unmarshal(body, final)
+			return final, false, "upstream policy rejection"
 		}
 		final = &apicompat.ResponsesResponse{}
 		if json.Unmarshal(body, final) != nil {
@@ -268,6 +290,19 @@ func readVolcengineCompaction(resp *http.Response) (*apicompat.ResponsesResponse
 			var event apicompat.ResponsesStreamEvent
 			if json.Unmarshal([]byte(data), &event) != nil {
 				return nil, true, "invalid response event"
+			}
+			if isCyberPolicyRejection([]byte(data)) {
+				if cyberBody != nil {
+					*cyberBody = []byte(data)
+				}
+				final = event.Response
+				if final == nil {
+					final = &apicompat.ResponsesResponse{}
+				}
+				if final.Usage == nil {
+					final.Usage = event.Usage
+				}
+				return final, false, "upstream policy rejection"
 			}
 			switch event.Type {
 			case "response.output_text.delta", "response.output_text.done":
@@ -424,6 +459,10 @@ func writeVolcengineCompactionError(c *gin.Context, err error, stream bool, mode
 	}
 	result := &OpenAIForwardResult{Model: model, UsageUnavailable: failure.usage == nil, ObservedUsageOnError: failure.usage != nil}
 	result.Usage = copyOpenAIUsageFromResponsesUsage(failure.usage)
+	if len(failure.cyberBody) > 0 {
+		writeNativeCyberPolicyError(c, APIProtocolResponses, failure.cyberBody, failure.cyberStatus, &result.Usage)
+		return result, true
+	}
 	if c.Request != nil && c.Request.Context().Err() != nil {
 		result.ClientDisconnect = true
 		return result, true

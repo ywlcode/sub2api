@@ -33,13 +33,16 @@ func isOpenAIForbiddenPassthrough(payload []byte, upstreamStatus int) bool {
 	return openAIStreamFailedEventSemanticStatus(payload, extractOpenAISSEErrorMessage(payload)) == http.StatusForbidden
 }
 
-// rewriteOpenAIForbiddenErrorForClient returns a client-only copy, preserving
-// error codes and SSE/WS envelopes. Pass the actual HTTP status, or 0 for an
+// rewriteOpenAIForbiddenErrorForClient returns a client-only copy. Cyber errors
+// use a fixed local envelope; other errors retain rule behavior. Pass the actual HTTP status, or 0 for an
 // event. Account health, retries and audit evidence must use the original body.
 // The returned status can only change HTTP headers before they are committed.
 func rewriteOpenAIForbiddenErrorForClient(c *gin.Context, account *Account, payload []byte, upstreamStatus int) ([]byte, int, bool) {
 	if !isOpenAIForbiddenPassthrough(payload, upstreamStatus) {
 		return payload, 0, false
+	}
+	if isCyberPolicyRejection(payload) {
+		return cyberPolicyClientPayload(payload), http.StatusForbidden, true
 	}
 	platform := PlatformOpenAI
 	if account != nil {
@@ -96,6 +99,7 @@ func forwardOpenAIForbiddenWSDialError(c *gin.Context, account *Account, upstrea
 	if !errors.As(upstreamErr, &dialErr) || dialErr == nil {
 		return upstreamErr, false
 	}
+	markOpenAICyberPolicyEvent(c, dialErr.ResponseBody, dialErr.StatusCode, nil)
 	clientBody, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, dialErr.ResponseBody, dialErr.StatusCode)
 	if !matched {
 		return upstreamErr, false
@@ -107,7 +111,7 @@ func forwardOpenAIForbiddenWSDialError(c *gin.Context, account *Account, upstrea
 	if code := gjson.GetBytes(clientBody, "error.code").String(); code != "" {
 		event, _ = sjson.SetBytes(event, "error.code", code)
 	}
-	event, _ = sjson.SetBytes(event, "error.type", "upstream_error")
+	event, _ = sjson.SetBytes(event, "error.type", gjson.GetBytes(clientBody, "error.type").String())
 	if err := writeClient(event); err != nil {
 		return err, true
 	}

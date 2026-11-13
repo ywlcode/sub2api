@@ -531,7 +531,7 @@ func TestIssue600InheritedIdentityStillChecksSessionBlock(t *testing.T) {
 					require.NotEmpty(t, key)
 					store, ok := h.gatewayCache.(service.CyberSessionBlockStore)
 					require.True(t, ok)
-					require.NoError(t, store.SetCyberSessionBlocked(context.Background(), "", []string{key}, time.Minute))
+					require.NoError(t, store.SetCyberSessionBlocked(context.Background(), service.PlatformOpenAI, "", []string{key}, time.Minute))
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 					defer cancel()
 					require.NoError(t, h.clientConn.Write(ctx, coderws.MessageText, []byte(omitted)))

@@ -274,6 +274,10 @@ func (s *OpenAIGatewayService) handleNativeAnthropicBufferedResponse(
 	}
 
 	usage := parseClaudeUsageFromResponseBody(body)
+	cyberUsage := claudeUsageToOpenAIUsage(usage)
+	if writeNativeCyberPolicyError(c, APIProtocolAnthropic, body, resp.StatusCode, &cyberUsage) {
+		return nil, errOpenAIErrorPassthroughForwarded
+	}
 	if IsForceCacheBilling(ctx) && usage.InputTokens > 0 {
 		body, err = classifyAnthropicResponseInputAsCacheRead(body, usage)
 		if err != nil {
@@ -495,6 +499,15 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 					firstTokenMs = &ms
 				}
 				parseSSEUsagePassthrough(data, usage)
+				if isCyberPolicyRejection([]byte(trimmed)) {
+					cyberUsage := claudeUsageToOpenAIUsage(usage)
+					markOpenAICyberPolicyEvent(c, []byte(trimmed), resp.StatusCode, &cyberUsage)
+					upstreamFailed = true
+					MarkOpsStreamFailure(c, "permission_error", CyberPolicyClientCode, CyberPolicyClientMessage, http.StatusForbidden)
+					// The event: line may already be written. Replace only its data
+					// line, then terminate at the normal event boundary below.
+					line = "data: " + string(cyberPolicyClientPayload([]byte(`{"type":"error"}`)))
+				}
 			} else {
 				trimmed := strings.TrimSpace(line)
 				if strings.HasPrefix(trimmed, "event:") && anthropicStreamEventIsTerminal(strings.TrimSpace(strings.TrimPrefix(trimmed, "event:")), "") {

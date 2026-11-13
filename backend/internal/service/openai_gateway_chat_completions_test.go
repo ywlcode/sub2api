@@ -1194,8 +1194,8 @@ func TestForwardAsChatCompletions_StreamCyberPolicyNoFailover(t *testing.T) {
 	require.NotNil(t, GetOpsCyberPolicy(c), "cyber mark must be set")
 	respBody := rec.Body.String()
 	require.Contains(t, respBody, `"error"`)
-	require.Contains(t, respBody, `"cyber_policy"`)
-	require.Contains(t, respBody, "data: [DONE]")
+	require.Contains(t, respBody, CyberPolicyClientMessage)
+	require.Equal(t, http.StatusForbidden, rec.Code)
 }
 
 func TestForwardAsChatCompletions_StreamsUsageWithoutClientStreamOptions(t *testing.T) {

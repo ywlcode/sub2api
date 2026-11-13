@@ -622,7 +622,7 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		return nil, fmt.Errorf("upstream response failed: %s", message)
 	}
 
-	// cyber_policy 不重试或冷却账号；先记录原始证据，再应用客户端错误透传规则。
+	// cyber_policy 不重试或冷却账号；记录原始证据，客户端使用固定本地错误。
 	if hit, code, cyberMsg := detectOpenAICyberPolicy(body); hit {
 		MarkOpsCyberPolicy(c, CyberPolicyMark{
 			Code:           code,
@@ -894,10 +894,7 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 		message := sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(body))
 		setOpsUpstreamError(c, resp.StatusCode, message, truncateString(string(body), 2048))
 		MarkResponseCommitted(c)
-		status, errType, clientMessage, _ := applyErrorPassthroughRule(
-			c, account.Platform, http.StatusForbidden, body, resp.StatusCode, "permission_error", message,
-		)
-		writeError(c, status, errType, clientMessage)
+		writeError(c, http.StatusForbidden, "permission_error", CyberPolicyClientMessage)
 		return nil, fmt.Errorf("upstream response failed: %s", message)
 	}
 
@@ -913,16 +910,8 @@ func (s *OpenAIGatewayService) handleCompatErrorResponse(
 			UpstreamStatus: resp.StatusCode,
 		})
 		setOpsUpstreamError(c, resp.StatusCode, cyberMsg, truncateString(string(body), 2048))
-		clientMsg := cyberMsg
-		if clientMsg == "" {
-			clientMsg = "Request blocked by upstream cyber-security policy"
-		}
-		status, errType, clientMsg, matched := applyOpenAICyberPolicyPassthroughRule(
-			c, account, body, resp.StatusCode, "invalid_request_error", clientMsg,
-		)
-		if matched {
-			MarkResponseCommitted(c)
-		}
+		status, errType, clientMsg := http.StatusForbidden, "permission_error", CyberPolicyClientMessage
+		MarkResponseCommitted(c)
 		writeError(c, status, errType, clientMsg)
 		if account != nil && account.IsGrok() {
 			return nil, &grokContentPolicyError{message: clientMsg}

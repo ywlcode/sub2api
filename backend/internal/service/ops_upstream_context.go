@@ -640,7 +640,7 @@ func normalizeOpsUpstreamProxyAttribution(ev *OpsUpstreamErrorEvent) {
 // request error is hidden; an intermediate recovered attempt cannot suppress a
 // later client-visible failure.
 func checkSkipMonitoringForUpstreamEvent(c *gin.Context, ev *OpsUpstreamErrorEvent) {
-	if ev.UpstreamStatusCode == 0 {
+	if ev.UpstreamStatusCode == 0 || GetOpsCyberPolicy(c) != nil || isCyberPolicyRejection([]byte(ev.Detail)) {
 		return
 	}
 

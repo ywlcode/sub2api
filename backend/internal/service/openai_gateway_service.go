@@ -1095,6 +1095,7 @@ func (s *OpenAIGatewayService) writeOpenAIWSFallbackErrorResponse(c *gin.Context
 	}
 	var dialErr *openAIWSDialError
 	if !IsResponseCommitted(c) && errors.As(wsErr, &dialErr) && dialErr != nil {
+		markOpenAICyberPolicyEvent(c, dialErr.ResponseBody, dialErr.StatusCode, nil)
 		if clientBody, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, dialErr.ResponseBody, dialErr.StatusCode); matched {
 			setOpsUpstreamError(c, dialErr.StatusCode, extractUpstreamErrorMessage(dialErr.ResponseBody), "")
 			writeOpenAIErrorPassthroughClientError(c, status, clientBody)

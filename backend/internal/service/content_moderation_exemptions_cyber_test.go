@@ -46,7 +46,7 @@ func TestModerationExemptionsNeverAuthorizeCyberRetry(t *testing.T) {
 		var failover *UpstreamFailoverError
 		require.False(t, errors.As(err, &failover))
 		require.NotNil(t, GetOpsCyberPolicy(c))
-		require.Contains(t, rec.Body.String(), "cyber_policy")
+		require.Contains(t, rec.Body.String(), CyberPolicyClientMessage)
 		require.Equal(t, 1, upstream.calls, "explicit safety termination must not be retried")
 	}
 }

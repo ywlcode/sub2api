@@ -3205,9 +3205,10 @@ func maskSecretTail(secret string) string {
 
 // CyberPolicyRecordInput 是一次 cyber_policy 硬阻断的风控记录入参。
 type CyberPolicyRecordInput struct {
+	Platform          string
 	Evidence          cyberevidence.Prepared
 	ModerationVersion *int64
-	LogOnly           bool // Trusted platform user: retain evidence without penalties or notifications.
+	LogOnly           bool // Non-OpenAI or trusted user: retain evidence without penalties or notifications.
 	RequestID         string
 	UserID            int64
 	UserEmail         string
@@ -3225,7 +3226,7 @@ type CyberPolicyRecordInput struct {
 }
 
 // RecordCyberPolicyEvent 把一次 cyber_policy 硬阻断写入风控中心日志、计入违规计数、
-// 并给用户发邮件。当前请求已由 gateway 透传给用户；本方法仅做事后记录/通知/计数。
+// 并给用户发邮件。当前请求已由 gateway 返回固定提示；本方法仅做事后记录/通知/计数。
 // 受 risk_control_enabled 总开关和内容审核 group/model scope 约束，
 // 不受内容审核 Enabled/Mode/sample 约束。
 func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, in CyberPolicyRecordInput) {
@@ -3243,6 +3244,13 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 	cfg := runtimeSnapshot.config
 	if !cfg.includesGroup(in.GroupID) || !cfg.includesModel(in.Model) {
 		return
+	}
+	platform := in.Platform
+	if platform == "" {
+		platform = PlatformOpenAI // legacy callers
+	}
+	if platform != PlatformOpenAI {
+		in.LogOnly = true
 	}
 	var userID *int64
 	if in.UserID > 0 {
@@ -3277,7 +3285,7 @@ func (s *ContentModerationService) RecordCyberPolicyEvent(ctx context.Context, i
 		GroupID:           cloneInt64Ptr(in.GroupID),
 		GroupName:         in.GroupName,
 		Endpoint:          in.Endpoint,
-		Provider:          "openai",
+		Provider:          platform,
 		Model:             in.Model,
 		Mode:              "post_upstream",
 		Action:            ContentModerationActionCyberPolicy,

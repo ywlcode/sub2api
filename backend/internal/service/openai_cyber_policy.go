@@ -1,10 +1,14 @@
 package service
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 )
 
@@ -12,6 +16,72 @@ import (
 // 由 gateway 服务层在检测到上游 error.code=="cyber_policy" 时设置，
 // handler 在 Forward 返回后读取以触发风控记录、邮件与 tokens=0 用量行。
 const opsCyberPolicyKey = "ops_cyber_policy"
+
+const CyberPolicyClientMessage = "cyber-security, 请更换无风控模型或开启新会话"
+const CyberPolicyClientCode = "session_blocked_by_cyber_policy"
+
+func isCyberPolicyRejection(payload []byte) bool {
+	code := gjson.GetBytes(payload, "error.code").String()
+	if code == "" {
+		code = gjson.GetBytes(payload, "response.error.code").String()
+	}
+	code = strings.TrimSpace(code)
+	return strings.EqualFold(code, "cyber_policy") || strings.EqualFold(code, CyberPolicyClientCode)
+}
+
+// Construct a fresh client envelope: upstream error fields, output, metadata
+// and vendor extensions belong only in the internal audit evidence. This is
+// deliberately independent of error passthrough rules, including skip_monitoring.
+func cyberPolicyClientPayload(payload []byte) []byte {
+	errBody := gin.H{"type": "permission_error", "code": CyberPolicyClientCode, "message": CyberPolicyClientMessage}
+	body := gin.H{"error": errBody}
+	switch gjson.GetBytes(payload, "type").String() {
+	case "response.failed", "response.fail":
+		body = gin.H{
+			"type": "response.failed", "sequence_number": gjson.GetBytes(payload, "sequence_number").Int(),
+			"response": gin.H{
+				"id": "resp_" + uuid.NewString(), "object": "response", "created_at": time.Now().Unix(),
+				"model": "", "status": "failed", "output": []any{}, "error": errBody,
+			},
+		}
+	case "error":
+		body["type"] = "error"
+		body["event_id"] = "evt_cyber_blocked"
+	}
+	encoded, _ := json.Marshal(body)
+	return encoded
+}
+
+// Native Anthropic upstreams also serve OpenAI-compatible accounts. Detect
+// policy failures before conversion so they cannot become a successful empty
+// answer or leak the vendor's error through the native passthrough path.
+func writeNativeCyberPolicyError(c *gin.Context, protocol string, payload []byte, status int, usage *OpenAIUsage) bool {
+	if !isCyberPolicyRejection(payload) {
+		return false
+	}
+	markOpenAICyberPolicyEvent(c, payload, status, usage)
+	MarkResponseCommitted(c)
+	if !c.Writer.Written() {
+		switch protocol {
+		case APIProtocolAnthropic:
+			writeAnthropicError(c, http.StatusForbidden, "permission_error", CyberPolicyClientMessage)
+		default:
+			writeOpenAIErrorPassthroughClientError(c, http.StatusForbidden, cyberPolicyClientPayload(nil))
+		}
+		return true
+	}
+	MarkOpsStreamFailure(c, "permission_error", CyberPolicyClientCode, CyberPolicyClientMessage, http.StatusForbidden)
+	switch protocol {
+	case APIProtocolAnthropic:
+		_, _ = fmt.Fprint(c.Writer, buildAnthropicStreamErrorSSE("permission_error", CyberPolicyClientMessage))
+	case APIProtocolChatCompletions:
+		_, _ = fmt.Fprint(c.Writer, buildChatStreamErrorSSE(CyberPolicyClientCode, CyberPolicyClientMessage, "permission_error")+"data: [DONE]\n\n")
+	default:
+		_, _ = fmt.Fprintf(c.Writer, "event: response.failed\ndata: %s\n\n", cyberPolicyClientPayload([]byte(`{"type":"response.failed"}`)))
+	}
+	c.Writer.Flush()
+	return true
+}
 
 // CyberPolicyMark 记录一次 cyber_policy 硬阻断的上游证据。
 type CyberPolicyMark struct {
@@ -21,6 +91,14 @@ type CyberPolicyMark struct {
 	UpstreamStatus int    // 上游 HTTP 状态（流式=200，非流式=400）
 	UpstreamInTok  int    // 上游已报 input tokens（如有）
 	UpstreamOutTok int    // 上游已报 output tokens（如有）
+}
+
+// Redacted returns a copy for persistent diagnostics. Keep the original mark
+// intact for usage accounting and the dedicated evidence recorder.
+func (m CyberPolicyMark) Redacted() CyberPolicyMark {
+	m.Message = redactContentModerationSecrets(m.Message)
+	m.Body = redactContentModerationSecrets(m.Body)
+	return m
 }
 
 // MarkOpsCyberPolicy 记录 cyber 标记；首个写入生效，后续忽略（同一 turn 只记一次）。
@@ -98,28 +176,4 @@ func markOpenAICyberPolicyEvent(c *gin.Context, payload []byte, upstreamStatus i
 	}
 	MarkOpsCyberPolicy(c, mark)
 	return true
-}
-
-// cyber_policy is a request-scoped policy rejection even when transported as
-// HTTP 400 or an event on an HTTP 200 stream. Match its rules as 403 so a generic
-// 400 overload rule cannot hide the configured policy message. Callers must mark
-// the original payload before applying a rule; account health and audit evidence
-// must never be derived from the rewritten client response.
-func applyOpenAICyberPolicyPassthroughRule(
-	c *gin.Context,
-	account *Account,
-	payload []byte,
-	defaultStatus int,
-	defaultErrType, defaultErrMsg string,
-) (status int, errType, errMsg string, matched bool) {
-	if hit, _, _ := detectOpenAICyberPolicy(payload); !hit {
-		return defaultStatus, defaultErrType, defaultErrMsg, false
-	}
-	platform := PlatformOpenAI
-	if account != nil {
-		platform = account.Platform
-	}
-	return applyErrorPassthroughRule(c, platform, http.StatusForbidden,
-		openAIStreamFailedEventPassthroughBody(payload, defaultErrMsg),
-		defaultStatus, defaultErrType, defaultErrMsg)
 }

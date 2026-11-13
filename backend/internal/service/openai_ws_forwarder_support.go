@@ -373,6 +373,9 @@ func (s *OpenAIGatewayService) handleOpenAIWSFailureAccountSideEffects(ctx conte
 
 func (s *OpenAIGatewayService) handleOpenAIWSDialTransientFailure(ctx context.Context, account *Account, canonicalModel string, err error) {
 	var dialErr *openAIWSDialError
+	if errors.As(err, &dialErr) && dialErr != nil && isCyberPolicyRejection(dialErr.ResponseBody) {
+		return
+	}
 	if errors.As(err, &dialErr) && dialErr != nil {
 		s.rateLimitService.observeQualityStatus(ctx, account, dialErr.StatusCode)
 	}

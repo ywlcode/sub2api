@@ -755,13 +755,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 				UpstreamInTok:  usage.InputTokens,
 				UpstreamOutTok: usage.OutputTokens,
 			})
-			clientMsg := msg
-			if clientMsg == "" {
-				clientMsg = "Request blocked by upstream cyber-security policy"
-			}
-			status, errType, clientMsg, _ := applyOpenAICyberPolicyPassthroughRule(
-				c, account, payload, http.StatusBadRequest, "invalid_request_error", clientMsg,
-			)
+			status, errType, clientMsg := http.StatusForbidden, "permission_error", CyberPolicyClientMessage
 			MarkResponseCommitted(c)
 			writeChatCompletionsError(c, status, errType, clientMsg)
 			return nil, fmt.Errorf("openai cyber_policy: %s", msg)
@@ -1017,21 +1011,15 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 				})
 				if !clientDisconnected {
 					// 被 refusal 检测扣留的 pendingSSE 有意丢弃——cyber 拦截优先于部分内容下发。
-					clientMsg := msg
-					if clientMsg == "" {
-						clientMsg = "Request blocked by upstream cyber-security policy"
-					}
-					status, errType, clientMsg, matched := applyOpenAICyberPolicyPassthroughRule(
-						c, account, payloadBytes, http.StatusBadRequest, "invalid_request_error", clientMsg,
-					)
-					if matched && !c.Writer.Written() {
+					status, errType, clientMsg := http.StatusForbidden, "permission_error", CyberPolicyClientMessage
+					if !c.Writer.Written() {
 						MarkResponseCommitted(c)
 						writeChatCompletionsError(c, status, errType, clientMsg)
 						clientDisconnected = true
 						return true
 					}
 					writeStreamHeaders()
-					if _, err := fmt.Fprint(c.Writer, buildChatStreamErrorSSE(code, clientMsg, errType)); err == nil {
+					if _, err := fmt.Fprint(c.Writer, buildChatStreamErrorSSE(CyberPolicyClientCode, clientMsg, errType)); err == nil {
 						_, _ = fmt.Fprint(c.Writer, "data: [DONE]\n\n")
 						if fl, ok := c.Writer.(http.Flusher); ok {
 							fl.Flush()

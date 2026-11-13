@@ -89,7 +89,8 @@ func TestForwardAsChatCompletions_StreamCyberPolicyDropsResult(t *testing.T) {
 	var failoverErr *UpstreamFailoverError
 	require.False(t, errors.As(err, &failoverErr), "cyber must NOT trigger failover")
 	require.NotNil(t, GetOpsCyberPolicy(c), "cyber mark must be set")
-	require.Contains(t, rec.Body.String(), "data: [DONE]", "stream must terminate with [DONE]")
+	require.Equal(t, http.StatusForbidden, rec.Code, "before output starts, return a complete JSON error")
+	require.Contains(t, rec.Body.String(), CyberPolicyClientMessage)
 }
 
 // anthropic 非流式客户端（buffered 路径）cyber 命中——不 failover、标记已设、以 anthropic 错误格式回写、丢弃 result。

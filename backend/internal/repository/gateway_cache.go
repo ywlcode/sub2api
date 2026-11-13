@@ -368,8 +368,8 @@ const (
 
 // SetCyberSessionBlocked writes exact blocks in bounded transactions. The
 // coarse scope is activated only after all exact blocks have been stored.
-func (c *gatewayCache) SetCyberSessionBlocked(ctx context.Context, scopeKey string, keys []string, ttl time.Duration) error {
-	if len(keys) == 0 {
+func (c *gatewayCache) SetCyberSessionBlocked(ctx context.Context, platform, scopeKey string, keys []string, ttl time.Duration) error {
+	if platform != service.PlatformOpenAI || len(keys) == 0 {
 		return nil
 	}
 	exactKeys := make([]string, 0, cyberSessionRedisCommandMaxKeys)
@@ -379,7 +379,7 @@ func (c *gatewayCache) SetCyberSessionBlocked(ctx context.Context, scopeKey stri
 		}
 		pipe := c.rdb.TxPipeline()
 		for _, key := range exactKeys {
-			pipe.Set(ctx, cyberSessionBlockPrefix+key, "1", ttl)
+			pipe.Set(ctx, cyberSessionBlockPrefix+key, `{"platform":"openai"}`, ttl)
 		}
 		_, err := pipe.Exec(ctx)
 		exactKeys = exactKeys[:0]
@@ -399,7 +399,7 @@ func (c *gatewayCache) SetCyberSessionBlocked(ctx context.Context, scopeKey stri
 		return err
 	}
 	if scopeKey != "" {
-		return c.rdb.Set(ctx, cyberSessionScopePrefix+scopeKey, "1", ttl).Err()
+		return c.rdb.Set(ctx, cyberSessionScopePrefix+scopeKey, `{"platform":"openai"}`, ttl).Err()
 	}
 	return nil
 }
@@ -414,8 +414,8 @@ func (c *gatewayCache) IsCyberSessionScopeActive(ctx context.Context, scopeKey s
 
 // FindCyberSessionBlocked checks bounded batches in caller order and stops at
 // the first blocked key, preserving the original earliest-match behavior.
-func (c *gatewayCache) FindCyberSessionBlocked(ctx context.Context, keys []string) (string, error) {
-	if len(keys) == 0 {
+func (c *gatewayCache) FindCyberSessionBlocked(ctx context.Context, platform string, keys []string) (string, error) {
+	if platform != service.PlatformOpenAI || len(keys) == 0 {
 		return "", nil
 	}
 	for start := 0; start < len(keys); start += cyberSessionRedisCommandMaxKeys {
@@ -432,7 +432,9 @@ func (c *gatewayCache) FindCyberSessionBlocked(ctx context.Context, keys []strin
 			return "", err
 		}
 		for i, value := range values {
-			if value != nil {
+			// The old untyped value is OpenAI-only too. Unknown/future platform
+			// markers must never block an unrelated platform's conversation.
+			if value == "1" || value == `{"platform":"openai"}` {
 				return keys[start+i], nil
 			}
 		}

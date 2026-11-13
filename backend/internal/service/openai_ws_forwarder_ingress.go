@@ -1987,7 +1987,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				s.markOpenAIWSInvalidEncryptedContentLineageFromPayload(c, payload, "ingress_ws_invalid_encrypted_lineage_mark", account.ID, turn, upstreamMessage)
 			}
 			// Rule rewriting must not suppress credential health handling. Only
-			// a matched cyber rule or an already blocked session bypasses them.
+			// a Cyber rejection or an already blocked session bypasses them.
 			cyberHit, _, _ := detectOpenAICyberPolicy(upstreamMessage)
 			if eventType == "error" && (!cyberHit || !clientRuleMatched) && !isOpenAIUpstreamSessionBlocked(upstreamMessage) {
 				s.handleOpenAIWSErrorEventTransientFailure(ctx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)

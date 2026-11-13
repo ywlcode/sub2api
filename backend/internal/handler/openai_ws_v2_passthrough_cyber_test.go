@@ -242,7 +242,7 @@ func TestOpenAIResponsesWebSocketV2PassthroughCyberMarkIsConsumedAfterTurn(t *te
 	store, ok := harness.gatewayCache.(service.CyberSessionBlockStore)
 	require.True(t, ok)
 	require.Eventually(t, func() bool {
-		matched, findErr := store.FindCyberSessionBlocked(context.Background(), []string{blockKey})
+		matched, findErr := store.FindCyberSessionBlocked(context.Background(), service.PlatformOpenAI, []string{blockKey})
 		return findErr == nil && matched == blockKey
 	}, 3*time.Second, 10*time.Millisecond, "handler AfterTurn must write the cyber session block table")
 
@@ -259,7 +259,7 @@ func TestOpenAIResponsesWebSocketV2PassthroughCyberMarkIsConsumedAfterTurn(t *te
 	require.Equal(t, coderws.StatusPolicyViolation, closeErr.Code)
 	// closeOpenAIClientWS caps close reasons at 120 bytes; passthrough must expose
 	// the same client-visible prefix rather than dropping the close frame.
-	require.Equal(t, "该会话已被网络安全策略屏蔽，请开启新会话 / This session is blocked by cyber-security policy, please ", closeErr.Reason)
+	require.Equal(t, service.CyberPolicyClientMessage, closeErr.Reason)
 	select {
 	case <-harness.handlerDone:
 	case <-time.After(3 * time.Second):
@@ -350,7 +350,7 @@ func TestOpenAIResponsesWebSocketV2PassthroughNonCyberTurnAllowsFollowup(t *test
 	require.NotEmpty(t, blockKey)
 	store, ok := harness.gatewayCache.(service.CyberSessionBlockStore)
 	require.True(t, ok)
-	matched, findErr := store.FindCyberSessionBlocked(context.Background(), []string{blockKey})
+	matched, findErr := store.FindCyberSessionBlocked(context.Background(), service.PlatformOpenAI, []string{blockKey})
 	require.NoError(t, findErr)
 	require.Empty(t, matched)
 
@@ -446,7 +446,7 @@ func TestOpenAIResponsesWebSocketV2InheritsFirstBodyIdentityForLaterCyberHit(t *
 	store, ok := harness.gatewayCache.(service.CyberSessionBlockStore)
 	require.True(t, ok)
 	require.Eventually(t, func() bool {
-		matched, findErr := store.FindCyberSessionBlocked(context.Background(), []string{blockKey})
+		matched, findErr := store.FindCyberSessionBlocked(context.Background(), service.PlatformOpenAI, []string{blockKey})
 		return findErr == nil && matched == blockKey
 	}, 3*time.Second, 10*time.Millisecond, "a later identity-less turn must write the connection-bound block key")
 

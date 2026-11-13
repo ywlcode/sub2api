@@ -45,7 +45,7 @@ func TestForbiddenHTTPViaWS(t *testing.T) {
 					_, err := svc.Forward(context.Background(), c, account, []byte(fmt.Sprintf(`{"model":"gpt-5.5","stream":%t,"input":"hi"}`, mode != "buffered")))
 					if mode == "after_output" {
 						require.Equal(t, 200, rec.Code)
-						require.Contains(t, rec.Body.String(), cyberPolicyRuleMessage)
+						require.Contains(t, rec.Body.String(), forbiddenTestMessage(tc.name))
 					} else {
 						requireForbiddenClientError(t, c, rec, err, false)
 					}
@@ -89,7 +89,7 @@ func TestForbiddenNativeWS(t *testing.T) {
 				for range 2 {
 					frame, err := readPassthroughLifecycleFrame(t, client, 3*time.Second)
 					require.NoError(t, err)
-					require.Contains(t, string(frame), cyberPolicyRuleMessage)
+					require.Contains(t, string(frame), forbiddenTestMessage(tc.name))
 					require.Contains(t, string(frame), gjson.Get(tc.errorJSON, "code").String())
 				}
 				select {
@@ -145,7 +145,7 @@ func TestForbiddenWSHTTPBridge(t *testing.T) {
 				var failover *UpstreamFailoverError
 				require.False(t, errors.As(err, &failover))
 				require.NotEmpty(t, frames)
-				require.Contains(t, string(frames[len(frames)-1]), cyberPolicyRuleMessage)
+				require.Contains(t, string(frames[len(frames)-1]), forbiddenTestMessage(tc.name))
 				require.Contains(t, string(frames[len(frames)-1]), gjson.Get(tc.errorJSON, "code").String())
 				require.Nil(t, GetOpsCyberPolicy(c))
 			})
@@ -168,7 +168,7 @@ func TestForbiddenWSDialRulesPreserveEvidence(t *testing.T) {
 			require.True(t, matched)
 			require.ErrorIs(t, err, upstream)
 			require.Equal(t, "error", gjson.GetBytes(frame, "type").String())
-			require.Equal(t, cyberPolicyRuleMessage, gjson.GetBytes(frame, "error.message").String())
+			require.Equal(t, forbiddenTestMessage(tc.name), gjson.GetBytes(frame, "error.message").String())
 			require.Equal(t, gjson.Get(tc.errorJSON, "code").String(), gjson.GetBytes(frame, "error.code").String())
 			require.Equal(t, body, string(upstream.ResponseBody))
 			require.Nil(t, GetOpsCyberPolicy(c))
