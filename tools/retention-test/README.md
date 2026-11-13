@@ -9,7 +9,7 @@ RETENTION_PG_IMAGE=postgres:15 bash tools/retention-test/run.sh
 ```
 
 需要 Linux Docker、bash、gzip、python3。默认使用 `postgres:18.1-alpine3.23` 和
-`golang:1.27.3-alpine`，可以用 `RETENTION_PG_IMAGE` / `RETENTION_GO_IMAGE` 覆盖。
+`golang:1.27.4-alpine`，可以用 `RETENTION_PG_IMAGE` / `RETENTION_GO_IMAGE` 覆盖。
 Go 构建使用命名缓存卷 `sub2api-go-mod`、`sub2api-go-build`。
 
 脚本创建仅绑定 `127.0.0.1` 随机端口的独立数据库容器、随机数据库密码和全新数据库，
