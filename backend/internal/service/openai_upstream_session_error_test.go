@@ -62,7 +62,7 @@ func TestUpstreamSessionBlockedBypassesCustomAccountPolicies(t *testing.T) {
 	}
 }
 
-func TestUpstreamSessionBlockedIsTerminalAndPreservesClientGuidance(t *testing.T) {
+func TestUpstreamSessionBlockedIsTerminalAndUsesFixedClientGuidance(t *testing.T) {
 	svc := &OpenAIGatewayService{cfg: &config.Config{}}
 	account := &Account{ID: 551, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
 	for _, status := range []int{http.StatusForbidden, http.StatusBadGateway} {
@@ -72,9 +72,9 @@ func TestUpstreamSessionBlockedIsTerminalAndPreservesClientGuidance(t *testing.T
 		require.Error(t, err)
 		var failover *UpstreamFailoverError
 		require.False(t, errors.As(err, &failover))
-		require.Equal(t, status, rec.Code)
+		require.Equal(t, http.StatusForbidden, rec.Code)
 		require.Equal(t, "session_blocked_by_cyber_policy", gjson.Get(rec.Body.String(), "error.code").String())
-		require.Contains(t, gjson.Get(rec.Body.String(), "error.message").String(), "开启新会话")
+		require.Equal(t, CyberPolicyClientMessage, gjson.Get(rec.Body.String(), "error.message").String())
 		require.True(t, IsResponseCommitted(c))
 		require.Nil(t, GetOpsCyberPolicy(c), "an already blocked session is not a new local cyber violation")
 
@@ -83,9 +83,9 @@ func TestUpstreamSessionBlockedIsTerminalAndPreservesClientGuidance(t *testing.T
 		_, err = svc.handleCompatErrorResponse(newOpenAIUpstreamErrorResponse(status, upstreamSessionBlockedBody), compatCtx, account,
 			func(_ *gin.Context, code int, errorType, message string) {
 				called = true
-				require.Equal(t, status, code)
+				require.Equal(t, http.StatusForbidden, code)
 				require.Equal(t, "permission_error", errorType)
-				require.Contains(t, message, "开启新会话")
+				require.Equal(t, CyberPolicyClientMessage, message)
 			})
 		require.Error(t, err)
 		require.False(t, errors.As(err, &failover))

@@ -48,7 +48,7 @@ func TestCyberPolicyHTTPViaWSProductionRules(t *testing.T) {
 				_, err := svc.Forward(context.Background(), c, account, []byte(fmt.Sprintf(`{"model":"gpt-5.5","stream":%t,"input":"hi"}`, mode != "buffered")))
 				if mode == "after_output" {
 					require.Equal(t, http.StatusOK, rec.Code)
-					require.Contains(t, rec.Body.String(), cyberPolicyRuleMessage)
+					require.Contains(t, rec.Body.String(), CyberPolicyClientMessage)
 					require.NotContains(t, rec.Body.String(), "original policy rejection")
 					var failover *UpstreamFailoverError
 					require.False(t, errors.As(err, &failover))
@@ -107,7 +107,7 @@ func TestCyberPolicyNativeWSProductionRules(t *testing.T) {
 				for range count {
 					frame, err := readPassthroughLifecycleFrame(t, client, 3*time.Second)
 					require.NoError(t, err)
-					require.Contains(t, string(frame), cyberPolicyRuleMessage)
+					require.Contains(t, string(frame), CyberPolicyClientMessage)
 					require.Contains(t, string(frame), "cyber_policy")
 					require.NotContains(t, string(frame), "policy rejection")
 				}
@@ -174,9 +174,8 @@ func TestCyberPolicyWSHTTPBridgeProductionRules(t *testing.T) {
 			require.False(t, errors.As(err, &failover))
 			require.NotEmpty(t, clientFrames)
 			clientError := clientFrames[len(clientFrames)-1]
-			_, code, message := detectOpenAICyberPolicy(clientError)
-			require.Equal(t, "cyber_policy", code)
-			require.Equal(t, cyberPolicyRuleMessage, message)
+			require.True(t, isOpenAIUpstreamSessionBlocked(clientError))
+			require.Equal(t, CyberPolicyClientMessage, extractOpenAISSEErrorMessage(clientError))
 			if format == "http" {
 				require.Equal(t, int64(403), gjson.GetBytes(clientError, "status").Int())
 			}

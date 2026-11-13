@@ -39,7 +39,7 @@ type fakeCyberBlockStore struct {
 
 var _ CyberSessionBlockStore = (*fakeCyberBlockStore)(nil)
 
-func (f *fakeCyberBlockStore) SetCyberSessionBlocked(_ context.Context, scopeKey string, keys []string, _ time.Duration) error {
+func (f *fakeCyberBlockStore) SetCyberSessionBlocked(_ context.Context, platform, scopeKey string, keys []string, _ time.Duration) error {
 	if f.blocked == nil {
 		f.blocked = map[string]bool{}
 	}
@@ -60,7 +60,7 @@ func (f *fakeCyberBlockStore) IsCyberSessionScopeActive(_ context.Context, scope
 	return f.scopes[scopeKey], nil
 }
 
-func (f *fakeCyberBlockStore) FindCyberSessionBlocked(_ context.Context, keys []string) (string, error) {
+func (f *fakeCyberBlockStore) FindCyberSessionBlocked(_ context.Context, platform string, keys []string) (string, error) {
 	f.findCalls++
 	if f.findErr != nil {
 		return "", f.findErr
@@ -152,14 +152,14 @@ func (c *comboCacheAndStore) GetReasoningContent(_ context.Context, _ string) (s
 	return "", ErrReasoningContentNotFound
 }
 
-func (c *comboCacheAndStore) SetCyberSessionBlocked(ctx context.Context, scopeKey string, keys []string, ttl time.Duration) error {
-	return c.store.SetCyberSessionBlocked(ctx, scopeKey, keys, ttl)
+func (c *comboCacheAndStore) SetCyberSessionBlocked(ctx context.Context, platform, scopeKey string, keys []string, ttl time.Duration) error {
+	return c.store.SetCyberSessionBlocked(ctx, platform, scopeKey, keys, ttl)
 }
 func (c *comboCacheAndStore) IsCyberSessionScopeActive(ctx context.Context, scopeKey string) (bool, error) {
 	return c.store.IsCyberSessionScopeActive(ctx, scopeKey)
 }
-func (c *comboCacheAndStore) FindCyberSessionBlocked(ctx context.Context, keys []string) (string, error) {
-	return c.store.FindCyberSessionBlocked(ctx, keys)
+func (c *comboCacheAndStore) FindCyberSessionBlocked(ctx context.Context, platform string, keys []string) (string, error) {
+	return c.store.FindCyberSessionBlocked(ctx, platform, keys)
 }
 
 // --- tests ---
@@ -168,11 +168,31 @@ func (c *comboCacheAndStore) FindCyberSessionBlocked(ctx context.Context, keys [
 // empty key, nil service, store missing → always false / no panic.
 func TestFindCyberSessionBlocked_EmptyAndNilService(t *testing.T) {
 	var nilSvc *OpenAIGatewayService
-	require.Empty(t, nilSvc.FindCyberSessionBlockedForRequest(context.Background(), 1, nil, nil, "", ""))
-	require.NotPanics(t, func() { nilSvc.MarkCyberSessionBlocked(context.Background(), "", []string{"k"}) })
+	require.Empty(t, nilSvc.FindCyberSessionBlockedForRequest(context.Background(), PlatformOpenAI, 1, nil, nil, "", ""))
+	require.NotPanics(t, func() { nilSvc.MarkCyberSessionBlocked(context.Background(), PlatformOpenAI, "", []string{"k"}) })
 
 	svc := &OpenAIGatewayService{}
-	require.Empty(t, svc.FindCyberSessionBlockedForRequest(context.Background(), 1, nil, nil, "", ""))
+	require.Empty(t, svc.FindCyberSessionBlockedForRequest(context.Background(), PlatformOpenAI, 1, nil, nil, "", ""))
+}
+
+func TestCyberPlatformGuardBeforeRedisForIdentityAndFingerprint(t *testing.T) {
+	for _, explicit := range []bool{false, true} {
+		combo := &comboCacheAndStore{}
+		svc := &OpenAIGatewayService{cache: combo, settingService: &SettingService{settingRepo: &fakeSettingRepo{vals: map[string]string{SettingKeyCyberSessionBlockEnabled: "true"}}}}
+		c, body := newCyberBlockTestCtx(nil, `{"input":"same content"}`)
+		if explicit {
+			c.Request.Header.Set("session_id", "same-session")
+		}
+		identity := ResolveCyberSessionIdentity(7, c, body)
+		ctx := context.Background()
+		svc.MarkCyberSessionBlockedForRequest(ctx, PlatformDeepseek, 7, identity, body)
+		require.Empty(t, combo.store.blocked)
+		svc.MarkCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 7, identity, body)
+		require.NotEmpty(t, combo.store.blocked)
+		require.Empty(t, svc.FindCyberSessionBlockedForIdentityAndBody(ctx, PlatformDeepseek, 7, identity, body))
+		require.Zero(t, combo.store.findCalls, "foreign platform does not query even legacy markers")
+		require.NotEmpty(t, svc.FindCyberSessionBlockedForIdentityAndBody(ctx, PlatformOpenAI, 7, identity, body))
+	}
 }
 
 // TestCyberSessionBlock_RoundTrip exercises the type-assertion success path:
@@ -201,11 +221,11 @@ func TestCyberSessionBlock_RoundTrip(t *testing.T) {
 
 	c, body := newCyberBlockTestCtx(map[string]string{"session_id": "sess-roundtrip"}, `{}`)
 	explicitKey := CyberSessionExplicitBlockKey(1, c, body)
-	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, 1, c, body, "203.0.113.1", "client/1.0"))
+	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 1, c, body, "203.0.113.1", "client/1.0"))
 
-	svc.MarkCyberSessionBlocked(ctx, "", []string{explicitKey, testKey})
+	svc.MarkCyberSessionBlocked(ctx, PlatformOpenAI, "", []string{explicitKey, testKey})
 
-	require.Equal(t, explicitKey, svc.FindCyberSessionBlockedForRequest(ctx, 1, c, body, "203.0.113.1", "client/1.0"))
+	require.Equal(t, explicitKey, svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 1, c, body, "203.0.113.1", "client/1.0"))
 }
 
 func TestCyberSessionIdentityStrictEnabledDefaultsOffAndReadsSetting(t *testing.T) {
@@ -310,7 +330,7 @@ func TestCyberSessionBlockReadsLegacyV2ExplicitKey(t *testing.T) {
 	legacyKey := hex.EncodeToString(legacySum[:])
 	combo.store.blocked = map[string]bool{legacyKey: true}
 
-	require.Equal(t, legacyKey, svc.FindCyberSessionBlockedForRequest(ctx, 7, c, body, "", ""))
+	require.Equal(t, legacyKey, svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 7, c, body, "", ""))
 	require.NotEqual(t, legacyKey, CyberSessionExplicitBlockKey(7, c, body), "new writes must use typed v3")
 }
 
@@ -330,7 +350,7 @@ func TestCyberSessionIsolationAcrossSharedKeyAndLongHistory(t *testing.T) {
 	a, _ := newCyberBlockTestCtx(map[string]string{"session_id": "conversation-a"}, string(payload))
 	aKey := CyberSessionExplicitBlockKey(7, a, payload)
 	legacyScope := sha256.Sum256([]byte("cyber-scope:v1|api_key=7|ip=203.0.113.20|ua=" + NormalizeSessionUserAgent("Codex CLI 1.2.3")))
-	svc.MarkCyberSessionBlocked(ctx, hex.EncodeToString(legacyScope[:]), []string{aKey})
+	svc.MarkCyberSessionBlocked(ctx, PlatformOpenAI, hex.EncodeToString(legacyScope[:]), []string{aKey})
 
 	for _, tc := range []struct {
 		name, session string
@@ -344,7 +364,7 @@ func TestCyberSessionIsolationAcrossSharedKeyAndLongHistory(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, _ := newCyberBlockTestCtx(map[string]string{"session_id": tc.session}, string(payload))
-			got := svc.FindCyberSessionBlockedForRequest(ctx, tc.apiKey, c, payload, "203.0.113.20", "Codex CLI 1.2.3")
+			got := svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, tc.apiKey, c, payload, "203.0.113.20", "Codex CLI 1.2.3")
 			if tc.blocked {
 				require.Equal(t, aKey, got)
 			} else {
@@ -353,7 +373,7 @@ func TestCyberSessionIsolationAcrossSharedKeyAndLongHistory(t *testing.T) {
 		})
 	}
 	// A reconnect/model change and a different network must not evade an exact block.
-	require.Equal(t, aKey, svc.FindCyberSessionBlockedForRequest(ctx, 7, a, []byte(`{"model":"another-model","input":"next turn"}`), "203.0.113.99", "AnotherClient/2"))
+	require.Equal(t, aKey, svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 7, a, []byte(`{"model":"another-model","input":"next turn"}`), "203.0.113.99", "AnotherClient/2"))
 	require.Zero(t, combo.store.scopeCalls, "a shared source is never a blocking identity")
 }
 
@@ -363,9 +383,9 @@ func TestCyberSessionIgnoresLegacyCacheBlocks(t *testing.T) {
 	svc := &OpenAIGatewayService{cache: combo, settingService: &SettingService{settingRepo: &fakeSettingRepo{vals: map[string]string{SettingKeyCyberSessionBlockEnabled: "true"}}}}
 	// Before v2, a prompt_cache_key used the same digest as a session header.
 	legacy := sha256.Sum256([]byte(isolateOpenAISessionID(7, "shared-value")))
-	svc.MarkCyberSessionBlocked(ctx, "legacy-scope", []string{hex.EncodeToString(legacy[:])})
+	svc.MarkCyberSessionBlocked(ctx, PlatformOpenAI, "legacy-scope", []string{hex.EncodeToString(legacy[:])})
 	c, body := newCyberBlockTestCtx(map[string]string{"session_id": "shared-value"}, `{}`)
-	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, 7, c, body, "", ""))
+	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 7, c, body, "", ""))
 }
 
 func TestCyberSessionLookupFailOpen(t *testing.T) {
@@ -374,7 +394,7 @@ func TestCyberSessionLookupFailOpen(t *testing.T) {
 		t.Run(enabled, func(t *testing.T) {
 			combo := &comboCacheAndStore{store: fakeCyberBlockStore{findErr: errors.New("storage unavailable")}}
 			svc := &OpenAIGatewayService{cache: combo, settingService: &SettingService{settingRepo: &fakeSettingRepo{vals: map[string]string{SettingKeyCyberSessionBlockEnabled: enabled}}}}
-			require.Empty(t, svc.FindCyberSessionBlockedForRequest(context.Background(), 7, c, body, "", ""))
+			require.Empty(t, svc.FindCyberSessionBlockedForRequest(context.Background(), PlatformOpenAI, 7, c, body, "", ""))
 			if enabled == "false" {
 				require.Zero(t, combo.store.findCalls)
 			} else {
@@ -398,14 +418,14 @@ func TestCyberRequestFingerprintFallbackBlocksIdenticalRetry(t *testing.T) {
 	c, _ := newCyberBlockTestCtx(nil, string(bodyA))
 	identity := ResolveCyberSessionIdentity(7, c, bodyA)
 	require.False(t, identity.Resolved(), "fixture must not have an explicit session ID")
-	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, 7, c, bodyA, "", ""))
+	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 7, c, bodyA, "", ""))
 
-	svc.MarkCyberSessionBlockedForRequest(ctx, 7, identity, bodyA)
-	require.NotEmpty(t, svc.FindCyberSessionBlockedForRequest(ctx, 7, c, bodyB, "", ""), "identical content must match across cache/stream/model changes")
+	svc.MarkCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 7, identity, bodyA)
+	require.NotEmpty(t, svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 7, c, bodyB, "", ""), "identical content must match across cache/stream/model changes")
 	retryWithIdentity, _ := newCyberBlockTestCtx(map[string]string{"session_id": "retry-session"}, string(bodyA))
-	require.NotEmpty(t, svc.FindCyberSessionBlockedForRequest(ctx, 7, retryWithIdentity, bodyA, "", ""), "a retry that adds a session ID must still hit the fallback block")
-	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, 7, c, []byte(`{"messages":[{"role":"user","content":"different content"}]}`), "", ""))
-	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, 8, c, bodyA, "", ""), "fingerprint is API-key scoped")
+	require.NotEmpty(t, svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 7, retryWithIdentity, bodyA, "", ""), "a retry that adds a session ID must still hit the fallback block")
+	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 7, c, []byte(`{"messages":[{"role":"user","content":"different content"}]}`), "", ""))
+	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 8, c, bodyA, "", ""), "fingerprint is API-key scoped")
 }
 
 func TestCyberRequestFingerprintFallbackDoesNotReplaceExplicitSession(t *testing.T) {
@@ -420,11 +440,11 @@ func TestCyberRequestFingerprintFallbackDoesNotReplaceExplicitSession(t *testing
 	explicitCtx, _ := newCyberBlockTestCtx(map[string]string{"session_id": "session-explicit"}, string(body))
 	identity := ResolveCyberSessionIdentity(9, explicitCtx, body)
 	require.True(t, identity.Resolved())
-	svc.MarkCyberSessionBlockedForRequest(ctx, 9, identity, body)
+	svc.MarkCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 9, identity, body)
 
-	require.Equal(t, identity.BlockKey, svc.FindCyberSessionBlockedForRequest(ctx, 9, explicitCtx, body, "", ""))
+	require.Equal(t, identity.BlockKey, svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 9, explicitCtx, body, "", ""))
 	noIdentityCtx, _ := newCyberBlockTestCtx(nil, string(body))
-	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, 9, noIdentityCtx, body, "", ""), "explicit block must not silently become a content-wide block")
+	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 9, noIdentityCtx, body, "", ""), "explicit block must not silently become a content-wide block")
 }
 
 func TestCyberRequestFingerprintFallbackDisabledWithSessionBlock(t *testing.T) {
@@ -436,8 +456,8 @@ func TestCyberRequestFingerprintFallbackDisabledWithSessionBlock(t *testing.T) {
 	body := []byte(`{"messages":[{"role":"user","content":"synthetic disabled content"}]}`)
 	c, _ := newCyberBlockTestCtx(nil, string(body))
 	identity := ResolveCyberSessionIdentity(10, c, body)
-	svc.MarkCyberSessionBlockedForRequest(ctx, 10, identity, body)
-	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, 10, c, body, "", ""))
+	svc.MarkCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 10, identity, body)
+	require.Empty(t, svc.FindCyberSessionBlockedForRequest(ctx, PlatformOpenAI, 10, c, body, "", ""))
 }
 
 func TestCyberRequestFingerprintKeyNormalizesTransportFields(t *testing.T) {

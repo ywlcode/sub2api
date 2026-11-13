@@ -53,7 +53,7 @@ func TestCyberAllowlistedUserBypassesExistingBlocksAndContinuesWebSocket(t *test
 	require.NotEmpty(t, explicitKey)
 	store, ok := harness.gatewayCache.(service.CyberSessionBlockStore)
 	require.True(t, ok)
-	require.NoError(t, store.SetCyberSessionBlocked(context.Background(), "", []string{explicitKey}, time.Minute))
+	require.NoError(t, store.SetCyberSessionBlocked(context.Background(), service.PlatformOpenAI, "", []string{explicitKey}, time.Minute))
 	for _, format := range []cyberSessionBlockFormat{cyberBlockFormatResponses, cyberBlockFormatChat, cyberBlockFormatAnthropic} {
 		require.False(t, harness.handler.rejectIfCyberSessionBlocked(c, harness.apiKey, payload, "gpt-5.1", format))
 	}
@@ -62,7 +62,7 @@ func TestCyberAllowlistedUserBypassesExistingBlocksAndContinuesWebSocket(t *test
 	require.NoError(t, harness.clientConn.Write(ctx, coderws.MessageText, payload))
 	_, event, err := harness.clientConn.Read(ctx)
 	require.NoError(t, err)
-	require.Equal(t, "cyber_policy", gjson.GetBytes(event, "response.error.code").String())
+	require.Equal(t, service.CyberPolicyClientCode, gjson.GetBytes(event, "response.error.code").String())
 	require.Eventually(t, func() bool {
 		logs := harness.moderationRepo.logSnapshot()
 		return len(logs) == 1 && logs[0].Mode == service.ContentModerationModeCyberLogOnly
@@ -72,7 +72,7 @@ func TestCyberAllowlistedUserBypassesExistingBlocksAndContinuesWebSocket(t *test
 	wsKeyCtx.Request.Header.Set("session_id", "ws-test-session")
 	wsBlockKey := service.CyberSessionExplicitBlockKey(harness.apiKey.ID, wsKeyCtx, payload)
 	require.NotEmpty(t, wsBlockKey)
-	matched, err := store.FindCyberSessionBlocked(ctx, []string{wsBlockKey})
+	matched, err := store.FindCyberSessionBlocked(ctx, service.PlatformOpenAI, []string{wsBlockKey})
 	require.NoError(t, err)
 	require.Empty(t, matched, "the cyber response must not write a new session block")
 	require.NoError(t, harness.clientConn.Write(ctx, coderws.MessageText, payload))

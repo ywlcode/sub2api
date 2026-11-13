@@ -2023,7 +2023,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			// after the write, and the failure frame itself must not count as output.
 			turnOutputStarted := wroteDownstream
 			// Rule rewriting must not suppress credential health handling. Only
-			// a matched cyber rule or an already blocked session bypasses them.
+			// a Cyber rejection or an already blocked session bypasses them.
 			cyberHit, _, _ := detectOpenAICyberPolicy(upstreamMessage)
 			if eventType == "error" && (!cyberHit || !clientRuleMatched) && !isOpenAIUpstreamSessionBlocked(upstreamMessage) {
 				eventCtx := openAIWSForwardStreamPhaseContext(openAI429LeaseObservation(ctx, lease), turnOutputStarted, upstreamMessage)

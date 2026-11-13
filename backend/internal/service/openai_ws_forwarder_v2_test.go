@@ -115,6 +115,7 @@ func TestForwardOpenAIWSV2_MarksCyberPolicyForFailureEventShapes(t *testing.T) {
 		},
 		{
 			name:          "response_failed_terminal",
+			wantError:     true,
 			upstreamEvent: []byte(`{"type":"response.failed","response":{"id":"resp_cyber","status":"failed","error":{"code":"cyber_policy","message":"blocked by cyber policy"},"usage":{"input_tokens":9,"output_tokens":2}}}`),
 			wantInput:     9,
 			wantOutput:    2,
