@@ -5,8 +5,40 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/Wei-Shaw/sub2api/internal/site"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUsageLogFromService_MarksOnlySecondaryHandledUsage(t *testing.T) {
+	t.Parallel()
+	importedID := site.ImportedRequestID("office", "client:deepseek-request")
+	for _, tc := range []struct {
+		name, requestID string
+		secondary       bool
+	}{
+		{"secondary direct, including existing rows", importedID, true},
+		{"primary direct", "local:deepseek-request", false},
+		{"secondary proxy with client ID", "client:gpt-request", false},
+		{"client ID resembling imported usage", "client:" + importedID, false},
+		{"legacy upstream ID", "resp-existing", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			log := &service.UsageLog{RequestID: tc.requestID, LongContextBillingApplied: true}
+			user := UsageLogFromService(log)
+			admin := UsageLogFromServiceAdmin(log)
+			require.Equal(t, tc.secondary, user.SecondaryProcessed)
+			require.Equal(t, tc.secondary, admin.SecondaryProcessed)
+			require.True(t, user.LongContextBillingApplied)
+			for _, record := range []any{user, admin} {
+				raw, err := json.Marshal(record)
+				require.NoError(t, err)
+				var fields map[string]any
+				require.NoError(t, json.Unmarshal(raw, &fields))
+				require.Equal(t, tc.secondary, fields["secondary_processed"])
+			}
+		})
+	}
+}
 
 func TestUsageLogFromService_IncludesOpenAIWSMode(t *testing.T) {
 	t.Parallel()
