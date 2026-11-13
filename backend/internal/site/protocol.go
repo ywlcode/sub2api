@@ -26,30 +26,38 @@ type Event struct {
 }
 
 type SyncRequest struct {
-	Protocol   int     `json:"protocol"`
-	NodeID     string  `json:"node_id"`
-	Version    string  `json:"version"`
-	Schema     string  `json:"schema"`
-	Events     []Event `json:"events,omitempty"`
-	PendingIDs []int64 `json:"pending_ids,omitempty"`
+	Protocol      int     `json:"protocol"`
+	NodeID        string  `json:"node_id"`
+	Version       string  `json:"version"`
+	Schema        string  `json:"schema"`
+	Events        []Event `json:"events,omitempty"`
+	PendingIDs    []int64 `json:"pending_ids,omitempty"`
+	TargetVersion string  `json:"target_version,omitempty"`
+	Cursor        string  `json:"cursor,omitempty"`
 }
 
 type SyncResponse struct {
-	Protocol     int     `json:"protocol"`
-	PrimaryID    string  `json:"primary_id"`
-	NodeID       string  `json:"node_id"`
-	BaseVersion  string  `json:"base_version"`
-	Version      string  `json:"version"`
-	Schema       string  `json:"schema"`
-	Full         bool    `json:"full"`
-	Rows         []Row   `json:"rows"`
-	Acknowledged []int64 `json:"acknowledged"`
+	Protocol     int         `json:"protocol"`
+	PrimaryID    string      `json:"primary_id"`
+	NodeID       string      `json:"node_id"`
+	BaseVersion  string      `json:"base_version"`
+	Version      string      `json:"version"`
+	Schema       string      `json:"schema"`
+	Full         bool        `json:"full"`
+	Rows         []Row       `json:"rows"`
+	Acknowledged []int64     `json:"acknowledged"`
+	Rejected     []Rejection `json:"rejected,omitempty"`
+	Cursor       string      `json:"cursor,omitempty"`
 }
 
 type Snapshot struct {
 	Schema       string
 	Rows         []Row
 	Acknowledged []int64
+	Rejected     []Rejection
+	Version      string
+	Full         bool
+	Cursor       string
 }
 
 // Store performs all monetary mutations, receipt acknowledgements and replica
@@ -94,3 +102,23 @@ func diffRows(previous, current []Row) []Row {
 	sort.Slice(diff, func(i, j int) bool { return diff[i].Identity() < diff[j].Identity() })
 	return diff
 }
+
+// Receipt rejections are durable evidence, never silently accepted charges.
+type Rejection struct {
+	ID     int64  `json:"id"`
+	Reason string `json:"reason"`
+}
+type DeliveryResponse struct {
+	Protocol     int         `json:"protocol"`
+	NodeID       string      `json:"node_id"`
+	Acknowledged []int64     `json:"acknowledged"`
+	Rejected     []Rejection `json:"rejected,omitempty"`
+}
+type DeliveryStore interface {
+	Deliver(context.Context, Peer, []Event) (DeliveryResponse, error)
+	MarkDelivered(context.Context, DeliveryResponse) error
+	ExportPage(context.Context, Peer, SyncRequest) (Snapshot, error)
+}
+
+const MaxPendingBills = 4096
+const DeliveryBatch = 512
