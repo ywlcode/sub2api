@@ -3,7 +3,7 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 PG_IMAGE=${RETENTION_PG_IMAGE:-postgres:18.1-alpine3.23}
-GO_IMAGE=${RETENTION_GO_IMAGE:-golang:1.27.3-alpine}
+GO_IMAGE=${RETENTION_GO_IMAGE:-golang:1.27.4-alpine}
 PG_NAME="sub2api-retention-$(date +%s)-$$"
 GO_NAME="$PG_NAME-go"
 DB_NAME=sub2api_retention_test
