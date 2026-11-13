@@ -34,10 +34,22 @@ func (r retentionSettings) GetMultiple(context.Context, []string) (map[string]st
 	return map[string]string{SettingKeyOpsAdvancedSettings: string(b)}, err
 }
 
+func (r retentionSettings) GetValue(context.Context, string) (string, error) {
+	return "", ErrSettingNotFound
+}
+
 func retentionWorker(db *sql.DB, enabled bool) *OpsCleanupService {
 	policy := defaultOpsAdvancedSettings().DataRetention
 	policy.CleanupEnabled = enabled
-	svc := NewOpsCleanupService(nil, db, nil, &config.Config{}, nil, retentionSettings{policy: policy})
+	// This dataset explicitly exercises a short, administrator-selected policy.
+	policy.RequestConnectionRetentionDays = 3
+	policy.RequestTimingRetentionDays = 3
+	policy.BillingDedupArchiveRetentionDays = 15
+	cfg := &config.Config{}
+	cfg.DashboardAgg.Enabled = true
+	cfg.DashboardAgg.Retention.UsageLogsDays = 30
+	cfg.DashboardAgg.Retention.UsageBillingDedupDays = 30
+	svc := NewOpsCleanupService(nil, db, nil, cfg, nil, retentionSettings{policy: policy})
 	svc.refreshEffectiveBeforeRun(context.Background())
 	return svc
 }

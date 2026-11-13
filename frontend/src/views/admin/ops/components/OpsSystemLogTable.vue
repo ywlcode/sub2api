@@ -50,7 +50,7 @@ const runtimeConfig = reactive<OpsRuntimeLogConfig>({
   caller: true,
   stacktrace_level: 'error',
   retention_days: 30,
-  request_retention_days: 30
+  request_retention_days: 90
 })
 
 const filters = reactive({
@@ -243,7 +243,7 @@ const loadRuntimeConfig = async () => {
     runtimeConfig.caller = cfg.caller
     runtimeConfig.stacktrace_level = cfg.stacktrace_level
     runtimeConfig.retention_days = cfg.retention_days
-    runtimeConfig.request_retention_days = cfg.request_retention_days ?? 30
+    runtimeConfig.request_retention_days = cfg.request_retention_days ?? 90
     runtimeConfigLoaded.value = true
   } catch (err: any) {
     console.error('[OpsSystemLogTable] Failed to load runtime log config', err)
@@ -271,7 +271,7 @@ const saveRuntimeConfig = async () => {
     runtimeConfig.caller = saved.caller
     runtimeConfig.stacktrace_level = saved.stacktrace_level
     runtimeConfig.retention_days = saved.retention_days
-    runtimeConfig.request_retention_days = saved.request_retention_days ?? 30
+    runtimeConfig.request_retention_days = saved.request_retention_days ?? 90
     appStore.showSuccess(t('admin.ops.systemLogs.runtimeConfigActive'))
   } catch (err: any) {
     console.error('[OpsSystemLogTable] Failed to save runtime log config', err)
@@ -296,7 +296,7 @@ const resetRuntimeConfig = async () => {
     runtimeConfig.caller = saved.caller
     runtimeConfig.stacktrace_level = saved.stacktrace_level
     runtimeConfig.retention_days = saved.retention_days
-    runtimeConfig.request_retention_days = saved.request_retention_days ?? 30
+    runtimeConfig.request_retention_days = saved.request_retention_days ?? 90
     appStore.showSuccess(t('admin.ops.systemLogs.runtimeConfigReset'))
     await fetchHealth()
   } catch (err: any) {
