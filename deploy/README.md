@@ -56,7 +56,7 @@ Codex 使用的模型服务依赖 `boscserver` 上的 Sub2API。提前或同时�
 
 ## Files
 
-Independent primary/secondary sites (local domestic routing, 5-second synchronization and a 15-second fail-closed replica lease): [SITES.md](SITES.md).
+Independent primary/secondary sites (local domestic routing, 5-second synchronization and a 60-second fail-closed replica lease): [SITES.md](SITES.md).
 
 | File | Description |
 |------|-------------|
