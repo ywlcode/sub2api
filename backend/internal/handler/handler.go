@@ -7,6 +7,7 @@ import (
 
 // AdminHandlers contains all admin-related HTTP handlers
 type AdminHandlers struct {
+	SiteReconciliation     *admin.SiteReconciliationHandler
 	RequestCapture         *admin.RequestCaptureHandler
 	AccountOps             *admin.AccountOpsHandler
 	AccountTokenGuard      *admin.AccountTokenGuardHandler

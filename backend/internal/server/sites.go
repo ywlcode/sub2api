@@ -8,6 +8,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
+	adminhandler "github.com/Wei-Shaw/sub2api/internal/handler/admin"
 	"github.com/Wei-Shaw/sub2api/internal/repository"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -83,6 +84,9 @@ func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db 
 			panic(err)
 		}
 		if cfg.Site.EffectiveMode() == site.Primary {
+			if handlers != nil && handlers.Admin != nil {
+				handlers.Admin.SiteReconciliation = adminhandler.NewSiteReconciliationHandler(store)
+			}
 			r.POST(site.SyncPath, sites.SyncHandler)
 			r.POST(site.DeliveryPath, sites.DeliveryHandler)
 		}

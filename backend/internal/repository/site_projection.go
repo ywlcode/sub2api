@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -44,12 +46,18 @@ func (s *SiteStore) initializeProjection(ctx context.Context) error {
 	return tx.Commit()
 }
 func (s *SiteStore) registerProjection(ctx context.Context, p site.Peer) error {
+	return s.registerProjectionOn(ctx, s.db, p)
+}
+
+func (s *SiteStore) registerProjectionOn(ctx context.Context, executor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, p site.Peer) error {
 	raw, _ := json.Marshal(struct {
 		Schema, Token string
 		Bases         map[int64]string
 	}{s.schema, p.Token, p.BaseURLs})
 	sum := sha256.Sum256(raw)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO site_export_nodes(node_id,fingerprint,epoch) VALUES($1,$2,$3) ON CONFLICT(node_id) DO UPDATE SET fingerprint=EXCLUDED.fingerprint,epoch=EXCLUDED.epoch,initialized=false WHERE site_export_nodes.fingerprint<>EXCLUDED.fingerprint`, p.ID, hex.EncodeToString(sum[:]), uuid.NewString())
+	_, err := executor.ExecContext(ctx, `INSERT INTO site_export_nodes(node_id,fingerprint,epoch) SELECT $1,$2,$3 WHERE NOT EXISTS(SELECT 1 FROM site_export_nodes WHERE node_id=$1 AND fingerprint=$2) ON CONFLICT(node_id) DO UPDATE SET fingerprint=EXCLUDED.fingerprint,epoch=EXCLUDED.epoch,initialized=false WHERE site_export_nodes.fingerprint<>EXCLUDED.fingerprint`, p.ID, hex.EncodeToString(sum[:]), uuid.NewString())
 	return err
 }
 
@@ -59,28 +67,63 @@ func (s *SiteStore) ExportPage(ctx context.Context, p site.Peer, input site.Sync
 func (s *SiteStore) Export(ctx context.Context, p site.Peer, events []site.Event, ids []int64) (site.Snapshot, error) {
 	return s.exportRetry(ctx, p, site.SyncRequest{PendingIDs: ids}, events, false)
 }
+
+// Serialize exporters before starting the snapshot. This lock is private to
+// policy publication; billing never takes it and never waits for the snapshot.
+func (s *SiteStore) projectionConnection(ctx context.Context, node string) (*sql.Conn, func(), error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	release := func() {
+		unlockCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if _, e := conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock(hashtextextended('site-projection:'||$1,0))`, node); e != nil {
+			// Never return a session holding a lock to the pool, including cancellation
+			// during lock acquisition when the server may already have granted it.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+		_ = conn.Close()
+	}
+	if _, err = conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtextextended('site-projection:'||$1,0))`, node); err != nil {
+		release()
+		return nil, nil, err
+	}
+	return conn, release, nil
+}
+
 func (s *SiteStore) exportRetry(ctx context.Context, p site.Peer, input site.SyncRequest, events []site.Event, paged bool) (site.Snapshot, error) {
-	if err := s.registerProjection(ctx, p); err != nil {
+	conn, release, err := s.projectionConnection(ctx, p.ID)
+	if err != nil {
 		return site.Snapshot{}, err
 	}
-	for attempt := 0; ; attempt++ {
-		result, err := s.exportProjection(ctx, p, input, events, paged)
-		var pg *pq.Error
-		if err == nil || attempt >= 5 || !errors.As(err, &pg) || (pg.Code != "40001" && pg.Code != "40P01") {
-			return result, err
+	defer release()
+	if err := s.registerProjectionOn(ctx, conn, p); err != nil {
+		return site.Snapshot{}, err
+	}
+	// Legacy in-process callers also import outside the export snapshot. Runtime
+	// delivery already uses its independent transaction and receipt lock.
+	if len(events) > 0 {
+		if _, err := s.Deliver(ctx, p, events); err != nil {
+			return site.Snapshot{}, err
 		}
-		timer := time.NewTimer((10 * time.Millisecond) << attempt)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return site.Snapshot{}, ctx.Err()
-		case <-timer.C:
+		known := map[int64]bool{}
+		for _, id := range input.PendingIDs {
+			known[id] = true
+		}
+		for _, e := range events {
+			if !known[e.ID] {
+				input.PendingIDs = append(input.PendingIDs, e.ID)
+				known[e.ID] = true
+			}
 		}
 	}
+	return s.exportProjection(ctx, conn, p, input, paged)
 }
-func (s *SiteStore) exportProjection(ctx context.Context, p site.Peer, input site.SyncRequest, events []site.Event, paged bool) (site.Snapshot, error) {
+
+func (s *SiteStore) exportProjection(ctx context.Context, conn *sql.Conn, p site.Peer, input site.SyncRequest, paged bool) (site.Snapshot, error) {
 	out := site.Snapshot{Schema: s.schema}
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return out, err
 	}
@@ -88,34 +131,25 @@ func (s *SiteStore) exportProjection(ctx context.Context, p site.Peer, input sit
 	var revision int64
 	var epoch string
 	var initialized bool
-	if err = tx.QueryRowContext(ctx, `SELECT epoch,revision,initialized FROM site_export_nodes WHERE node_id=$1 FOR UPDATE`, p.ID).Scan(&epoch, &revision, &initialized); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT epoch,revision,initialized FROM site_export_nodes WHERE node_id=$1`, p.ID).Scan(&epoch, &revision, &initialized); err != nil {
 		return out, err
 	}
 	current := epoch + ":" + strconv.FormatInt(revision, 10)
 	if input.Cursor != "" && input.TargetVersion != current {
 		return out, errors.New("site snapshot changed; restart paging")
 	}
-	receipt := site.DeliveryResponse{}
-	var importedCount int
-	committed := false
+	var observed []siteChangeGeneration
 	if input.Cursor == "" {
 		// Grants survive revocation for requests already in flight.
 		if _, err = tx.ExecContext(ctx, `INSERT INTO site_account_grants(node_id,account_id) SELECT $1,id FROM accounts WHERE `+siteAccountGrantSQL+` ON CONFLICT DO NOTHING`, p.ID); err != nil {
 			return out, err
 		}
-		imported, e := s.importEvents(ctx, tx, p, events, &receipt)
+		var e error
+		observed, e = readSiteChanges(ctx, tx, p.ID)
 		if e != nil {
 			return out, e
 		}
-		importedCount = len(imported)
-		// Compatibility callers use this transactional import too. Runtime upload is
-		// separate; cache recovery after commit is deliberately non-fatal.
-		defer func() {
-			if committed && importedCount > 0 {
-				s.afterSiteImport(ctx, imported)
-			}
-		}()
-		changed, e := s.refreshProjection(ctx, tx, p, revision+1, !initialized)
+		changed, e := s.refreshProjection(ctx, tx, p, revision+1, !initialized, observed)
 		if e != nil {
 			return out, e
 		}
@@ -137,7 +171,7 @@ func (s *SiteStore) exportProjection(ctx context.Context, p site.Peer, input sit
 	}
 	// Receipts and monetary rows share the repeatable-read snapshot, including
 	// accepted uploads whose HTTP response was lost.
-	ack, err := tx.QueryContext(ctx, `SELECT event_id,rejection FROM site_receipts WHERE node_id=$1 AND event_id=ANY($2::bigint[]) ORDER BY event_id`, p.ID, pq.Array(input.PendingIDs))
+	ack, err := tx.QueryContext(ctx, `SELECT r.event_id,CASE WHEN q.state IN ('settled','waived') THEN '' ELSE r.rejection END FROM site_receipts r LEFT JOIN site_rejected_events q USING(node_id,event_id) WHERE r.node_id=$1 AND r.event_id=ANY($2::bigint[]) ORDER BY r.event_id`, p.ID, pq.Array(input.PendingIDs))
 	if err != nil {
 		return out, err
 	}
@@ -193,10 +227,13 @@ func (s *SiteStore) exportProjection(ctx context.Context, p site.Peer, input sit
 		return out, err
 	}
 	if err = tx.Commit(); err != nil {
-		importedCount = 0
 		return out, err
 	}
-	committed = true
+	// Only publication has committed. A failed cleanup repeats work next time;
+	// it never invalidates the published balance/receipt snapshot.
+	if err = acknowledgeSiteChanges(ctx, conn, p.ID, observed); err != nil {
+		slog.Warn("site change cleanup deferred; published snapshot remains valid", "node", p.ID, "error", err)
+	}
 	return out, nil
 }
 
@@ -229,29 +266,16 @@ func (s *SiteStore) siteFilter(t siteTable) string {
 	return "true"
 }
 
-func (s *SiteStore) refreshProjection(ctx context.Context, tx *sql.Tx, p site.Peer, revision int64, full bool) (bool, error) {
+func (s *SiteStore) refreshProjection(ctx context.Context, tx *sql.Tx, p site.Peer, revision int64, full bool, observed []siteChangeGeneration) (bool, error) {
 	dirty := map[string]map[string]bool{}
-	// DELETE takes row locks. A concurrent update re-enqueues after commit.
-	rows, err := tx.QueryContext(ctx, `DELETE FROM site_changes WHERE node_id=$1 RETURNING table_name,row_key`, p.ID)
-	if err != nil {
-		return false, err
-	}
-	for rows.Next() {
-		var name, key string
-		if err = rows.Scan(&name, &key); err != nil {
-			_ = rows.Close()
-			return false, err
+	for _, change := range observed {
+		if dirty[change.Table] == nil {
+			dirty[change.Table] = map[string]bool{}
 		}
-		if dirty[name] == nil {
-			dirty[name] = map[string]bool{}
-		}
-		dirty[name][key] = true
+		dirty[change.Table][change.Key] = true
 	}
-	err = rows.Err()
-	_ = rows.Close()
-	if err != nil {
-		return false, err
-	}
+	var err error
+	var rows *sql.Rows
 	full = full || dirty["$scope"] != nil
 	if dirty["account_performance_monitors"] != nil || dirty["ai_ops_controls"] != nil {
 		dirty["accounts"] = map[string]bool{"*": true}
@@ -339,6 +363,11 @@ func (s *SiteStore) refreshProjection(ctx context.Context, tx *sql.Tx, p site.Pe
 		}
 		n, _ := result.RowsAffected()
 		changed = changed || n > 0
+	}
+	if full || dirty["$settlements"] != nil {
+		if err = s.stageSiteSettlements(ctx, tx, p.ID); err != nil {
+			return false, err
+		}
 	}
 	// Non-table runtime policy is cheap and stays authoritative on every poll.
 	for name, export := range map[string]func() ([]byte, error){"$pricing": s.ExportPricing, "$policy": s.ExportRequestPolicy} {

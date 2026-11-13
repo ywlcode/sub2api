@@ -105,8 +105,9 @@ func diffRows(previous, current []Row) []Row {
 
 // Receipt rejections are durable evidence, never silently accepted charges.
 type Rejection struct {
-	ID     int64  `json:"id"`
-	Reason string `json:"reason"`
+	ID        int64  `json:"id"`
+	Reason    string `json:"reason"`
+	Retryable bool   `json:"retryable,omitempty"`
 }
 type DeliveryResponse struct {
 	Protocol     int         `json:"protocol"`

@@ -55,7 +55,7 @@ func TestSiteDeliveryPoisonLostACKAndCacheOutage(t *testing.T) {
 		require.NoError(t, err)
 	}
 	// Invalid middle bill is durable and isolated; other bills still settle.
-	_, err = replica.Exec(`UPDATE site_outbox SET payload=jsonb_set(payload,'{usage,CreatedAt}',to_jsonb(to_char(NOW()+INTERVAL '1 hour','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))) WHERE id=(SELECT id FROM site_outbox WHERE kind='billing' ORDER BY id OFFSET 1 LIMIT 1)`)
+	_, err = replica.Exec(`UPDATE site_outbox SET payload=jsonb_set(payload,'{version}','0'::jsonb) WHERE id=(SELECT id FROM site_outbox WHERE kind='billing' ORDER BY id OFFSET 1 LIMIT 1)`)
 	require.NoError(t, err)
 	events, err := local.Pending(ctx, site.DeliveryBatch)
 	require.NoError(t, err)

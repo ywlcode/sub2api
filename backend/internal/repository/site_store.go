@@ -372,6 +372,9 @@ func (s *SiteStore) Install(ctx context.Context, response site.SyncResponse) err
 	if err != nil {
 		return err
 	}
+	if err = s.installSiteSettlements(ctx, tx, response.Rows); err != nil {
+		return err
+	}
 	if err = s.quarantineLocal(ctx, tx, response.Rejected); err != nil {
 		return err
 	}
@@ -393,7 +396,7 @@ func (s *SiteStore) Install(ctx context.Context, response site.SyncResponse) err
 			return fmt.Errorf("install %s: %w", t.name, err)
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT COALESCE(j.payload,b.payload) FROM (SELECT id,payload FROM site_outbox WHERE kind='billing' UNION ALL SELECT event_id,payload FROM site_rejected_events WHERE kind='billing') b LEFT JOIN usage_billing_events j ON j.request_id=b.payload->'command'->>'RequestID' AND j.api_key_id=(b.payload->'command'->>'APIKeyID')::bigint ORDER BY b.id`)
+	rows, err := tx.QueryContext(ctx, `SELECT COALESCE(j.payload,b.payload) FROM (SELECT id,payload FROM site_outbox WHERE kind='billing' UNION ALL SELECT event_id,payload FROM site_rejected_events WHERE kind='billing' AND state='pending') b LEFT JOIN usage_billing_events j ON j.request_id=b.payload->'command'->>'RequestID' AND j.api_key_id=(b.payload->'command'->>'APIKeyID')::bigint ORDER BY b.id`)
 	if err != nil {
 		return err
 	}

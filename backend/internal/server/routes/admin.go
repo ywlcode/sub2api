@@ -39,6 +39,11 @@ func RegisterAdminRoutes(
 	admin.Use(middleware.AdminComplianceGuard(settingService))
 	// 受限密钥的账户操作走独立资源校验，普通管理员保持原处理器。
 	admin.Use(h.Admin.Account.ScopedAdminKeyAccounts)
+	if h.Admin.SiteReconciliation != nil {
+		admin.GET("/sites/:node/rejections", h.Admin.SiteReconciliation.List)
+		admin.GET("/sites/:node/rejections/:event", h.Admin.SiteReconciliation.Get)
+		admin.POST("/sites/:node/rejections/:event/resolve", h.Admin.SiteReconciliation.Resolve)
+	}
 	if h.Lottery != nil {
 		lottery := admin.Group("/lottery")
 		lottery.GET("/settings", h.Lottery.Settings)

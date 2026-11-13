@@ -76,8 +76,11 @@ func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, ev
 			return nil, err
 		}
 
-		if !allowed || c.UserID <= 0 || c.APIKeyID <= 0 || c.RequestID == "" || len(c.RequestID) > 128 || u.CreatedAt.After(time.Now().Add(time.Minute)) {
-			return nil, invalidSiteEvent(errors.New("site billing ownership or time invalid"))
+		if !allowed || c.UserID <= 0 || c.APIKeyID <= 0 || c.RequestID == "" || len(c.RequestID) > 128 {
+			return nil, invalidSiteEvent(errors.New("site billing ownership invalid"))
+		}
+		if u.CreatedAt.After(time.Now().Add(time.Minute)) {
+			return nil, retrySiteEvent(errors.New("site billing time is ahead of primary; retry when the timestamp becomes valid"))
 		}
 		for _, v := range []float64{c.BalanceCost, c.SubscriptionCost, c.APIKeyQuotaCost, c.APIKeyRateLimitCost, c.AccountQuotaCost, c.PlatformQuotaCost, u.ActualCost, u.TotalCost} {
 			if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
@@ -98,7 +101,7 @@ func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, ev
 				return nil, err
 			}
 			if !owner {
-				return nil, invalidSiteEvent(errors.New("site subscription owner mismatch"))
+				return nil, retrySiteEvent(errors.New("site subscription owner missing or changed"))
 			}
 		}
 		billing = &e
