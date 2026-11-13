@@ -604,7 +604,7 @@ export default {
         hint: 'Pause this account when M failures occur in its last N upstream calls. Each retry counts separately; a full window is not required.',
         windowSize: 'Window size N',
         failureThreshold: 'Failure threshold M',
-        policy: 'HTTP 400, 429, 5xx, connection failures, upstream timeouts, interrupted streams and HTTP 200 error responses count as failures. Cooldowns are 15, 30, then 60 minutes. Each trip clears the window. Escalation resets after 6 hours without another trip and evidence of a successful request.',
+        policy: 'HTTP 5xx, upstream connection failures/timeouts after upload, interrupted streams and HTTP 200 upstream errors count as failures. Client errors, context limits, 4xx, rate limits, network faults before upload and task polling are excluded. Cooldowns are 15, 30, then 60 minutes. Each trip clears the window. Escalation resets after 6 hours without another trip and evidence of a successful request.',
         invalid: 'Enter integers satisfying 1 ≤ M ≤ N ≤ 10000.',
         bulkApply: 'Update health breaker settings',
         triggerEvidence: '{count} failures in the last {samples} calls (window limit {window}) reached the threshold of {threshold}. This is health breaker trip {trips}.'

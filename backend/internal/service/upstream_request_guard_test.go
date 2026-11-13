@@ -166,7 +166,7 @@ func TestUpstreamGuardDetachedDrainAndOwnerCancellation(t *testing.T) {
 }
 
 func TestUpstreamGuardHealthAttribution(t *testing.T) {
-	for _, mode := range []string{"timeout", "client-cancel", "client-deadline"} {
+	for _, mode := range []string{"timeout", "upload-timeout", "client-cancel", "client-deadline"} {
 		t.Run(mode, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				limiter, account, cache, _ := newAPIKeyHealthFixture(t)
@@ -180,6 +180,9 @@ func TestUpstreamGuardHealthAttribution(t *testing.T) {
 				ctx, release := detachUpstreamContext(caller)
 				release()
 				upstream := apiKeyHealthTestHTTP{DoFunc: func(req *http.Request) (*http.Response, error) {
+					if mode == "timeout" {
+						httptrace.ContextClientTrace(req.Context()).WroteRequest(httptrace.WroteRequestInfo{})
+					}
 					if mode == "client-cancel" {
 						cancel()
 					}

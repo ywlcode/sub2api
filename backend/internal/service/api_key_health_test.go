@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"strings"
@@ -151,7 +152,7 @@ func TestAPIKeyHealthHTTPRetriesAreIndependentSamples(t *testing.T) {
 		require.NoError(t, resp.Body.Close())
 		require.NoError(t, resp.Body.Close())
 	}
-	require.Equal(t, []apiKeyHealthSample{{false, 400}, {false, 502}, {true, 200}}, cache.samples)
+	require.Equal(t, []apiKeyHealthSample{{false, 502}, {true, 200}}, cache.samples)
 	require.Equal(t, 3, cache.beginCalls)
 }
 
@@ -161,8 +162,8 @@ func TestAPIKeyHealthHTTPResponseClassification(t *testing.T) {
 		status                  int
 		include, success        bool
 	}{
-		{"ordinary 400", "application/json", `{"error":{"type":"invalid_request_error"}}`, 400, true, false},
-		{"429", "application/json", `{"error":"overloaded"}`, 429, true, false},
+		{"ordinary 400", "application/json", `{"error":{"type":"invalid_request_error"}}`, 400, false, false},
+		{"429", "application/json", `{"error":"overloaded"}`, 429, false, false},
 		{"502", "text/html", "bad gateway", 502, true, false},
 		{"credential policy unchanged", "application/json", `{"error":"invalid_api_key"}`, 401, false, false},
 		{"200 error", "application/json", `{"error":{"message":"failed"}}`, 200, true, false},
@@ -216,8 +217,8 @@ func TestAPIKeyHealthHTTPTransportAndClientCancellation(t *testing.T) {
 		err             error
 		cancel, include bool
 	}{
-		{"upstream timeout", &url.Error{Op: "Post", URL: "https://upstream.example", Err: os.ErrDeadlineExceeded}, false, true},
-		{"connection EOF", io.EOF, false, true},
+		{"upstream timeout", &url.Error{Op: "Post", URL: "https://upstream.example", Err: os.ErrDeadlineExceeded}, false, false},
+		{"connection EOF", io.EOF, false, false},
 		{"local rejection", errors.New("local admission rejected"), false, false},
 		{"client cancel", context.Canceled, true, false},
 	} {
@@ -327,7 +328,8 @@ func TestAPIKeyHealthHTTPTimeoutsDuringSendAndStream(t *testing.T) {
 				limiter, account, cache, _ := newAPIKeyHealthFixture(t)
 				ctx, cancel := context.WithCancelCause(context.Background())
 				defer cancel(context.Canceled)
-				upstream := apiKeyHealthTestHTTP{DoFunc: func(*http.Request) (*http.Response, error) {
+				upstream := apiKeyHealthTestHTTP{DoFunc: func(r *http.Request) (*http.Response, error) {
+					httptrace.ContextClientTrace(r.Context()).WroteRequest(httptrace.WroteRequestInfo{})
 					if !streaming {
 						cancel(cause)
 						return nil, ctx.Err()
@@ -363,6 +365,7 @@ func TestAPIKeyHealthHTTPFirstOutputHeaderTimeoutCountsFailure(t *testing.T) {
 	ctx, guard := newOpenAIFirstOutputHeaderGuard(context.Background(), func() {}, time.Now().Add(10*time.Millisecond))
 	defer guard.close()
 	upstream := apiKeyHealthTestHTTP{DoFunc: func(req *http.Request) (*http.Response, error) {
+		httptrace.ContextClientTrace(req.Context()).WroteRequest(httptrace.WroteRequestInfo{})
 		<-req.Context().Done()
 		return nil, req.Context().Err()
 	}}
