@@ -8,8 +8,20 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/site"
 	"github.com/stretchr/testify/require"
 )
+
+func TestResolveUsageBillingRequestID_DoesNotMarkProxyOrClientIDsAsSecondary(t *testing.T) {
+	t.Parallel()
+	importedID := site.ImportedRequestID("office", "req-one")
+	for _, key := range []ctxkey.Key{ctxkey.ClientRequestID, ctxkey.RequestID} {
+		ctx := context.WithValue(context.Background(), key, importedID)
+		requestID := resolveUsageBillingRequestID(ctx, importedID)
+		require.NotEqual(t, importedID, requestID)
+		require.False(t, site.IsImportedRequestID(requestID))
+	}
+}
 
 func TestResolveUsageBillingRequestID_ForcedWebSearchBeatsClientID(t *testing.T) {
 	t.Parallel()
