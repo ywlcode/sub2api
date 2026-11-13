@@ -29,6 +29,11 @@ func TestSiteReplicationBillingRetryPendingOverlayAndRevocation(t *testing.T) {
 	require.NoError(t, err)
 	_, err = primaryDB.Exec(`UPDATE accounts SET proxy_id=$1,proxy_fallback_origin_id=$1 WHERE id=$2`, proxy.ID, account.ID)
 	require.NoError(t, err)
+	group := mustCreateGroup(t, primaryClient, &service.Group{Name: "site-local-" + uuid.NewString(), Platform: service.PlatformDeepseek, Status: service.StatusActive})
+	_, bindErr := primaryDB.Exec(`INSERT INTO account_groups(account_id,group_id) VALUES($1,$2)`, account.ID, group.ID)
+	require.NoError(t, bindErr)
+	_, bindErr = primaryDB.Exec(`UPDATE api_keys SET group_id=$1 WHERE id=$2`, group.ID, key.ID)
+	require.NoError(t, bindErr)
 	peer := site.Peer{ID: "office", Token: strings.Repeat("s", 32)}
 	_, err = primaryDB.Exec(`INSERT INTO security_penalty_subjects(user_id,scope,subject_key,policy,blocked_until) VALUES($1,'session','会话:with,separator','session_block',NOW()+INTERVAL '1 hour')`, user.ID)
 	require.NoError(t, err)
@@ -149,7 +154,7 @@ func TestSiteReplicationBillingRetryPendingOverlayAndRevocation(t *testing.T) {
 	// Diagnostic errors retain recovered state updates and never create a new
 	// error entry just because delivery/retry happened twice.
 	var errorID int64
-	require.NoError(t, localDB.QueryRow(`INSERT INTO ops_error_logs(request_id,account_id,error_phase,error_type,error_message,status_code) VALUES('trace-one',$1,'upstream','timeout','initial timeout',408) RETURNING id`, account.ID).Scan(&errorID))
+	require.NoError(t, localDB.QueryRow(`INSERT INTO ops_error_logs(request_id,account_id,api_key_id,error_phase,error_type,error_message,status_code) VALUES('trace-one',$1,$2,'upstream','timeout','initial timeout',408) RETURNING id`, account.ID, key.ID).Scan(&errorID))
 	_, err = localDB.Exec(`UPDATE ops_error_logs SET error_message='recovered by retry' WHERE id=$1`, errorID)
 	require.NoError(t, err)
 	pending, err = local.Pending(ctx, 128)

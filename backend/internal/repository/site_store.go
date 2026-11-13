@@ -77,6 +77,7 @@ type SiteStore struct {
 	db                   *sql.DB
 	cfg                  site.Config
 	tables               []siteTable
+	logColumns           map[string][]string
 	schema               string
 	AfterInstall         func(context.Context) error
 	AfterPolicyInstall   func(context.Context, map[string]bool) error
@@ -144,7 +145,39 @@ func NewSiteStore(db *sql.DB, cfg *config.Config) (*SiteStore, error) {
 			return nil, fmt.Errorf("site schema missing table %s", t.name)
 		}
 	}
+	s.logColumns = map[string][]string{}
+	for _, table := range []string{"ops_error_logs", "request_connection_traces"} {
+		rows, err := db.QueryContext(ctx, `SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 ORDER BY ordinal_position`, table)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var col string
+			if err = rows.Scan(&col); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			s.logColumns[table] = append(s.logColumns[table], col)
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
 	s.schema = hex.EncodeToString(h.Sum(nil))
+	if cfg.Site.EffectiveMode() == site.Primary {
+		if err := s.initializeProjection(ctx); err != nil {
+			return nil, err
+		}
+		// Register configured peers before the primary starts serving writes;
+		// their first export already has an active transactional dirty set.
+		for _, peer := range cfg.Site.Peers {
+			if err := s.registerProjection(ctx, peer); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return s, nil
 }
 
@@ -192,24 +225,11 @@ func (s *SiteStore) bindIdentity(ctx context.Context) error {
 func (s *SiteStore) Schema() string { return s.schema }
 
 func (s *SiteStore) Pending(ctx context.Context, limit int) ([]site.Event, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,kind,payload FROM site_outbox ORDER BY id LIMIT $1`, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rows.Close() }()
-	var out []site.Event
-	for rows.Next() {
-		var e site.Event
-		if err = rows.Scan(&e.ID, &e.Kind, &e.Payload); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, rows.Err()
+	return s.pendingDelivery(ctx, limit)
 }
 
 func (s *SiteStore) PendingIDs(ctx context.Context) ([]int64, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM site_outbox ORDER BY id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM site_outbox WHERE kind='billing' AND attempted ORDER BY id LIMIT 4096`)
 	if err != nil {
 		return nil, err
 	}
@@ -223,174 +243,6 @@ func (s *SiteStore) PendingIDs(ctx context.Context) ([]int64, error) {
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
-}
-
-func (s *SiteStore) Export(ctx context.Context, p site.Peer, events []site.Event, pendingIDs []int64) (site.Snapshot, error) {
-	// A primary request or another peer may update the same user during our
-	// repeatable-read transaction. Retry the entire snapshot/receipt transaction;
-	// never weaken its consistency to make that concurrent update disappear.
-	for attempt := 0; ; attempt++ {
-		result, err := s.exportOnce(ctx, p, events, pendingIDs)
-		var pgErr *pq.Error
-		if err == nil || attempt >= 5 || !errors.As(err, &pgErr) || (pgErr.Code != "40001" && pgErr.Code != "40P01") {
-			return result, err
-		}
-		timer := time.NewTimer((10 * time.Millisecond) << attempt)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return site.Snapshot{}, ctx.Err()
-		case <-timer.C:
-		}
-	}
-}
-
-func (s *SiteStore) exportOnce(ctx context.Context, p site.Peer, events []site.Event, pendingIDs []int64) (site.Snapshot, error) {
-	var result site.Snapshot
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
-	if err != nil {
-		return result, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	var imported []service.UsageBillingEvent
-	accountRows, err := tx.QueryContext(ctx, `SELECT id FROM accounts WHERE `+siteAccountGrantSQL+` ORDER BY id`)
-	if err != nil {
-		return result, err
-	}
-	var accountIDs []int64
-	for accountRows.Next() {
-		var id int64
-		if err = accountRows.Scan(&id); err != nil {
-			_ = accountRows.Close()
-			return result, err
-		}
-		accountIDs = append(accountIDs, id)
-	}
-	err = accountRows.Err()
-	_ = accountRows.Close()
-	if err != nil {
-		return result, err
-	}
-	for _, id := range accountIDs {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO site_account_grants(node_id,account_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, p.ID, id); err != nil {
-			return result, err
-		}
-	}
-
-	for _, e := range events {
-		bill, err := s.importEvent(ctx, tx, p, e)
-		if err != nil {
-			return result, err
-		}
-		if bill != nil {
-			imported = append(imported, *bill)
-		}
-	}
-	// Receipt lookup and balances share this transaction. This also acknowledges
-	// previously accepted events outside the current page (e.g. a late-committing
-	// lower outbox ID). Never infer acknowledgement from a sequence high-water.
-	ackRows, err := tx.QueryContext(ctx, `SELECT event_id FROM site_receipts WHERE node_id=$1 AND event_id=ANY($2::bigint[]) ORDER BY event_id`, p.ID, pq.Array(pendingIDs))
-	if err != nil {
-		return result, err
-	}
-	for ackRows.Next() {
-		var id int64
-		if err = ackRows.Scan(&id); err != nil {
-			_ = ackRows.Close()
-			return result, err
-		}
-		result.Acknowledged = append(result.Acknowledged, id)
-	}
-	err = ackRows.Err()
-	_ = ackRows.Close()
-	if err != nil {
-		return result, err
-	}
-	ids := make([]string, len(accountIDs))
-	for i, id := range accountIDs {
-		ids[i] = strconv.FormatInt(id, 10)
-	}
-	if len(ids) == 0 {
-		ids = []string{"NULL"}
-	}
-	result.Schema = s.schema
-	for _, t := range s.tables {
-		where := ""
-		if t.filter != "" {
-			where = " WHERE " + fmt.Sprintf(t.filter, strings.Join(ids, ","))
-		}
-		if t.name == "settings" {
-			where = " WHERE " + siteSettingsPredicate()
-		}
-		projection := "to_jsonb(t)"
-		if t.name == "accounts" {
-			// Pause authorities live outside the account row. Project their
-			// effective decision without replicating the controllers/jobs.
-			projection += ` || jsonb_build_object('schedulable',t.schedulable AND NOT EXISTS(SELECT 1 FROM account_performance_monitors m WHERE m.account_id=t.id AND m.paused) AND NOT EXISTS(SELECT 1 FROM ai_ops_controls a WHERE a.account_id=t.id AND a.ai_paused))`
-		}
-		rows, err := tx.QueryContext(ctx, `SELECT `+projection+` FROM "`+t.name+`" t`+where)
-		if err != nil {
-			return result, err
-		}
-		for rows.Next() {
-			var raw []byte
-			if err = rows.Scan(&raw); err != nil {
-				_ = rows.Close()
-				return result, err
-			}
-			value, err := redactSiteRow(t.name, raw, p)
-			if err != nil {
-				_ = rows.Close()
-				return result, err
-			}
-			if t.name == "settings" {
-				value, err = s.projectSiteSetting(value, false)
-				if err != nil {
-					_ = rows.Close()
-					return result, err
-				}
-			}
-			key, err := siteRowKey(t, value)
-			if err != nil {
-				_ = rows.Close()
-				return result, err
-			}
-			result.Rows = append(result.Rows, site.Row{Table: t.name, Key: key, Value: value})
-		}
-		err = rows.Err()
-		_ = rows.Close()
-		if err != nil {
-			return result, err
-		}
-	}
-	quality, err := exportSiteQuality(ctx, tx, accountIDs)
-	if err != nil {
-		return result, err
-	}
-	result.Rows = append(result.Rows, quality...)
-	if err = tx.Commit(); err != nil {
-		return result, err
-	}
-	if s.ExportPricing != nil {
-		raw, e := s.ExportPricing()
-		if e != nil {
-			return result, e
-		}
-		result.Rows = append(result.Rows, site.Row{Table: "$pricing", Key: "catalog", Value: raw})
-	}
-	if s.ExportRequestPolicy != nil {
-		raw, e := s.ExportRequestPolicy()
-		if e != nil {
-			return result, e
-		}
-		result.Rows = append(result.Rows, site.Row{Table: "$policy", Key: "request", Value: raw})
-	}
-	if s.AfterImport != nil {
-		if err = s.AfterImport(ctx, imported); err != nil {
-			return result, err
-		}
-	}
-	return result, nil
 }
 
 func redactSiteRow(table string, raw []byte, p site.Peer) (json.RawMessage, error) {
@@ -510,87 +362,18 @@ func (s *SiteStore) Install(ctx context.Context, response site.SyncResponse) err
 	if !response.Full && version != response.BaseVersion {
 		return errors.New("replica diff base mismatch")
 	}
-	allowed := map[string]siteTable{}
-	dirty := map[string]bool{}
-	changed := map[string]bool{"$full": response.Full}
-	for _, t := range s.tables {
-		allowed[t.name] = t
-		if response.Full {
-			dirty[t.name] = true
-		}
-	}
-	// Keep the previous primary account projection to distinguish policy changes
-	// from heartbeat/balance refreshes. Local cooldowns must survive the latter.
-	var previousAccounts []byte
-	if err = tx.QueryRowContext(ctx, `SELECT COALESCE(jsonb_object_agg(row_key,value),'{}'::jsonb) FROM site_replica_rows WHERE table_name='accounts'`).Scan(&previousAccounts); err != nil {
-		return err
-	}
-	var hadPendingBills bool
-	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM site_outbox WHERE kind='billing')`).Scan(&hadPendingBills); err != nil {
-		return err
-	}
-	if hadPendingBills {
-		// Reset these baselines before replay, including bills acknowledged in
-		// this response. Unchanged rows are excluded from UPDATE below.
-		for _, name := range []string{"users", "api_keys", "user_subscriptions", "accounts", "usage_platform_quota_totals"} {
-			dirty[name] = true
-		}
-	}
-	if response.Full {
-		if _, err = tx.ExecContext(ctx, `DELETE FROM site_replica_rows`); err != nil {
+	if !response.Full && len(response.Rows) == 0 && len(response.Acknowledged) == 0 && len(response.Rejected) == 0 {
+		if _, err = tx.ExecContext(ctx, `UPDATE site_identity SET version=$1,primary_id=$2 WHERE singleton`, response.Version, response.PrimaryID); err != nil {
 			return err
 		}
+		return tx.Commit()
 	}
-	seen := map[string]bool{}
-	for _, r := range response.Rows {
-		changed[r.Table] = true
-		if r.Table == "$quality" {
-			if seen[r.Identity()] || len(r.Key) != 64 {
-				return errors.New("invalid quality projection")
-			}
-			seen[r.Identity()] = true
-			if len(r.Value) == 0 {
-				_, err = tx.ExecContext(ctx, `DELETE FROM site_replica_rows WHERE table_name='$quality' AND row_key=$1`, r.Key)
-			} else {
-				_, err = tx.ExecContext(ctx, `INSERT INTO site_replica_rows(table_name,row_key,value) VALUES('$quality',$1,$2::jsonb) ON CONFLICT(table_name,row_key) DO UPDATE SET value=EXCLUDED.value`, r.Key, string(r.Value))
-			}
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		if ((r.Table == "$pricing" && r.Key == "catalog") || (r.Table == "$policy" && r.Key == "request")) && len(r.Value) > 0 {
-			if seen[r.Identity()] {
-				return errors.New("duplicate pricing catalog")
-			}
-			seen[r.Identity()] = true
-			_, err = tx.ExecContext(ctx, `INSERT INTO site_replica_rows(table_name,row_key,value) VALUES($1,$2,$3::jsonb) ON CONFLICT(table_name,row_key) DO UPDATE SET value=EXCLUDED.value`, r.Table, r.Key, string(r.Value))
-			if err != nil {
-				return err
-			}
-			continue
-		}
-		t, ok := allowed[r.Table]
-		if !ok || seen[r.Identity()] {
-			return errors.New("unknown or duplicate replica row")
-		}
-		if r.Table == "settings" && !service.IsSiteSetting(r.Key) {
-			return errors.New("setting outside site request policy")
-		}
-		seen[r.Identity()] = true
-		dirty[r.Table] = true
-		if len(r.Value) == 0 {
-			_, err = tx.ExecContext(ctx, `DELETE FROM site_replica_rows WHERE table_name=$1 AND row_key=$2`, r.Table, r.Key)
-		} else {
-			key, e := siteRowKey(t, r.Value)
-			if e != nil || key != r.Key {
-				return errors.New("invalid replica row key")
-			}
-			_, err = tx.ExecContext(ctx, `INSERT INTO site_replica_rows(table_name,row_key,value) VALUES($1,$2,$3::jsonb) ON CONFLICT(table_name,row_key) DO UPDATE SET value=EXCLUDED.value`, r.Table, r.Key, string(r.Value))
-		}
-		if err != nil {
-			return err
-		}
+	dirty, changed, previousAccounts, hadPendingBills, err := s.prepareSiteInstall(ctx, tx, response)
+	if err != nil {
+		return err
+	}
+	if err = s.quarantineLocal(ctx, tx, response.Rejected); err != nil {
+		return err
 	}
 	for _, id := range response.Acknowledged {
 		if _, err = tx.ExecContext(ctx, `DELETE FROM site_outbox WHERE id=$1`, id); err != nil {
@@ -610,7 +393,7 @@ func (s *SiteStore) Install(ctx context.Context, response site.SyncResponse) err
 			return fmt.Errorf("install %s: %w", t.name, err)
 		}
 	}
-	rows, err := tx.QueryContext(ctx, `SELECT payload FROM site_outbox WHERE kind='billing' ORDER BY id`)
+	rows, err := tx.QueryContext(ctx, `SELECT COALESCE(j.payload,b.payload) FROM (SELECT id,payload FROM site_outbox WHERE kind='billing' UNION ALL SELECT event_id,payload FROM site_rejected_events WHERE kind='billing') b LEFT JOIN usage_billing_events j ON j.request_id=b.payload->'command'->>'RequestID' AND j.api_key_id=(b.payload->'command'->>'APIKeyID')::bigint ORDER BY b.id`)
 	if err != nil {
 		return err
 	}
@@ -635,7 +418,7 @@ func (s *SiteStore) Install(ctx context.Context, response site.SyncResponse) err
 	}
 	baselineIDs := map[string]bool{}
 	if len(pending) > 0 {
-		rows, err := tx.QueryContext(ctx, `SELECT table_name||':'||row_key FROM site_replica_rows WHERE table_name IN ('users','api_keys','accounts','user_subscriptions')`)
+		rows, err := tx.QueryContext(ctx, `SELECT table_name||':'||row_key FROM site_replica_rows r WHERE table_name IN ('users','api_keys','accounts','user_subscriptions') AND EXISTS(SELECT 1 FROM site_install_keys k WHERE k.table_name=r.table_name AND k.row_key=r.row_key)`)
 		if err != nil {
 			return err
 		}
@@ -704,7 +487,7 @@ func (s *SiteStore) Install(ctx context.Context, response site.SyncResponse) err
 			return err
 		}
 	}
-	if s.AfterInstall != nil {
+	if s.AfterInstall != nil && (response.Full || len(changed) > 1) {
 		if err := s.AfterInstall(ctx); err != nil {
 			return err
 		}
@@ -714,7 +497,12 @@ func (s *SiteStore) Install(ctx context.Context, response site.SyncResponse) err
 			return err
 		}
 	}
-	return s.refreshModelRouter(ctx)
+	for _, name := range []string{"$full", "accounts", "account_groups", "composite_model_routes", "groups", "api_keys", "api_key_groups"} {
+		if changed[name] {
+			return s.refreshModelRouter(ctx)
+		}
+	}
+	return nil
 }
 
 func quotedColumns(columns []string) string {
@@ -757,7 +545,7 @@ func (s *SiteStore) installTable(ctx context.Context, tx *sql.Tx, t siteTable, p
 	if len(updates) > 0 {
 		conflict = "DO UPDATE SET " + strings.Join(updates, ",") + " WHERE ROW(" + strings.Join(before, ",") + ") IS DISTINCT FROM ROW(" + strings.Join(after, ",") + ")"
 	}
-	query := `INSERT INTO "` + t.name + `" (` + columns + `) SELECT ` + columns + ` FROM jsonb_populate_recordset(NULL::"` + t.name + `",COALESCE((SELECT jsonb_agg(value) FROM site_replica_rows WHERE table_name=$1),'[]'::jsonb)) ON CONFLICT (` + quotedColumns(t.keys) + `) ` + conflict
+	query := `INSERT INTO "` + t.name + `" (` + columns + `) SELECT ` + columns + ` FROM jsonb_populate_recordset(NULL::"` + t.name + `",COALESCE((SELECT jsonb_agg(value) FROM site_replica_rows r WHERE table_name=$1 AND EXISTS(SELECT 1 FROM site_install_keys k WHERE k.table_name=r.table_name AND k.row_key=r.row_key)),'[]'::jsonb)) ON CONFLICT (` + quotedColumns(t.keys) + `) ` + conflict
 	args := []any{t.name}
 	if t.name == "accounts" {
 		args = append(args, string(previousAccounts))
@@ -766,10 +554,10 @@ func (s *SiteStore) installTable(ctx context.Context, tx *sql.Tx, t siteTable, p
 		return err
 	}
 	if t.name == "users" {
-		if _, err := tx.ExecContext(ctx, `UPDATE users u SET status=r.value->>'status' FROM site_replica_rows r WHERE r.table_name='users' AND r.row_key=u.id::text AND u.status IS DISTINCT FROM r.value->>'status'`); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE users u SET status=r.value->>'status' FROM site_replica_rows r WHERE r.table_name='users' AND r.row_key=u.id::text AND EXISTS(SELECT 1 FROM site_install_keys k WHERE k.table_name='users' AND k.row_key=r.row_key) AND u.status IS DISTINCT FROM r.value->>'status'`); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE users u SET moderation_status_revision=(r.value->>'moderation_status_revision')::bigint FROM site_replica_rows r WHERE r.table_name='users' AND r.row_key=u.id::text AND u.moderation_status_revision IS DISTINCT FROM (r.value->>'moderation_status_revision')::bigint`)
+		_, err := tx.ExecContext(ctx, `UPDATE users u SET moderation_status_revision=(r.value->>'moderation_status_revision')::bigint FROM site_replica_rows r WHERE r.table_name='users' AND r.row_key=u.id::text AND EXISTS(SELECT 1 FROM site_install_keys k WHERE k.table_name='users' AND k.row_key=r.row_key) AND u.moderation_status_revision IS DISTINCT FROM (r.value->>'moderation_status_revision')::bigint`)
 		return err
 	}
 	return nil
@@ -818,6 +606,7 @@ func (s *SiteStore) removeAbsentRows(ctx context.Context, tx *sql.Tx, dirty map[
 		case "settings":
 			query += " AND " + siteSettingsPredicate()
 		}
+		query += ` AND EXISTS(SELECT 1 FROM site_install_keys k WHERE k.table_name=$1 AND k.row_key=` + rowKeySQL(t, "t") + `)`
 		if _, err := tx.ExecContext(ctx, query, t.name); err != nil {
 			return err
 		}

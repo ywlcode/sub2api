@@ -120,7 +120,11 @@ def seed(lab):
     COMMIT;
     """)
     lab.command("restart", "primary")
-    lab.eventually(lab.ready, timeout=40, label="first replica")
+    lab.eventually(lambda: lab.sql("secondary", "SELECT count(*) FROM accounts WHERE id=101 AND deleted_at IS NULL;") == "1", timeout=40, label="seeded account synchronized")
+    # The empty bootstrap lease may predate seeding. Start the actual scenarios
+    # only after a fresh process has installed the seeded policy and router.
+    lab.command("restart", "secondary")
+    lab.eventually(lab.ready, timeout=40, label="first seeded replica")
 
 
 if __name__ == "__main__":
