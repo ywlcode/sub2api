@@ -545,6 +545,8 @@ export default {
       inputCost: '输入费用',
       outputCost: '输出费用',
       longContext: '长上下文',
+      secondaryProcessed: '从站处理',
+      secondaryProcessedTooltip: '此请求由从站直接调用上游处理，用量已汇总到主站。',
       longContextPricingTooltip: '已应用长上下文计费。输入和输出费率取决于定价档位，并非统一倍率。',
       cacheCreationCost: '缓存创建费用',
       cacheReadCost: '缓存读取费用',

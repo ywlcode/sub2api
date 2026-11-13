@@ -2024,6 +2024,8 @@ export interface UsageLog {
   actual_cost: number
   rate_multiplier: number
   long_context_billing_applied: boolean
+  /** Handled directly by a secondary and settled on the primary; excludes proxy-only requests. */
+  secondary_processed?: boolean
   billing_type: number
 
   request_type?: UsageRequestType

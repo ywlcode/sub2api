@@ -548,6 +548,8 @@ export default {
       inputCost: 'Input Cost',
       outputCost: 'Output Cost',
       longContext: 'Long context',
+      secondaryProcessed: 'Secondary',
+      secondaryProcessedTooltip: 'This request was handled directly by a secondary. Its usage has been reported to the primary.',
       longContextPricingTooltip: 'Long-context pricing was applied. Input and output rates depend on the pricing tier, not a uniform multiplier.',
       cacheCreationCost: 'Cache Creation Cost',
       cacheReadCost: 'Cache Read Cost',

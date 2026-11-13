@@ -229,6 +229,12 @@
                 :title="t('admin.usage.longContextPricingTooltip')"
                 class="inline-flex items-center rounded px-1 py-px text-[10px] font-semibold leading-tight bg-amber-100 text-amber-700 ring-1 ring-inset ring-amber-200 dark:bg-amber-500/20 dark:text-amber-300 dark:ring-amber-500/30"
               >{{ t('admin.usage.longContext') }}</span>
+              <span
+                v-if="row.secondary_processed"
+                data-testid="secondary-processed-marker"
+                :title="t('admin.usage.secondaryProcessedTooltip')"
+                class="inline-flex items-center whitespace-nowrap rounded px-1 py-px text-[10px] font-semibold leading-tight bg-sky-100 text-sky-700 ring-1 ring-inset ring-sky-200 dark:bg-sky-500/20 dark:text-sky-300 dark:ring-sky-500/30"
+              >{{ t('admin.usage.secondaryProcessed') }}</span>
               <!-- Cost Detail Tooltip -->
               <span class="flex h-4 w-4 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-700" aria-hidden="true">
                 <Icon name="infoCircle" size="xs" class="text-gray-400" />

@@ -59,6 +59,8 @@ const localizedMessages: Record<'en' | 'zh', Record<string, string>> = {
     'latencyObservability.typedScope': enLatencyObservability.typedScope,
     'admin.usage.longContext': en.usage.longContext,
     'admin.usage.longContextPricingTooltip': en.usage.longContextPricingTooltip,
+    'admin.usage.secondaryProcessed': en.usage.secondaryProcessed,
+    'admin.usage.secondaryProcessedTooltip': en.usage.secondaryProcessedTooltip,
   },
   zh: {
     'requestTiming.eventShort': zhTiming.eventShort,
@@ -83,6 +85,8 @@ const localizedMessages: Record<'en' | 'zh', Record<string, string>> = {
     'latencyObservability.typedScope': zhLatencyObservability.typedScope,
     'admin.usage.longContext': zh.usage.longContext,
     'admin.usage.longContextPricingTooltip': zh.usage.longContextPricingTooltip,
+    'admin.usage.secondaryProcessed': zh.usage.secondaryProcessed,
+    'admin.usage.secondaryProcessedTooltip': zh.usage.secondaryProcessedTooltip,
   },
 }
 
@@ -331,6 +335,35 @@ describe('admin UsageTable tooltip', () => {
     })
 
     expect(wrapper.findAll('[data-testid="long-context-billing-marker"]')).toHaveLength(0)
+  })
+
+  it.each([
+    ['en', 'admin', true, 'Secondary'],
+    ['zh', 'user', true, '从站处理'],
+    ['zh', 'admin', false, '从站处理'],
+    ['en', 'user', false, 'Secondary'],
+  ] as const)('marks only secondary-handled usage for %s/%s independently of the long-context setting (%s)', (language, audience, longContextEnabled, label) => {
+    locale = language
+    appStoreMocks.cachedPublicSettings = { usage_show_long_context_badge: longContextEnabled }
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [
+          { ...baseImageRow, request_id: 'secondary-direct', secondary_processed: true, long_context_billing_applied: true },
+          { ...baseImageRow, request_id: 'primary-direct', secondary_processed: false },
+          { ...baseImageRow, request_id: 'secondary-proxy', secondary_processed: false },
+          { ...baseImageRow, request_id: 'older-api-without-field' },
+        ],
+        columns: [],
+        cacheRateAudience: audience,
+      },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    const markers = wrapper.findAll('[data-testid="secondary-processed-marker"]')
+    expect(markers).toHaveLength(1)
+    expect(markers[0].text()).toBe(label)
+    expect(markers[0].attributes('title')).toBe(localizedMessages[language]['admin.usage.secondaryProcessedTooltip'])
+    expect(wrapper.get('[data-request-id="secondary-direct"]').find('[data-testid="secondary-processed-marker"]').exists()).toBe(true)
+    expect(wrapper.findAll('[data-testid="long-context-billing-marker"]')).toHaveLength(longContextEnabled ? 1 : 0)
   })
 
   it('keeps the request type badge and adds a separate badge only for native compaction rows', () => {

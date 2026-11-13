@@ -319,7 +319,5 @@ func (s *SiteStore) importLog(ctx context.Context, tx *sql.Tx, node, table strin
 }
 
 func siteRequestID(node, requestID string) string {
-	requestID = strings.TrimPrefix(requestID, "local:")
-	sum := sha256.Sum256([]byte(node + "\x00" + requestID))
-	return "site:" + hex.EncodeToString(sum[:28])
+	return site.ImportedRequestID(node, requestID)
 }

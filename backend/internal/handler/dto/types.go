@@ -658,6 +658,8 @@ type UsageLog struct {
 	ActualCost                float64 `json:"actual_cost"`
 	RateMultiplier            float64 `json:"rate_multiplier"`
 	LongContextBillingApplied bool    `json:"long_context_billing_applied"`
+	// SecondaryProcessed identifies usage settled from a secondary, excluding proxy-only requests.
+	SecondaryProcessed bool `json:"secondary_processed"`
 
 	BillingType  int8   `json:"billing_type"`
 	RequestType  string `json:"request_type"`
