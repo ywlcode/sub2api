@@ -54,7 +54,7 @@ def accounting():
 
 def expire(label):
     start = time.monotonic()
-    lab.eventually(lambda: not lab.ready(), timeout=17, label="15 second expiry")
+    lab.eventually(lambda: not lab.ready(), timeout=65, label="60 second expiry")
     elapsed = time.monotonic() - start
     for model in ("deepseek-chat", "gpt-test"):
         r = lab.request(model=model)

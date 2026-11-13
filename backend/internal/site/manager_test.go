@@ -78,15 +78,26 @@ func TestSiteLeaseRenewalDiffFailureAndRestart(t *testing.T) {
 	require.NoError(t, m.syncOnce(context.Background()))
 	require.False(t, local.installed[1].Full)
 	require.Empty(t, local.installed[1].Rows)
+	renewedAt := now
+	version := m.version
 	primary.exportErr = errors.New("primary database down")
 	now = now.Add(5 * time.Second)
 	require.Error(t, m.syncOnce(context.Background()))
 	require.True(t, m.Ready())
-	now = now.Add(10 * time.Second)
+	now = renewedAt.Add(time.Minute - time.Nanosecond)
+	require.True(t, m.Ready(), "the last successful policy remains valid for one minute")
+	require.Error(t, m.syncOnce(context.Background()))
+	now = renewedAt.Add(time.Minute)
 	require.False(t, m.Ready(), "failed sync must not renew the lease")
+	require.Equal(t, version, m.version, "expiry must retain the incremental cursor")
 	primary.exportErr = nil
+	primary.snapshot.Rows = []Row{{Table: "users", Key: "1", Value: json.RawMessage(`{"id":1,"balance":99.12345678}`)}}
 	require.NoError(t, m.syncOnce(context.Background()))
 	require.True(t, m.Ready())
+	recovered := local.installed[len(local.installed)-1]
+	require.False(t, recovered.Full, "recovery after expiry must continue incremental synchronization")
+	require.Len(t, recovered.Rows, 1)
+	require.JSONEq(t, string(primary.snapshot.Rows[0].Value), string(recovered.Rows[0].Value))
 	m.Stop()
 	require.False(t, m.Ready(), "persisted snapshot must not grant service on restart")
 }
@@ -118,7 +129,7 @@ func TestSiteLateSynchronizationDoesNotExtendStaleAuthorization(t *testing.T) {
 		if calls.Add(1) == 1 {
 			return started
 		}
-		return started.Add(16 * time.Second)
+		return started.Add(ReplicaTTL + time.Second)
 	}
 	require.Error(t, m.syncOnce(context.Background()))
 	require.Empty(t, local.installed)
@@ -149,7 +160,7 @@ func TestSiteRoutingGzipOriginalCredentialsProtocolsAndExpiry(t *testing.T) {
 	defer m.Stop()
 	now := time.Now()
 	m.now = func() time.Time { return now }
-	m.current.Store(&lease{expires: now.Add(15 * time.Second)})
+	m.current.Store(&lease{expires: now.Add(ReplicaTTL)})
 	r := gin.New()
 	r.Use(m.Ingress())
 	r.POST("/v1/*path", func(c *gin.Context) {
@@ -213,7 +224,7 @@ func TestSiteRoutingGzipOriginalCredentialsProtocolsAndExpiry(t *testing.T) {
 	r.ServeHTTP(w, req)
 	require.Equal(t, 200, w.Code)
 	require.Equal(t, 2, primaryCalls, "already compressed JSON must retain its encoding")
-	now = now.Add(15 * time.Second)
+	now = now.Add(ReplicaTTL)
 	for _, model := range []string{"deepseek-v4", "gpt-5"} {
 		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"`+model+`"}`))
 		req.Header.Set("Content-Type", "application/json")
