@@ -37,10 +37,11 @@ func siteSettingsPredicate() string {
 }
 
 type siteTable struct {
-	name    string
-	keys    []string
-	filter  string
-	columns []string
+	name         string
+	keys         []string
+	filter       string
+	columns      []string
+	requiredJSON map[string]string
 }
 
 // This is a deliberately closed list of gateway policy tables, not database
@@ -121,18 +122,24 @@ func NewSiteStore(db *sql.DB, cfg *config.Config) (*SiteStore, error) {
 	h := sha256.New()
 	for i := range s.tables {
 		t := &s.tables[i]
-		rows, err := db.QueryContext(ctx, `SELECT column_name,concat_ws(':',udt_name,character_maximum_length,numeric_precision,numeric_scale,is_nullable) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 ORDER BY ordinal_position`, t.name)
+		rows, err := db.QueryContext(ctx, `SELECT column_name,concat_ws(':',udt_name,character_maximum_length,numeric_precision,numeric_scale,is_nullable),udt_name,is_nullable FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 ORDER BY ordinal_position`, t.name)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
-			var name, kind string
-			if err = rows.Scan(&name, &kind); err != nil {
+			var name, kind, dataType, nullable string
+			if err = rows.Scan(&name, &kind, &dataType, &nullable); err != nil {
 				_ = rows.Close()
 				return nil, err
 			}
 			if t.name != "settings" || name != "id" {
 				t.columns = append(t.columns, name)
+			}
+			if nullable == "NO" && (dataType == "json" || dataType == "jsonb") {
+				if t.requiredJSON == nil {
+					t.requiredJSON = make(map[string]string)
+				}
+				t.requiredJSON[name] = dataType
 			}
 			fmt.Fprintf(h, "%s:%s:%s;", t.name, name, kind)
 		}
@@ -521,6 +528,16 @@ func (s *SiteStore) installTable(ctx context.Context, tx *sql.Tx, t siteTable, p
 		return s.installSiteSettings(ctx, tx)
 	}
 	columns := quotedColumns(t.columns)
+	selected := make([]string, len(t.columns))
+	for i, c := range t.columns {
+		selected[i] = `decoded."` + c + `"`
+		if dataType, ok := t.requiredJSON[c]; ok {
+			// jsonb_populate_record maps a JSON null to SQL NULL, even for
+			// NOT NULL JSON columns. Preserve the original JSON value there;
+			// an absent field still yields SQL NULL and fails the constraint.
+			selected[i] = `(r.value->` + pq.QuoteLiteral(c) + `)::` + dataType
+		}
+	}
 	var updates, before, after []string
 	for _, c := range t.columns {
 		isKey := false
@@ -548,7 +565,7 @@ func (s *SiteStore) installTable(ctx context.Context, tx *sql.Tx, t siteTable, p
 	if len(updates) > 0 {
 		conflict = "DO UPDATE SET " + strings.Join(updates, ",") + " WHERE ROW(" + strings.Join(before, ",") + ") IS DISTINCT FROM ROW(" + strings.Join(after, ",") + ")"
 	}
-	query := `INSERT INTO "` + t.name + `" (` + columns + `) SELECT ` + columns + ` FROM jsonb_populate_recordset(NULL::"` + t.name + `",COALESCE((SELECT jsonb_agg(value) FROM site_replica_rows r WHERE table_name=$1 AND EXISTS(SELECT 1 FROM site_install_keys k WHERE k.table_name=r.table_name AND k.row_key=r.row_key)),'[]'::jsonb)) ON CONFLICT (` + quotedColumns(t.keys) + `) ` + conflict
+	query := `INSERT INTO "` + t.name + `" (` + columns + `) SELECT ` + strings.Join(selected, ",") + ` FROM site_replica_rows r CROSS JOIN LATERAL jsonb_populate_record(NULL::"` + t.name + `",r.value) decoded WHERE r.table_name=$1 AND EXISTS(SELECT 1 FROM site_install_keys k WHERE k.table_name=r.table_name AND k.row_key=r.row_key) ON CONFLICT (` + quotedColumns(t.keys) + `) ` + conflict
 	args := []any{t.name}
 	if t.name == "accounts" {
 		args = append(args, string(previousAccounts))
