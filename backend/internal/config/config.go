@@ -2106,11 +2106,11 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 		}
 		// 配置文件不存在时使用默认值
 	}
-	// Older deployments may explicitly retain usage logs for more than 30 days
+	// Older deployments may explicitly retain usage logs for more than 365 days
 	// while inheriting dedup retention. Keep that implicit default valid without
 	// overriding an explicit dedup setting (which must still pass validation).
 	viper.SetDefault("dashboard_aggregation.retention.usage_billing_dedup_days",
-		max(30, viper.GetInt("dashboard_aggregation.retention.usage_logs_days")))
+		max(365, viper.GetInt("dashboard_aggregation.retention.usage_logs_days")))
 	trustedProxiesEnv, trustedProxiesEnvConfigured := os.LookupEnv("SERVER_TRUSTED_PROXIES")
 	forwardedClientIPHeadersEnv, forwardedClientIPHeadersEnvConfigured := os.LookupEnv("SECURITY_FORWARDED_CLIENT_IP_HEADERS")
 	trustedProxiesConfigured := viper.InConfig("server.trusted_proxies") ||
@@ -2604,7 +2604,7 @@ func setDefaults() {
 	// Baseline ops retention. High-volume request/billing datasets use the
 	// DB-backed advanced policy, whose shorter defaults are applied by the same
 	// cleanup worker.
-	viper.SetDefault("ops.cleanup.error_log_retention_days", 7)
+	viper.SetDefault("ops.cleanup.error_log_retention_days", 30)
 	viper.SetDefault("ops.cleanup.system_log_retention_days", 30)
 	viper.SetDefault("ops.cleanup.minute_metrics_retention_days", 30)
 	viper.SetDefault("ops.cleanup.hourly_metrics_retention_days", 30)
@@ -2691,8 +2691,8 @@ func setDefaults() {
 	viper.SetDefault("dashboard_aggregation.lookback_seconds", 120)
 	viper.SetDefault("dashboard_aggregation.backfill_enabled", false)
 	viper.SetDefault("dashboard_aggregation.backfill_max_days", 31)
-	viper.SetDefault("dashboard_aggregation.retention.usage_logs_days", 30)
-	viper.SetDefault("dashboard_aggregation.retention.usage_billing_dedup_days", 30)
+	viper.SetDefault("dashboard_aggregation.retention.usage_logs_days", 90)
+	viper.SetDefault("dashboard_aggregation.retention.usage_billing_dedup_days", 365)
 	viper.SetDefault("dashboard_aggregation.retention.hourly_days", 180)
 	viper.SetDefault("dashboard_aggregation.retention.daily_days", 730)
 	viper.SetDefault("dashboard_aggregation.recompute_days", 2)

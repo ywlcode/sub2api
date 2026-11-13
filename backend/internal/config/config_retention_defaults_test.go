@@ -18,10 +18,10 @@ func TestLoadDedupRetentionDefaultWithLegacyUsageWindow(t *testing.T) {
 		wantDedup int
 		wantError bool
 	}{
-		{name: "new installation", yaml: "{}", wantUsage: 30, wantDedup: 30},
-		{name: "legacy compose environment", yaml: "{}", usageEnv: "90", wantUsage: 90, wantDedup: 90},
-		{name: "legacy yaml", yaml: "dashboard_aggregation:\n  retention:\n    usage_logs_days: 120\n", wantUsage: 120, wantDedup: 120},
-		{name: "short usage window", yaml: "{}", usageEnv: "7", wantUsage: 7, wantDedup: 30},
+		{name: "new installation", yaml: "{}", wantUsage: 90, wantDedup: 365},
+		{name: "legacy compose environment", yaml: "{}", usageEnv: "90", wantUsage: 90, wantDedup: 365},
+		{name: "legacy yaml", yaml: "dashboard_aggregation:\n  retention:\n    usage_logs_days: 120\n", wantUsage: 120, wantDedup: 365},
+		{name: "short usage window", yaml: "{}", usageEnv: "7", wantUsage: 7, wantDedup: 365},
 		{name: "explicit env retained", yaml: "{}", usageEnv: "90", dedupEnv: "365", wantUsage: 90, wantDedup: 365},
 		{name: "explicit yaml retained", yaml: "dashboard_aggregation:\n  retention:\n    usage_logs_days: 90\n    usage_billing_dedup_days: 365\n", wantUsage: 90, wantDedup: 365},
 		{name: "invalid explicit env rejected", yaml: "{}", usageEnv: "90", dedupEnv: "30", wantError: true},

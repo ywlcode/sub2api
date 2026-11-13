@@ -367,14 +367,14 @@ func defaultOpsAdvancedSettings() *OpsAdvancedSettings {
 			// first settings read cannot silently disable configured retention.
 			CleanupEnabled:                     true,
 			CleanupSchedule:                    opsCleanupDefaultSchedule,
-			ErrorLogRetentionDays:              7,
+			ErrorLogRetentionDays:              30,
 			MinuteMetricsRetentionDays:         30,
 			HourlyMetricsRetentionDays:         30,
-			RequestConnectionRetentionDays:     3,
-			RequestTimingRetentionDays:         3,
+			RequestConnectionRetentionDays:     30,
+			RequestTimingRetentionDays:         30,
 			CompletedBillingEventRetentionDays: 7,
 			BillingDedupHotRetentionDays:       15,
-			BillingDedupArchiveRetentionDays:   15,
+			BillingDedupArchiveRetentionDays:   350,
 			UserTrafficRetentionDays:           7,
 		},
 		Aggregation: OpsAggregationSettings{
@@ -418,7 +418,7 @@ func normalizeOpsAdvancedSettings(cfg *OpsAdvancedSettings) {
 	// 旧的运维指标项保留 0=清空语义；下方请求/计费明细项不允许 0，
 	// 避免旧客户端缺少新字段时把高价值数据误清空。
 	if cfg.DataRetention.ErrorLogRetentionDays < 0 {
-		cfg.DataRetention.ErrorLogRetentionDays = 7
+		cfg.DataRetention.ErrorLogRetentionDays = 30
 	}
 	if cfg.DataRetention.MinuteMetricsRetentionDays < 0 {
 		cfg.DataRetention.MinuteMetricsRetentionDays = 30

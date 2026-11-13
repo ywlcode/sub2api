@@ -1219,11 +1219,11 @@ func TestLoadDefaultDashboardAggregationConfig(t *testing.T) {
 	if cfg.DashboardAgg.BackfillMaxDays != 31 {
 		t.Fatalf("DashboardAgg.BackfillMaxDays = %d, want 31", cfg.DashboardAgg.BackfillMaxDays)
 	}
-	if cfg.DashboardAgg.Retention.UsageLogsDays != 30 {
-		t.Fatalf("DashboardAgg.Retention.UsageLogsDays = %d, want 30", cfg.DashboardAgg.Retention.UsageLogsDays)
+	if cfg.DashboardAgg.Retention.UsageLogsDays != 90 {
+		t.Fatalf("DashboardAgg.Retention.UsageLogsDays = %d, want 90", cfg.DashboardAgg.Retention.UsageLogsDays)
 	}
-	if cfg.DashboardAgg.Retention.UsageBillingDedupDays != 30 {
-		t.Fatalf("DashboardAgg.Retention.UsageBillingDedupDays = %d, want 30", cfg.DashboardAgg.Retention.UsageBillingDedupDays)
+	if cfg.DashboardAgg.Retention.UsageBillingDedupDays != 365 {
+		t.Fatalf("DashboardAgg.Retention.UsageBillingDedupDays = %d, want 365", cfg.DashboardAgg.Retention.UsageBillingDedupDays)
 	}
 	if cfg.DashboardAgg.Retention.HourlyDays != 180 {
 		t.Fatalf("DashboardAgg.Retention.HourlyDays = %d, want 180", cfg.DashboardAgg.Retention.HourlyDays)

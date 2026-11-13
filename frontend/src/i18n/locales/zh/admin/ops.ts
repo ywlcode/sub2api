@@ -742,7 +742,7 @@ export default {
         billingDedupHotRetentionDays: '计费去重热表保留天数',
         billingDedupArchiveRetentionDays: '计费去重归档额外保留天数',
         userTrafficRetentionDays: '流量明细保留天数',
-        retentionDaysHint: '请求明细在“系统日志”中单独配置，默认30天。此处默认：错误7天、诊断3天、耗时3天、已完成计费事件7天、去重热表15天、归档额外15天、流量7天。计费事件仅清理 complete/legacy；去重总保护期为热表与归档天数之和。指标类填0表示定时清空。',
+        retentionDaysHint: '请求明细在“系统日志”中单独配置，默认90天。此处默认：错误30天、诊断30天、耗时30天、已完成计费事件7天、去重热表15天、归档额外350天、流量7天。计费事件仅清理 complete/legacy；去重总保护期取热表与归档天数之和、使用记录保留期、服务器去重配置中的最大值；使用记录永久保留时去重也永久保留。指标类填0表示定时清空。',
         aggregation: '预聚合任务',
         enableAggregation: '启用预聚合任务',
         aggregationHint: '预聚合可提升长时间窗口查询性能',

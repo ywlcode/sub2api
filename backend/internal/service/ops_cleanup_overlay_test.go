@@ -47,9 +47,9 @@ func TestComputeEffective_FallbackToCfgWhenSettingsAbsent(t *testing.T) {
 
 	want := opsCleanupEffectiveConfig{
 		OpsCleanupConfig: base, SystemLogRetentionDays: 30,
-		RequestConnectionRetentionDays: 3, RequestTimingRetentionDays: 3,
+		RequestConnectionRetentionDays: 30, RequestTimingRetentionDays: 30,
 		CompletedBillingEventRetentionDays: 7, BillingDedupHotRetentionDays: 15,
-		BillingDedupArchiveRetentionDays: 15, UserTrafficRetentionDays: 7,
+		BillingDedupArchiveRetentionDays: 350, UserTrafficRetentionDays: 7,
 	}
 	if svc.effective != want {
 		t.Fatalf("expected effective == cfg base, got %#v", svc.effective)
@@ -179,9 +179,9 @@ func TestComputeEffective_BadJSONFallsBackToCfg(t *testing.T) {
 
 	want := opsCleanupEffectiveConfig{
 		OpsCleanupConfig: base, SystemLogRetentionDays: 30,
-		RequestConnectionRetentionDays: 3, RequestTimingRetentionDays: 3,
+		RequestConnectionRetentionDays: 30, RequestTimingRetentionDays: 30,
 		CompletedBillingEventRetentionDays: 7, BillingDedupHotRetentionDays: 15,
-		BillingDedupArchiveRetentionDays: 15, UserTrafficRetentionDays: 7,
+		BillingDedupArchiveRetentionDays: 350, UserTrafficRetentionDays: 7,
 	}
 	if svc.effective != want {
 		t.Fatalf("expected fallback to cfg on bad JSON, got %#v", svc.effective)
@@ -241,7 +241,7 @@ func TestComputeEffective_PartialAdvancedSettingsUseSafeDefaults(t *testing.T) {
 	svc.computeEffectiveLocked(context.Background())
 
 	if svc.effective.Schedule != opsCleanupDefaultSchedule ||
-		svc.effective.ErrorLogRetentionDays != 7 ||
+		svc.effective.ErrorLogRetentionDays != 30 ||
 		svc.effective.MinuteMetricsRetentionDays != 30 ||
 		svc.effective.HourlyMetricsRetentionDays != 30 {
 		t.Fatalf("partial settings did not use safe defaults: %#v", svc.effective)
