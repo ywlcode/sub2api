@@ -101,6 +101,10 @@ func (h *apiKeyHealthWSTracker) receiveLocked(data []byte) {
 		return
 	}
 	typ := gjson.GetBytes(data, "type").String()
+	if apiKeyHealthClientErrorJSON(data) {
+		h.current = nil
+		return
+	}
 	if !gjson.ValidBytes(data) || typ == "error" || typ == "response.failed" || apiKeyHealthErrorJSON(data) {
 		h.current.record(false, http.StatusOK, "Upstream WebSocket returned an error response")
 		h.current = nil

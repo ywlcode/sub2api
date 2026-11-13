@@ -7,8 +7,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -33,22 +35,38 @@ type apiKeyHealthUpstream struct {
 }
 
 func (u *apiKeyHealthUpstream) Do(req *http.Request, proxyURL string, accountID int64, concurrency int) (*http.Response, error) {
-	return u.send(req, func() (*http.Response, error) { return u.HTTPUpstream.Do(req, proxyURL, accountID, concurrency) })
-}
-
-func (u *apiKeyHealthUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, concurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
-	return u.send(req, func() (*http.Response, error) {
-		return u.HTTPUpstream.DoWithTLS(req, proxyURL, accountID, concurrency, profile)
+	return u.send(req, func(r *http.Request) (*http.Response, error) {
+		return u.HTTPUpstream.Do(r, proxyURL, accountID, concurrency)
 	})
 }
 
-func (u *apiKeyHealthUpstream) send(req *http.Request, send func() (*http.Response, error)) (*http.Response, error) {
+func (u *apiKeyHealthUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, concurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.send(req, func(r *http.Request) (*http.Response, error) {
+		return u.HTTPUpstream.DoWithTLS(r, proxyURL, accountID, concurrency, profile)
+	})
+}
+
+func (u *apiKeyHealthUpstream) send(req *http.Request, send func(*http.Request) (*http.Response, error)) (*http.Response, error) {
+	// Polling describes an asynchronous task result, not a new inference
+	// attempt. A user-cancelled or rejected task cannot poison account health.
+	if req.Method != http.MethodPost {
+		return send(req)
+	}
 	ctx := req.Context()
 	observation, err := beginAPIKeyHealthAttempt(ctx, u.limiter, u.account)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := send()
+	if observation != nil {
+		req = req.WithContext(httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+			WroteRequest: func(info httptrace.WroteRequestInfo) {
+				if info.Err == nil {
+					observation.uploaded.Store(true)
+				}
+			},
+		}))
+	}
+	resp, err := send(req)
 	if err != nil {
 		observation.recordTransportError(err)
 		return resp, err
@@ -59,11 +77,8 @@ func (u *apiKeyHealthUpstream) send(req *http.Request, send func() (*http.Respon
 			request = resp.Request
 		}
 		resp.Request = request.WithContext(context.WithValue(request.Context(), apiKeyHealthObservationKey{}, observation))
-		// Status failures are definitive as soon as headers arrive. Count before
-		// any retry can start, even if a caller defers closing the error body.
-		if apiKeyHealthFailureStatus(resp.StatusCode) {
-			observation.record(false, resp.StatusCode, fmtAPIKeyHealthStatus(resp.StatusCode))
-			return resp, nil
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			observation.once.Do(func() {}) // Neutral, including explicit gateway failure notifications.
 		}
 		body := &apiKeyHealthBody{ReadCloser: resp.Body, observation: observation, status: resp.StatusCode,
 			stream: strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream"),
@@ -112,6 +127,7 @@ type apiKeyHealthObservation struct {
 	ctx        context.Context
 	generation int64
 	once       sync.Once
+	uploaded   atomic.Bool
 }
 
 type apiKeyHealthObservationKey struct{}
@@ -156,6 +172,12 @@ func (o *apiKeyHealthObservation) recordTransportError(err error) {
 		return
 	}
 	var netErr net.Error
+	// Before a complete upload, DNS/TLS, pool wait and link congestion are
+	// ambiguous. Keep them out of the shared account circuit; normal transport
+	// failover/proxy health handling still receives the original error.
+	if !o.uploaded.Load() {
+		return
+	}
 	upstreamTimeout := apiKeyHealthUpstreamTimeout(o.ctx)
 	if upstreamTimeout || !errors.Is(err, context.Canceled) && (errors.As(err, &netErr) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || classifyUpstreamTransportError(err).Persistent) {
 		o.record(false, 0, "Upstream connection failed or timed out")
@@ -163,7 +185,7 @@ func (o *apiKeyHealthObservation) recordTransportError(err error) {
 }
 
 func apiKeyHealthFailureStatus(status int) bool {
-	return status == 400 || status == 408 || status == 429 || status >= 500 && status <= 599
+	return status >= 500 && status <= 599
 }
 
 func apiKeyHealthUpstreamTimeout(ctx context.Context) bool {
@@ -188,6 +210,8 @@ type apiKeyHealthBody struct {
 	failed        bool
 	terminal      bool
 	neutral       bool
+	clientError   bool
+	errorEvent    bool
 	eof           bool
 	readErr       error
 	closeOnce     sync.Once
@@ -249,7 +273,7 @@ func apiKeyHealthErrorJSON(data []byte) bool {
 func (b *apiKeyHealthBody) observeLine(line []byte) {
 	line = bytes.TrimSpace(line)
 	if bytes.Equal(line, []byte("event: error")) {
-		b.failed = true
+		b.errorEvent = true
 	}
 	if !bytes.HasPrefix(line, []byte("data:")) {
 		return
@@ -267,7 +291,11 @@ func (b *apiKeyHealthBody) observeLine(line []byte) {
 		return
 	}
 	typ := gjson.GetBytes(data, "type").String()
-	b.failed = b.failed || typ == "error" || typ == "response.failed" || apiKeyHealthErrorJSON(data)
+	if apiKeyHealthClientErrorJSON(data) {
+		b.clientError, b.terminal = true, true
+		return
+	}
+	b.failed = b.failed || b.errorEvent || typ == "error" || typ == "response.failed" || apiKeyHealthErrorJSON(data)
 	if apiKeyHealthNeutralTerminal(data) {
 		b.terminal, b.neutral = true, true
 	}
@@ -319,6 +347,10 @@ func (b *apiKeyHealthBody) observeOversizedLine(prefix []byte) {
 }
 
 func (b *apiKeyHealthBody) finish() {
+	if b.clientError || !b.stream && apiKeyHealthClientErrorJSON(b.buf) {
+		b.observation.once.Do(func() {})
+		return
+	}
 	if apiKeyHealthFailureStatus(b.status) {
 		b.observation.record(false, b.status, fmtAPIKeyHealthStatus(b.status))
 		return
@@ -326,6 +358,7 @@ func (b *apiKeyHealthBody) finish() {
 	if b.status < 200 || b.status >= 300 {
 		return
 	}
+
 	upstreamTimeout := apiKeyHealthUpstreamTimeout(b.observation.ctx)
 	if b.stream {
 		if b.failed || upstreamTimeout || b.eof && !b.terminal && !b.unknownStream || b.readErr != nil && !errors.Is(b.readErr, context.Canceled) {
@@ -340,6 +373,18 @@ func (b *apiKeyHealthBody) finish() {
 	} else if b.eof {
 		b.observation.record(true, b.status, "")
 	}
+}
+
+// Do not infer attribution from arbitrary message substrings. Use protocol
+// error codes/types, including HTTP-200 streaming error envelopes.
+func apiKeyHealthClientErrorJSON(data []byte) bool {
+	for _, path := range []string{"error.type", "error.code", "response.error.type", "response.error.code", "type", "code"} {
+		switch strings.ToLower(gjson.GetBytes(data, path).String()) {
+		case "invalid_request_error", "invalid_request", "invalid_argument", "context_length_exceeded", "context_window_exceeded", "max_tokens_exceeded", "content_policy_violation", "content_filter", "rate_limit_error", "rate_limit_exceeded", "insufficient_quota":
+			return true
+		}
+	}
+	return false
 }
 
 func fmtAPIKeyHealthStatus(status int) string {
