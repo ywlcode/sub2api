@@ -101,12 +101,12 @@ func TestSiteSlowDeliveryDoesNotBlockLeaseRenewal(t *testing.T) {
 	require.Empty(t, local.pending)
 }
 func TestSiteReceiptValidationIncludesRejections(t *testing.T) {
-	require.NoError(t, validateReceipts([]int64{1, 2}, []int64{1}, []Rejection{{2, "deleted subscription"}}, true))
+	require.NoError(t, validateReceipts([]int64{1, 2}, []int64{1}, []Rejection{{ID: 2, Reason: "deleted subscription"}}, true))
 	for _, err := range []error{
 		validateReceipts([]int64{1, 2}, []int64{1}, nil, true),
-		validateReceipts([]int64{1}, []int64{1}, []Rejection{{1, "duplicate"}}, true),
+		validateReceipts([]int64{1}, []int64{1}, []Rejection{{ID: 1, Reason: "duplicate"}}, true),
 		validateReceipts([]int64{1}, []int64{2}, nil, true),
-		validateReceipts([]int64{1}, nil, []Rejection{{1, ""}}, true),
+		validateReceipts([]int64{1}, nil, []Rejection{{ID: 1}}, true),
 	} {
 		require.Error(t, err)
 	}

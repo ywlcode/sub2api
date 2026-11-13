@@ -49,3 +49,12 @@ python3 -u deploy/tests/site-lab/test_config_sync.py "$lab_dir"
 ```
 
 脚本记录 gzip 前后上下行 HTTP 正文字节，验证并发配置、设置新增删除、账号别名、运行时请求体限制、独立暂停结果和安全规则排除；随后增加 1,000 个合成用户与 Key，测量全量和单用户增量。会修改测试主站 YAML 并重启测试容器，保留实验结果供复核。脚本支持从 `evidence/config-sync.json` 的已完成步骤继续；重新测量整个流程应使用新项目和新数据目录。
+
+复审补充实验（上述五阶段通过后，在同一合成实验项目运行）：
+
+```sh
+python3 -u deploy/tests/site-lab/test_busy_sync.py "$lab_dir"
+python3 -u deploy/tests/site-lab/test_reconciliation.py "$lab_dir"
+```
+
+前者让主站四个写入者持续修改同一用户余额，同时由从站发起 400 次流式请求，跨多个租约观察就绪状态、上传和最终余额。后者通过真实管理员 HTTP 接口检查拒收详情、手工补扣后结清、幂等重试、冲突操作以及免收，并核对从站不再叠加已处理账单。这两个脚本会修改合成实验库，不用于真实用户或生产。

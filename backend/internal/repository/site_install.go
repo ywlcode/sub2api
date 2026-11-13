@@ -26,6 +26,9 @@ func (s *SiteStore) prepareSiteInstall(ctx context.Context, tx *sql.Tx, response
 			return nil, nil, nil, false, errors.New("duplicate replica row")
 		}
 		seen[r.Identity()] = true
+		if r.Table == "$settlements" {
+			continue
+		}
 		if r.Table == "$quality" {
 			if len(r.Key) != 64 {
 				return nil, nil, nil, false, errors.New("invalid quality projection")
@@ -65,7 +68,7 @@ func (s *SiteStore) prepareSiteInstall(ctx context.Context, tx *sql.Tx, response
  WHEN 'api_keys' THEN ARRAY['quota_used','usage_5h','usage_1d','usage_7d','window_5h_start','window_1d_start','window_7d_start','updated_at','last_used_at']
  WHEN 'user_subscriptions' THEN ARRAY['daily_usage_usd','weekly_usage_usd','monthly_usage_usd','daily_window_start','weekly_window_start','monthly_window_start','updated_at']
  ELSE ARRAY[]::text[] END AS ignored) f
- WHERE n.table_name<>'usage_platform_quota_totals' AND ((n.value-f.ignored) IS DISTINCT FROM (old.value-f.ignored)
+ WHERE n.table_name NOT IN ('usage_platform_quota_totals','$settlements') AND ((n.value-f.ignored) IS DISTINCT FROM (old.value-f.ignored)
  OR n.table_name='accounts' AND ((n.value->'extra')-ARRAY['quota_used','quota_daily_used','quota_daily_start','quota_daily_reset_at','quota_weekly_used','quota_weekly_start','quota_weekly_reset_at']) IS DISTINCT FROM ((old.value->'extra')-ARRAY['quota_used','quota_daily_used','quota_daily_start','quota_daily_reset_at','quota_weekly_used','quota_weekly_start','quota_weekly_reset_at']))`)
 	if err != nil {
 		return nil, nil, nil, false, err
@@ -104,7 +107,7 @@ func (s *SiteStore) prepareSiteInstall(ctx context.Context, tx *sql.Tx, response
 	// Keep rejected bills overlaid too: quarantine is not a free refund. Operators
 	// can reconcile durable payloads after fixing missing ownership/history.
 	result, err := tx.ExecContext(ctx, `WITH bills AS (
- SELECT payload FROM site_outbox WHERE kind='billing' UNION ALL SELECT payload FROM site_rejected_events WHERE kind='billing'),
+ SELECT payload FROM site_outbox WHERE kind='billing' UNION ALL SELECT payload FROM site_rejected_events WHERE kind='billing' AND state='pending'),
  owners AS (SELECT 'users' name,payload->'command'->>'UserID' key FROM bills
  UNION SELECT 'api_keys',payload->'command'->>'APIKeyID' FROM bills
  UNION SELECT 'accounts',payload->'command'->>'AccountID' FROM bills
