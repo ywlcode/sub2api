@@ -53,43 +53,45 @@ class Handler(BaseHTTPRequestHandler):
     def proxy(self):
         raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
         sync = self.path == "/internal/sites/sync"
+        delivery = self.path == "/internal/sites/events"
+        control = sync or delivery
         plain = gzip.decompress(raw) if self.headers.get("Content-Encoding") == "gzip" else raw
         payload = json.loads(plain) if plain else {}
         with lock:
             mode, delay = state.get("mode"), state.get("delay", 0)
-            lose = sync and mode == "lose_ack" and payload.get("events") and state.get("remaining", 0) > 0
+            lose = delivery and mode == "lose_ack" and payload.get("events") and state.get("remaining", 0) > 0
             if lose:
                 state["remaining"] -= 1
-        record = {"at": time.time(), "path": self.path, "kind": "sync" if sync else "model", "wire_bytes": len(raw), "raw_bytes": len(plain), "gzip": self.headers.get("Content-Encoding") == "gzip", "events": [x["id"] for x in payload.get("events", [])], "mode": mode,
+        record = {"at": time.time(), "path": self.path, "kind": "sync" if sync else "delivery" if delivery else "model", "wire_bytes": len(raw), "raw_bytes": len(plain), "gzip": self.headers.get("Content-Encoding") == "gzip", "events": [x["id"] for x in payload.get("events", [])], "mode": mode,
                   "authorization_sha256": hashlib.sha256(self.headers.get("Authorization", "").encode()).hexdigest()}
-        if sync and mode == "reject":
+        if control and mode == "reject":
             record["status"] = 503
             self.record(record)
             return self.reply(503, {"error": "controlled link outage"})
         headers = {k: v for k, v in self.headers.items() if k.lower() not in ("host", "connection", "transfer-encoding")}
         headers["Host"] = "primary:8080"
         headers["Content-Length"] = str(len(raw))
-        if sync and mode == "wrong_token":
+        if control and mode == "wrong_token":
             headers["Authorization"] = "Bearer deliberately-invalid-lab-token"
         conn = http.client.HTTPConnection("primary", 8080, timeout=40)
         try:
             conn.request(self.command, self.path, raw, headers)
             resp = conn.getresponse()
             record["status"] = resp.status
-            if sync:
+            if control:
                 data = resp.read()
                 if resp.status == 200:
                     decoded = gzip.decompress(data) if resp.getheader("Content-Encoding") == "gzip" else data
                     output = json.loads(decoded)
                     record.update(download_wire_bytes=len(data), download_json_bytes=len(decoded), tables=[x["table"] for x in output.get("rows") or []], full=output.get("full"), rows=len(output.get("rows") or []), acknowledged=output.get("acknowledged") or [], version=output.get("version"))
-                    if mode == "wrong_identity":
+                    if sync and mode == "wrong_identity":
                         output["primary_id"] = "wrong-primary"
                         data = gzip.compress(json.dumps(output).encode())
-                    elif mode == "wrong_schema":
+                    elif sync and mode == "wrong_schema":
                         output["schema"] = "incompatible-schema"
                         data = gzip.compress(json.dumps(output).encode())
                 record["lost_ack"] = bool(lose)
-                if delay:
+                if sync and delay:
                     time.sleep(delay)
                 if lose:
                     self.record(record)

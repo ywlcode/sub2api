@@ -25,6 +25,7 @@ func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db 
 		// Embedded SPA fallback otherwise turns an absent control endpoint into
 		// HTTP 200 HTML. Non-primary sites must explicitly reject every method.
 		r.Any(site.SyncPath, func(c *gin.Context) { c.AbortWithStatus(404) })
+		r.Any(site.DeliveryPath, func(c *gin.Context) { c.AbortWithStatus(404) })
 	}
 	if cfg.Site.EffectiveMode() != site.Standalone {
 		if cfg.IsSecondary() {
@@ -83,6 +84,7 @@ func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db 
 		}
 		if cfg.Site.EffectiveMode() == site.Primary {
 			r.POST(site.SyncPath, sites.SyncHandler)
+			r.POST(site.DeliveryPath, sites.DeliveryHandler)
 		}
 		siteIngress = sites.Ingress()
 		if cfg.IsSecondary() {

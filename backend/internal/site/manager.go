@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,20 +35,22 @@ type peerSnapshot struct {
 }
 
 type Manager struct {
-	cfg       Config
-	store     Store
-	client    *http.Client
-	proxy     *httputil.ReverseProxy
-	maxBody   int64
-	BodyLimit func() int64
-	current   atomic.Pointer[lease]
-	lastSync  atomic.Pointer[SyncStats]
-	peers     map[string]*peerSnapshot
-	version   string // owned by the single synchronization loop
-	primaryID string
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	now       func() time.Time
+	cfg              Config
+	store            Store
+	client           *http.Client
+	proxy            *httputil.ReverseProxy
+	maxBody          int64
+	BodyLimit        func() int64
+	current          atomic.Pointer[lease]
+	identityVerified atomic.Bool
+	lastSync         atomic.Pointer[SyncStats]
+	peers            map[string]*peerSnapshot
+	version          string // owned by the single synchronization loop
+	primaryID        string
+	cancel           context.CancelFunc
+	wg               sync.WaitGroup
+	deliveryGate     sync.Mutex
+	now              func() time.Time
 }
 
 func New(cfg Config, store Store, maxBody int64) (*Manager, error) {
@@ -71,7 +72,7 @@ func New(cfg Config, store Store, maxBody int64) (*Manager, error) {
 	transport.MaxIdleConnsPerHost = 128
 	transport.ResponseHeaderTimeout = 0 // long thinking/streams use request cancellation
 	m := &Manager{cfg: cfg, store: store, maxBody: maxBody, now: time.Now, peers: map[string]*peerSnapshot{}}
-	m.client = &http.Client{Transport: transport, Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	m.client = &http.Client{Transport: transport, Timeout: 0, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	for _, p := range cfg.Peers {
 		m.peers[p.ID] = &peerSnapshot{}
 	}
@@ -104,22 +105,12 @@ func (m *Manager) Start() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
-	m.wg.Add(1)
+	m.wg.Add(2)
 	go func() {
 		defer m.wg.Done()
-		ticker := time.NewTicker(SyncInterval)
-		defer ticker.Stop()
-		for {
-			if err := m.syncOnce(ctx); err != nil && ctx.Err() == nil {
-				slog.Warn("site synchronization failed; lease was not renewed", "error", err)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
+		m.run(ctx)
 	}()
+	go func() { defer m.wg.Done(); m.runDelivery(ctx) }()
 }
 
 func (m *Manager) Stop() {
@@ -139,154 +130,142 @@ func (m *Manager) Ready() bool {
 }
 
 func (m *Manager) syncOnce(parent context.Context) error {
-	// Bound validity by the START of the round trip. A delayed response must
-	// never give an already stale database snapshot another fifteen seconds.
-	wallStarted := time.Now()
-	started := m.now()
-	ctx, cancel := context.WithTimeout(parent, 12*time.Second)
+	m.deliveryGate.Lock()
+	defer m.deliveryGate.Unlock()
+	wallStarted, started := time.Now(), m.now()
+	// Initial paged bootstrap may take longer than a lease. It stays closed until
+	// an additional fresh delta succeeds; page fetches never extend validity.
+	timeout := 12 * time.Second
+	if m.version == "" {
+		timeout = 2 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	events, err := m.store.Pending(ctx, 128)
-	if err != nil {
-		return err
+	covered := true
+	if store, ok := m.store.(interface {
+		PendingCoverage(context.Context) (bool, error)
+	}); ok {
+		var err error
+		covered, err = store.PendingCoverage(ctx)
+		if err != nil {
+			return err
+		}
 	}
 	ids, err := m.store.PendingIDs(ctx)
 	if err != nil {
 		return err
 	}
-	input := SyncRequest{Protocol: ProtocolVersion, NodeID: m.cfg.ID, Version: m.version, Schema: m.store.Schema(), Events: events, PendingIDs: ids}
-	raw, err := marshalSyncRequest(&input, maxSyncBody)
-	if err != nil {
-		return err
-	}
-	events = input.Events
-	packed, err := compress(raw)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(m.cfg.PrimaryURL, "/")+SyncPath, bytes.NewReader(packed))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+m.cfg.Token)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Content-Encoding", "gzip")
-	// Decode explicitly so byte accounting measures the compressed response,
-	// independent of net/http's transparent gzip behavior.
-	req.Header.Set("Accept-Encoding", "gzip")
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("primary sync status %d", resp.StatusCode)
+	input := SyncRequest{Protocol: ProtocolVersion, NodeID: m.cfg.ID, Version: m.version, Schema: m.store.Schema(), PendingIDs: ids}
+	if _, modern := m.store.(DeliveryStore); !modern {
+		input.Events, err = m.store.Pending(ctx, 128)
+		if err != nil {
+			return err
+		}
 	}
 	var output SyncResponse
-	wire := &countingReader{r: io.LimitReader(resp.Body, maxSyncBody+1)}
-	var reader io.Reader = wire
-	if resp.Header.Get("Content-Encoding") == "gzip" {
-		gz, e := gzip.NewReader(wire)
+	var stats SyncStats
+	for {
+		var page SyncResponse
+		transfer, e := m.postSite(ctx, SyncPath, &input, &page)
 		if e != nil {
 			return e
 		}
-		defer func() { _ = gz.Close() }()
-		reader = gz
-	} else if resp.Header.Get("Content-Encoding") != "" {
-		return errors.New("unsupported synchronization encoding")
+		if page.Protocol != ProtocolVersion || page.NodeID != m.cfg.ID || page.Schema != m.store.Schema() || page.Version == "" || page.PrimaryID == "" || (!page.Full && page.BaseVersion != m.version) {
+			return errors.New("invalid site synchronization response")
+		}
+		if m.primaryID != "" && page.PrimaryID != m.primaryID {
+			return errors.New("primary identity changed")
+		}
+		if input.Cursor == "" {
+			output = page
+		} else {
+			if page.Version != output.Version || page.Full != output.Full || page.PrimaryID != output.PrimaryID {
+				return errors.New("snapshot changed during paging")
+			}
+			output.Rows = append(output.Rows, page.Rows...)
+		}
+		stats.UploadJSONBytes += transfer.uploadJSON
+		stats.UploadWireBytes += transfer.uploadWire
+		stats.DownloadJSONBytes += transfer.downloadJSON
+		stats.DownloadWireBytes += transfer.downloadWire
+		if page.Cursor == "" {
+			break
+		}
+		if page.Cursor == input.Cursor {
+			return errors.New("snapshot cursor did not advance")
+		}
+		input.TargetVersion, input.Cursor = page.Version, page.Cursor
 	}
-	decoded := &countingReader{r: reader}
-	if err = decodeLimited(decoded, &output, maxSyncBody); err != nil {
+	if err = validateReceipts(ids, output.Acknowledged, output.Rejected, false); err != nil {
 		return err
 	}
-	if output.Protocol != ProtocolVersion || output.NodeID != m.cfg.ID || output.Schema != m.store.Schema() || output.Version == "" || output.PrimaryID == "" || (!output.Full && output.BaseVersion != m.version) {
-		return errors.New("invalid site synchronization response")
-	}
-	if m.primaryID != "" && output.PrimaryID != m.primaryID {
-		return errors.New("primary identity changed")
-	}
-	sent := make(map[int64]bool, len(events))
-	for _, id := range ids {
-		sent[id] = true
-	}
-	seen := map[int64]bool{}
-	for _, id := range output.Acknowledged {
-		if !sent[id] || seen[id] {
-			return errors.New("invalid event acknowledgement")
+	for _, e := range input.Events {
+		found := false
+		for _, id := range output.Acknowledged {
+			found = found || id == e.ID
 		}
-		seen[id] = true
-	}
-	for _, e := range events {
-		if !seen[e.ID] {
+		if !found {
 			return errors.New("incomplete event acknowledgement")
 		}
 	}
-	if !m.now().Before(started.Add(ReplicaTTL)) {
+	// Small/ordinary refreshes retain the strict request-start lease bound.
+	_, pagedStore := m.store.(DeliveryStore)
+	if (!output.Full || !pagedStore) && !m.now().Before(started.Add(ReplicaTTL)) {
 		return errors.New("synchronization response expired")
 	}
 	if err = m.store.Install(ctx, output); err != nil {
-		// SQL may have committed before a cache/pricing reload failed. Keep the
-		// node closed until one complete installation succeeds. Force a full
-		// snapshot next time because the DB may now be ahead of our diff cursor.
 		m.current.Store(nil)
 		m.version = ""
 		return err
 	}
-	m.version = output.Version
-	m.primaryID = output.PrimaryID
+	m.version, m.primaryID = output.Version, output.PrimaryID
+	m.identityVerified.Store(true)
+	if !covered {
+		m.current.Store(nil)
+		return errors.New("legacy billing receipts still reconciling; lease remains closed")
+	}
 	if !m.now().Before(started.Add(ReplicaTTL)) {
 		m.current.Store(nil)
-		return errors.New("replica installation expired")
+		return errors.New("bootstrap installed; fresh delta required before serving")
 	}
 	m.current.Store(&lease{expires: started.Add(ReplicaTTL)})
-	stats := SyncStats{CompletedAt: time.Now().UTC(), DurationMS: time.Since(wallStarted).Milliseconds(), Full: output.Full,
-		Rows: len(output.Rows), Events: len(events), Pending: len(ids), UploadJSONBytes: len(raw), UploadWireBytes: len(packed),
-		DownloadJSONBytes: decoded.n, DownloadWireBytes: wire.n}
+	stats.CompletedAt = time.Now().UTC()
+	stats.DurationMS = time.Since(wallStarted).Milliseconds()
+	stats.Full = output.Full
+	stats.Rows, stats.Events, stats.Pending = len(output.Rows), len(input.Events), len(ids)
 	m.lastSync.Store(&stats)
-	slog.Info("site synchronization completed", "node", m.cfg.ID, "full", stats.Full, "rows", stats.Rows,
-		"events", stats.Events, "pending", stats.Pending, "duration_ms", stats.DurationMS,
-		"upload_json_bytes", stats.UploadJSONBytes, "upload_wire_bytes", stats.UploadWireBytes,
-		"download_json_bytes", stats.DownloadJSONBytes, "download_wire_bytes", stats.DownloadWireBytes)
+	slog.Info("site synchronization completed", "node", m.cfg.ID, "full", stats.Full, "rows", stats.Rows, "events", stats.Events, "pending", stats.Pending, "duration_ms", stats.DurationMS, "upload_json_bytes", stats.UploadJSONBytes, "upload_wire_bytes", stats.UploadWireBytes, "download_json_bytes", stats.DownloadJSONBytes, "download_wire_bytes", stats.DownloadWireBytes)
 	return nil
 }
 
 func (m *Manager) SyncHandler(c *gin.Context) {
-	if m.cfg.EffectiveMode() != Primary {
-		c.AbortWithStatus(http.StatusNotFound)
-		return
-	}
-	if !strings.HasPrefix(c.GetHeader("Authorization"), "Bearer ") {
-		c.AbortWithStatus(http.StatusUnauthorized)
-		return
-	}
-	token := strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
-	var peer *Peer
-	for i := range m.cfg.Peers {
-		p := &m.cfg.Peers[i]
-		if subtle.ConstantTimeCompare([]byte(p.Token), []byte(token)) == 1 {
-			peer = p
-			break
-		}
-	}
+	peer := m.peer(c)
 	if peer == nil {
-		c.AbortWithStatus(http.StatusUnauthorized)
-		return
-	}
-	var reader io.Reader = http.MaxBytesReader(c.Writer, c.Request.Body, maxSyncBody)
-	if c.GetHeader("Content-Encoding") == "gzip" {
-		gz, err := gzip.NewReader(reader)
-		if err != nil {
-			c.AbortWithStatus(http.StatusBadRequest)
-			return
-		}
-		defer func() { _ = gz.Close() }()
-		reader = gz
-	} else if c.GetHeader("Content-Encoding") != "" {
-		c.AbortWithStatus(http.StatusUnsupportedMediaType)
 		return
 	}
 	var input SyncRequest
-	if err := decodeLimited(reader, &input, maxSyncBody); err != nil || input.Protocol != ProtocolVersion || input.NodeID != peer.ID || input.Schema != m.store.Schema() || len(input.Events) > 128 || len(input.PendingIDs) > 1000000 {
+	if err := decodeSiteRequest(c, &input); err != nil || input.Protocol != ProtocolVersion || input.NodeID != peer.ID || input.Schema != m.store.Schema() || len(input.Events) > 128 || len(input.PendingIDs) > MaxPendingBills {
 		c.AbortWithStatus(http.StatusBadRequest)
+		return
+	}
+	if store, ok := m.store.(DeliveryStore); ok {
+		if len(input.Events) > 0 {
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+		timeout := 10 * time.Second
+		if input.Version == "" {
+			timeout = 90 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
+		defer cancel()
+		snapshot, err := store.ExportPage(ctx, *peer, input)
+		if err != nil {
+			slog.Error("site export failed", "node", peer.ID, "error", err)
+			c.AbortWithStatus(http.StatusServiceUnavailable)
+			return
+		}
+		encodeSiteResponse(c, SyncResponse{Protocol: ProtocolVersion, PrimaryID: m.cfg.ID, NodeID: peer.ID, BaseVersion: input.Version, Version: snapshot.Version, Schema: snapshot.Schema, Full: snapshot.Full, Rows: snapshot.Rows, Acknowledged: snapshot.Acknowledged, Rejected: snapshot.Rejected, Cursor: snapshot.Cursor})
 		return
 	}
 	state := m.peers[peer.ID]

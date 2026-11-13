@@ -130,8 +130,18 @@ def policy():
             start = time.monotonic()
             lab.sql("primary", change + ";")
             lab.eventually(lambda: lab.sql("secondary", visible + ";") == "t", timeout=10, label=name)
+            forwards_before = len([x for x in lab.records() if x.get("kind") == "model"])
+            local_before = int(lab.sql("secondary", "SELECT count(*) FROM usage_logs;"))
             r = lab.request()
-            assert r["status"] >= 400, (name, r)
+            if name == "route_changed":
+                # A route moved to a foreign account is served by the primary.
+                # It is a routing change, not an authorization denial.
+                success(r)
+                assert json.loads(r["body"])["model"] == "gpt-5.1", r
+                assert len([x for x in lab.records() if x.get("kind") == "model"]) > forwards_before
+                assert int(lab.sql("secondary", "SELECT count(*) FROM usage_logs;")) == local_before
+            else:
+                assert r["status"] >= 400, (name, r)
             record(name, sync_seconds=round(time.monotonic() - start, 3), status=r["status"], body=r["body"])
         finally:
             lab.sql("primary", restore + ";")

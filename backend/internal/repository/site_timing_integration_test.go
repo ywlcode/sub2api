@@ -24,6 +24,11 @@ func TestSiteTimingReconcilesArrivalOrderAndClientRetries(t *testing.T) {
 	user := mustCreateUser(t, client, &service.User{Email: uuid.NewString() + "@example.com", PasswordHash: "disabled", Balance: 10})
 	key := mustCreateApiKey(t, client, &service.APIKey{UserID: user.ID, Key: uuid.NewString(), Name: "timing"})
 	account := mustCreateAccount(t, client, &service.Account{Name: "domestic", Platform: service.PlatformDeepseek, Type: service.AccountTypeAPIKey, Extra: map[string]any{service.AccountExtraSecondaryEnabled: true}})
+	group := mustCreateGroup(t, client, &service.Group{Name: "site-local-" + uuid.NewString(), Platform: service.PlatformDeepseek, Status: service.StatusActive})
+	_, bindErr := db.Exec(`INSERT INTO account_groups(account_id,group_id) VALUES($1,$2)`, account.ID, group.ID)
+	require.NoError(t, bindErr)
+	_, bindErr = db.Exec(`UPDATE api_keys SET group_id=$1 WHERE id=$2`, group.ID, key.ID)
+	require.NoError(t, bindErr)
 	peer := site.Peer{ID: "office", Token: strings.Repeat("s", 32)}
 	primary, err := NewSiteStore(db, &config.Config{Site: site.Config{Mode: site.Primary, ID: "main"}})
 	require.NoError(t, err)

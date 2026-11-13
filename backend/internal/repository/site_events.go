@@ -42,7 +42,7 @@ func (r *usageBillingRepository) RecordSiteUsageIssue(ctx context.Context, issue
 
 func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, event site.Event) (*service.UsageBillingEvent, error) {
 	if event.ID <= 0 || len(event.Payload) == 0 {
-		return nil, errors.New("invalid site event")
+		return nil, invalidSiteEvent(errors.New("invalid site event"))
 	}
 	digest := sha256.Sum256(append([]byte(event.Kind+"\x00"), event.Payload...))
 	var existing string
@@ -51,20 +51,23 @@ func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, ev
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
-	if duplicate && existing != hex.EncodeToString(digest[:]) {
-		return nil, errors.New("site event identity conflict")
+	if duplicate {
+		if existing != hex.EncodeToString(digest[:]) {
+			return nil, invalidSiteEvent(errors.New("site event identity conflict"))
+		}
+		return nil, nil // A committed receipt survives deleted owners and old timestamps.
 	}
 	var billing *service.UsageBillingEvent
 	switch event.Kind {
 	case "billing":
 		var e service.UsageBillingEvent
 		if err = json.Unmarshal(event.Payload, &e); err != nil {
-			return nil, err
+			return nil, invalidSiteEvent(err)
 		}
 		c, u := &e.Command, &e.Usage
 		sourceRequestID := c.RequestID
 		if err = validateUsageBillingEvent(&e, service.UsageBillingEventKey{RequestID: c.RequestID, APIKeyID: c.APIKeyID}, c.RequestFingerprint); err != nil {
-			return nil, err
+			return nil, invalidSiteEvent(err)
 		}
 		var allowed bool
 		// Retain past grants so a response already in flight when the switch
@@ -74,11 +77,11 @@ func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, ev
 		}
 
 		if !allowed || c.UserID <= 0 || c.APIKeyID <= 0 || c.RequestID == "" || len(c.RequestID) > 128 || u.CreatedAt.After(time.Now().Add(time.Minute)) {
-			return nil, errors.New("site billing ownership or time invalid")
+			return nil, invalidSiteEvent(errors.New("site billing ownership or time invalid"))
 		}
 		for _, v := range []float64{c.BalanceCost, c.SubscriptionCost, c.APIKeyQuotaCost, c.APIKeyRateLimitCost, c.AccountQuotaCost, c.PlatformQuotaCost, u.ActualCost, u.TotalCost} {
 			if math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
-				return nil, errors.New("invalid site billing amount")
+				return nil, invalidSiteEvent(errors.New("invalid site billing amount"))
 			}
 		}
 		// The peer is trusted to quote using its synchronized pricing. Check
@@ -88,14 +91,14 @@ func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, ev
 			return nil, err
 		}
 		if !owner {
-			return nil, errors.New("site billing key owner mismatch")
+			return nil, invalidSiteEvent(errors.New("site billing key owner mismatch"))
 		}
 		if c.SubscriptionID != nil {
 			if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM user_subscriptions WHERE id=$1 AND user_id=$2 AND group_id=$3)`, *c.SubscriptionID, c.UserID, u.GroupID).Scan(&owner); err != nil {
 				return nil, err
 			}
 			if !owner {
-				return nil, errors.New("site subscription owner mismatch")
+				return nil, invalidSiteEvent(errors.New("site subscription owner mismatch"))
 			}
 		}
 		billing = &e
@@ -152,7 +155,7 @@ func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, ev
 			}
 		}
 	default:
-		return nil, errors.New("unknown site event kind")
+		return nil, invalidSiteEvent(errors.New("unknown site event kind"))
 	}
 	if !duplicate {
 		_, err = tx.ExecContext(ctx, `INSERT INTO site_receipts(node_id,event_id,digest) VALUES($1,$2,$3)`, p.ID, event.ID, hex.EncodeToString(digest[:]))
@@ -229,7 +232,7 @@ func incrementSiteKeyWindows(ctx context.Context, tx *sql.Tx, id int64, cost flo
 func (s *SiteStore) importLog(ctx context.Context, tx *sql.Tx, node, table string, raw []byte) error {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil {
-		return err
+		return invalidSiteEvent(err)
 	}
 	var requestID string
 	_ = json.Unmarshal(obj["request_id"], &requestID)
@@ -242,7 +245,7 @@ func (s *SiteStore) importLog(ctx context.Context, tx *sql.Tx, node, table strin
 	}
 	source := strings.Trim(string(obj[pk]), `"`)
 	if source == "" {
-		return errors.New("missing site log ID")
+		return invalidSiteEvent(errors.New("missing site log ID"))
 	}
 	var local string
 	err := tx.QueryRowContext(ctx, `SELECT local_id FROM site_imported_logs WHERE node_id=$1 AND table_name=$2 AND source_id=$3`, node, table, source).Scan(&local)
@@ -277,32 +280,21 @@ func (s *SiteStore) importLog(ctx context.Context, tx *sql.Tx, node, table strin
 		detail["site_node_id"], _ = json.Marshal(node)
 		var timing requesttiming.Snapshot
 		if err := json.Unmarshal(obj["detail"], &timing); err != nil {
-			return err
+			return invalidSiteEvent(err)
 		}
 		detail["latency"], _ = json.Marshal(requesttiming.DeriveLatency(timing))
 		obj["detail"], _ = json.Marshal(detail)
 	}
-	// SQL column names are obtained from the local catalog, never the payload.
-	rows, err := tx.QueryContext(ctx, `SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 ORDER BY ordinal_position`, table)
-	if err != nil {
-		return err
+	// Column names were loaded once from the trusted local schema at startup.
+	columns := s.logColumns[table]
+	if len(columns) == 0 {
+		return errors.New("missing site diagnostic schema")
 	}
-	var columns, updates []string
-	for rows.Next() {
-		var col string
-		if err = rows.Scan(&col); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		columns = append(columns, col)
+	var updates []string
+	for _, col := range columns {
 		if col != pk {
 			updates = append(updates, `"`+col+`"=EXCLUDED."`+col+`"`)
 		}
-	}
-	err = rows.Err()
-	_ = rows.Close()
-	if err != nil {
-		return err
 	}
 	encoded, err := json.Marshal(obj)
 	if err != nil {
