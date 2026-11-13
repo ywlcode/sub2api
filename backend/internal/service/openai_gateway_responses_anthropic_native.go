@@ -137,6 +137,9 @@ func (s *OpenAIGatewayService) forwardResponsesViaNativeAnthropic(
 
 	if resp.StatusCode >= 400 {
 		respBody, upstreamMsg := s.readOpenAIUpstreamError(resp)
+		if writeNativeCyberPolicyError(c, APIProtocolResponses, respBody, resp.StatusCode, nil) {
+			return nil, errOpenAIErrorPassthroughForwarded
+		}
 		if foErr := s.failoverOpenAIUpstreamHTTPError(ctx, c, account, resp, respBody, upstreamMsg, upstreamModel); foErr != nil {
 			return nil, foErr
 		}
@@ -252,6 +255,10 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 			continue
 		}
 
+		cyberUsage := claudeUsageToOpenAIUsage(&usage)
+		if writeNativeCyberPolicyError(c, APIProtocolResponses, []byte(payload), resp.StatusCode, &cyberUsage) {
+			return nil, errOpenAIErrorPassthroughForwarded
+		}
 		observeAnthropicUpstreamResponseModel(c, []byte(payload))
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -528,6 +535,10 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 			continue
 		}
 
+		cyberUsage := claudeUsageToOpenAIUsage(&usage)
+		if writeNativeCyberPolicyError(c, APIProtocolResponses, []byte(payload), resp.StatusCode, &cyberUsage) {
+			return nil, errOpenAIErrorPassthroughForwarded
+		}
 		observeAnthropicUpstreamResponseModel(c, []byte(payload))
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {

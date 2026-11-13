@@ -26,7 +26,15 @@ var forbiddenPassthroughCases = []struct{ name, errorJSON string }{
 	{"explicit_status", `{"code":"provider_rejection","type":"invalid_request_error","status_code":403,"message":"original denial"}`},
 }
 
+func forbiddenTestMessage(name string) string {
+	if name == "session" {
+		return CyberPolicyClientMessage
+	}
+	return cyberPolicyRuleMessage
+}
+
 func bindForbiddenTestRule(c *gin.Context, name string) {
+	c.Set("test.forbidden_message", forbiddenTestMessage(name))
 	rule := bindCyberPolicyProductionRules(c)
 	if name != "session" {
 		// An ordinary 403 must match even without any cyber-related keyword.
@@ -37,17 +45,18 @@ func bindForbiddenTestRule(c *gin.Context, name string) {
 
 func requireForbiddenClientError(t *testing.T, c *gin.Context, rec *httptest.ResponseRecorder, err error, streaming bool) {
 	t.Helper()
+	require.NotEmpty(t, c.GetString("test.forbidden_message"))
 	require.Error(t, err)
 	var failover *UpstreamFailoverError
 	require.False(t, errors.As(err, &failover))
 	require.Nil(t, GetOpsCyberPolicy(c), "client rule matching must not create a new cyber violation")
-	require.Contains(t, rec.Body.String(), cyberPolicyRuleMessage)
+	require.Contains(t, rec.Body.String(), c.GetString("test.forbidden_message"))
 	if streaming {
 		require.Equal(t, http.StatusOK, rec.Code)
 	} else {
 		require.Equal(t, http.StatusForbidden, rec.Code)
 		require.True(t, gjson.Valid(rec.Body.String()), "staged SSE metadata must not leak into a JSON error")
-		require.Equal(t, cyberPolicyRuleMessage, gjson.Get(rec.Body.String(), "error.message").String())
+		require.Equal(t, c.GetString("test.forbidden_message"), gjson.Get(rec.Body.String(), "error.message").String())
 	}
 }
 
@@ -205,6 +214,13 @@ func TestForbiddenRuleGuardsAndOptions(t *testing.T) {
 				client, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, payload, 0)
 				require.Equal(t, body, string(payload), "audit evidence must not be mutated")
 				require.Nil(t, GetOpsCyberPolicy(c))
+				if tc.name == "session" {
+					require.True(t, matched)
+					require.Equal(t, http.StatusForbidden, status)
+					require.Equal(t, CyberPolicyClientMessage, gjson.GetBytes(client, "response.error.message").String())
+					require.False(t, c.GetBool(OpsSkipPassthroughKey))
+					return
+				}
 				if mode == "disabled" || mode == "wrong_platform" {
 					require.False(t, matched)
 					require.Equal(t, payload, client)
@@ -255,7 +271,7 @@ func TestForbiddenSessionAfterQueueHeartbeat(t *testing.T) {
 	for _, path := range []string{"native", "passthrough"} {
 		t.Run(path, func(t *testing.T) {
 			c, rec, _, _ := newHeaderWaitTest(t, nil)
-			bindCyberPolicyProductionRules(c)
+			bindForbiddenTestRule(c, "session")
 			c.Header("Content-Type", "text/event-stream")
 			_, err := c.Writer.WriteString(":\n\n")
 			require.NoError(t, err)
@@ -271,7 +287,8 @@ func TestForbiddenSessionAfterQueueHeartbeat(t *testing.T) {
 			requireForbiddenClientError(t, c, rec, err, true)
 			require.Equal(t, 1, strings.Count(rec.Body.String(), "event: response.failed"))
 			require.Contains(t, rec.Body.String(), "session_blocked_by_cyber_policy")
-			require.NotContains(t, rec.Body.String(), "开启新会话")
+			require.Contains(t, rec.Body.String(), CyberPolicyClientMessage)
+			require.NotContains(t, rec.Body.String(), "该会话已被网络安全策略屏蔽")
 			require.Contains(t, c.GetString(OpsUpstreamErrorMessageKey), "开启新会话")
 		})
 	}

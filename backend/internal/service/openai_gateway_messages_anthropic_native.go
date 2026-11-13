@@ -278,6 +278,10 @@ func (s *OpenAIGatewayService) handleNativeAnthropicBufferedResponse(
 	}
 
 	usage := parseClaudeUsageFromResponseBody(body)
+	cyberUsage := claudeUsageToOpenAIUsage(usage)
+	if writeNativeCyberPolicyError(c, APIProtocolAnthropic, body, resp.StatusCode, &cyberUsage) {
+		return nil, errOpenAIErrorPassthroughForwarded
+	}
 	if IsForceCacheBilling(ctx) && usage.InputTokens > 0 {
 		body, err = classifyAnthropicResponseInputAsCacheRead(body, usage)
 		if err != nil {
@@ -521,6 +525,22 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 				continue
 			}
 			payload := strings.Join(pendingData, "\n")
+			// Classify complete multiline payloads before writing any original
+			// error frame. Audit retains the upstream evidence; clients see
+			// only the fixed Cyber message, regardless of platform.
+			if isCyberPolicyRejection([]byte(payload)) {
+				upstreamFailed = true
+				cyberUsage := claudeUsageToOpenAIUsage(usage)
+				if clientDisconnected {
+					markOpenAICyberPolicyEvent(c, []byte(payload), resp.StatusCode, &cyberUsage)
+					MarkOpsStreamFailure(c, "permission_error", CyberPolicyClientCode, CyberPolicyClientMessage, http.StatusForbidden)
+				} else {
+					c.Writer.WriteHeaderNow()
+					writeNativeCyberPolicyError(c, APIProtocolAnthropic, []byte(payload), resp.StatusCode, &cyberUsage)
+				}
+				return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime),
+					fmt.Errorf("upstream Anthropic stream returned a cyber policy error")
+			}
 			eventType := gjson.Get(payload, "type").String()
 			validTerminal := gjson.Valid(payload) && eventType == "message_stop" && (pendingEventName == "" || pendingEventName == "message_stop")
 			if (pendingEventName == "message_stop" || eventType == "message_stop") && !validTerminal {

@@ -17,9 +17,9 @@ import (
 // repository 层 gatewayCache 附带实现（类型断言探测接入，不改 GatewayCache
 // 共享接口）；测试 stub 不实现时屏蔽能力自动降级关闭。
 type CyberSessionBlockStore interface {
-	SetCyberSessionBlocked(ctx context.Context, scopeKey string, keys []string, ttl time.Duration) error
+	SetCyberSessionBlocked(ctx context.Context, platform, scopeKey string, keys []string, ttl time.Duration) error
 	IsCyberSessionScopeActive(ctx context.Context, scopeKey string) (bool, error)
-	FindCyberSessionBlocked(ctx context.Context, keys []string) (string, error)
+	FindCyberSessionBlocked(ctx context.Context, platform string, keys []string) (string, error)
 }
 
 // CyberSessionIdentityResolution is the non-sensitive result used by gateway
@@ -164,8 +164,8 @@ func CyberRequestFingerprintKey(apiKeyID int64, body []byte) string {
 
 // MarkCyberSessionBlocked 把会话写入屏蔽表（写入点：cyber 命中后）。
 // 开关关闭、key 为空或存储不可用时静默跳过。
-func (s *OpenAIGatewayService) MarkCyberSessionBlocked(ctx context.Context, scopeKey string, keys []string) {
-	if s == nil || len(keys) == 0 {
+func (s *OpenAIGatewayService) MarkCyberSessionBlocked(ctx context.Context, platform, scopeKey string, keys []string) {
+	if s == nil || platform != PlatformOpenAI || len(keys) == 0 {
 		return
 	}
 	enabled, ttl := s.CyberSessionBlockRuntime(ctx)
@@ -176,7 +176,7 @@ func (s *OpenAIGatewayService) MarkCyberSessionBlocked(ctx context.Context, scop
 	if store == nil {
 		return
 	}
-	if err := store.SetCyberSessionBlocked(ctx, scopeKey, keys, ttl); err != nil {
+	if err := store.SetCyberSessionBlocked(ctx, platform, scopeKey, keys, ttl); err != nil {
 		logger.LegacyPrintf("service.openai_gateway", "cyber session block write failed: err=%v", err)
 	}
 }
@@ -185,39 +185,45 @@ func (s *OpenAIGatewayService) MarkCyberSessionBlocked(ctx context.Context, scop
 // falls back to the content fingerprint when the client supplied none. This is
 // what prevents an identical retry from reaching upstream again after a
 // cyber_policy hit.
-func (s *OpenAIGatewayService) MarkCyberSessionBlockedForRequest(ctx context.Context, apiKeyID int64, identity CyberSessionIdentityResolution, body []byte) {
+func (s *OpenAIGatewayService) MarkCyberSessionBlockedForRequest(ctx context.Context, platform string, apiKeyID int64, identity CyberSessionIdentityResolution, body []byte) {
+	if platform != PlatformOpenAI {
+		return
+	}
 	keys := make([]string, 0, 1)
 	if identity.BlockKey != "" {
 		keys = append(keys, identity.BlockKey)
 	} else if key := CyberRequestFingerprintKey(apiKeyID, body); key != "" {
 		keys = append(keys, key)
 	}
-	s.MarkCyberSessionBlocked(ctx, "", keys)
+	s.MarkCyberSessionBlocked(ctx, platform, "", keys)
 }
 
 // FindCyberSessionBlockedForRequest blocks an exact session identity, or an
 // exact content fingerprint when the client has no explicit identity. Unknown
 // content and storage failures remain fail-open.
-func (s *OpenAIGatewayService) FindCyberSessionBlockedForRequest(ctx context.Context, apiKeyID int64, c *gin.Context, body []byte, _ string, _ string) string {
+func (s *OpenAIGatewayService) FindCyberSessionBlockedForRequest(ctx context.Context, platform string, apiKeyID int64, c *gin.Context, body []byte, _ string, _ string) string {
 	identity := ResolveCyberSessionIdentity(apiKeyID, c, body)
-	return s.findCyberSessionBlocked(ctx, apiKeyID, identity, body)
+	return s.findCyberSessionBlocked(ctx, platform, apiKeyID, identity, body)
 }
 
 // FindCyberSessionBlockedForIdentityAndBody is used by WebSocket turns, which
 // may inherit a connection-bound identity while still needing the per-turn
 // fingerprint fallback.
-func (s *OpenAIGatewayService) FindCyberSessionBlockedForIdentityAndBody(ctx context.Context, apiKeyID int64, identity CyberSessionIdentityResolution, body []byte) string {
-	return s.findCyberSessionBlocked(ctx, apiKeyID, identity, body)
+func (s *OpenAIGatewayService) FindCyberSessionBlockedForIdentityAndBody(ctx context.Context, platform string, apiKeyID int64, identity CyberSessionIdentityResolution, body []byte) string {
+	return s.findCyberSessionBlocked(ctx, platform, apiKeyID, identity, body)
 }
 
 // FindCyberSessionBlockedForIdentity checks a pre-resolved identity without a
 // request body. Callers that have the body should use the AndBody variant so
 // the fingerprint fallback is available.
-func (s *OpenAIGatewayService) FindCyberSessionBlockedForIdentity(ctx context.Context, identity CyberSessionIdentityResolution) string {
-	return s.findCyberSessionBlocked(ctx, 0, identity, nil)
+func (s *OpenAIGatewayService) FindCyberSessionBlockedForIdentity(ctx context.Context, platform string, identity CyberSessionIdentityResolution) string {
+	return s.findCyberSessionBlocked(ctx, platform, 0, identity, nil)
 }
 
-func (s *OpenAIGatewayService) findCyberSessionBlocked(ctx context.Context, apiKeyID int64, identity CyberSessionIdentityResolution, body []byte) string {
+func (s *OpenAIGatewayService) findCyberSessionBlocked(ctx context.Context, platform string, apiKeyID int64, identity CyberSessionIdentityResolution, body []byte) string {
+	if platform != PlatformOpenAI {
+		return ""
+	}
 	enabled, _ := s.CyberSessionBlockRuntime(ctx)
 	if !enabled {
 		return ""
@@ -246,7 +252,7 @@ func (s *OpenAIGatewayService) findCyberSessionBlocked(ctx context.Context, apiK
 	if store == nil {
 		return ""
 	}
-	matched, err := store.FindCyberSessionBlocked(ctx, keys)
+	matched, err := store.FindCyberSessionBlocked(ctx, platform, keys)
 	if err != nil {
 		logger.LegacyPrintf("service.openai_gateway", "cyber session block read failed: err=%v", err)
 		return ""

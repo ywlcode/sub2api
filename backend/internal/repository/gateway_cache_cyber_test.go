@@ -57,11 +57,11 @@ func TestGatewayCacheCyberBlockWritesScopeAndExactKeysTogether(t *testing.T) {
 	require.True(t, ok)
 
 	ctx := context.Background()
-	require.NoError(t, store.SetCyberSessionBlocked(ctx, "scope-1", []string{"block-1", "block-2"}, time.Minute))
+	require.NoError(t, store.SetCyberSessionBlocked(ctx, service.PlatformOpenAI, "scope-1", []string{"block-1", "block-2"}, time.Minute))
 	active, err := store.IsCyberSessionScopeActive(ctx, "scope-1")
 	require.NoError(t, err)
 	require.True(t, active)
-	matched, err := store.FindCyberSessionBlocked(ctx, []string{"missing", "block-1", "block-2"})
+	matched, err := store.FindCyberSessionBlocked(ctx, service.PlatformOpenAI, []string{"missing", "block-1", "block-2"})
 	require.NoError(t, err)
 	require.Equal(t, "block-1", matched)
 	require.Greater(t, server.TTL(cyberSessionScopePrefix+"scope-1"), time.Duration(0))
@@ -82,7 +82,7 @@ func TestGatewayCacheCyberBlockCommandsAreBoundedAndLookupShortCircuits(t *testi
 		keys[i] = "block-" + strconv.Itoa(i)
 	}
 	ctx := context.Background()
-	require.NoError(t, store.SetCyberSessionBlocked(ctx, "large-scope", keys, time.Minute))
+	require.NoError(t, store.SetCyberSessionBlocked(ctx, service.PlatformOpenAI, "large-scope", keys, time.Minute))
 	require.Equal(t, []int{cyberSessionRedisCommandMaxKeys, cyberSessionRedisCommandMaxKeys, 44}, hook.setBatchSizes)
 
 	lookup := make([]string, len(keys))
@@ -90,8 +90,36 @@ func TestGatewayCacheCyberBlockCommandsAreBoundedAndLookupShortCircuits(t *testi
 		lookup[i] = "missing-" + strconv.Itoa(i)
 	}
 	lookup[cyberSessionRedisCommandMaxKeys+3] = keys[cyberSessionRedisCommandMaxKeys+3]
-	matched, err := store.FindCyberSessionBlocked(ctx, lookup)
+	matched, err := store.FindCyberSessionBlocked(ctx, service.PlatformOpenAI, lookup)
 	require.NoError(t, err)
 	require.Equal(t, keys[cyberSessionRedisCommandMaxKeys+3], matched)
 	require.Equal(t, []int{cyberSessionRedisCommandMaxKeys, cyberSessionRedisCommandMaxKeys}, hook.mgetKeyCounts)
+}
+
+func TestGatewayCacheCyberPlatformMarkersAndLegacy(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	store, ok := NewGatewayCache(client).(service.CyberSessionBlockStore)
+	require.True(t, ok)
+	ctx := context.Background()
+	require.NoError(t, store.SetCyberSessionBlocked(ctx, service.PlatformOpenAI, "", []string{"new"}, time.Minute))
+	stored, err := server.Get(cyberSessionBlockPrefix + "new")
+	require.NoError(t, err)
+	require.JSONEq(t, `{"platform":"openai"}`, stored)
+	require.NoError(t, server.Set(cyberSessionBlockPrefix+"legacy", "1"))
+	require.NoError(t, server.Set(cyberSessionBlockPrefix+"foreign", `{"platform":"deepseek"}`))
+	for _, platform := range []string{service.PlatformOpenAI, service.PlatformDeepseek, service.PlatformGrok, ""} {
+		for _, key := range []string{"new", "legacy", "foreign"} {
+			matched, err := store.FindCyberSessionBlocked(ctx, platform, []string{key})
+			require.NoError(t, err)
+			if platform == service.PlatformOpenAI && key != "foreign" {
+				require.Equal(t, key, matched)
+			} else {
+				require.Empty(t, matched)
+			}
+		}
+	}
+	require.NoError(t, store.SetCyberSessionBlocked(ctx, service.PlatformDeepseek, "", []string{"no-write"}, time.Minute))
+	require.False(t, server.Exists(cyberSessionBlockPrefix+"no-write"))
 }

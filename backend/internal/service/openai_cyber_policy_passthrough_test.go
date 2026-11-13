@@ -23,8 +23,8 @@ import (
 
 const cyberPolicyRuleMessage = "cyber-security 内容审计命中风险规则"
 
-// Keep the broad overload rule first, as in production. A transported HTTP 400
-// cyber rejection must still match the status+keyword policy rule below it.
+// Keep the historical production rules installed. Cyber must ignore both the
+// broad overload rule and the older customizable policy message below it.
 func bindCyberPolicyProductionRules(c *gin.Context) *model.ErrorPassthroughRule {
 	overloadCode := http.StatusBadGateway
 	overloadMessage := "Our servers are currently overloaded. Please try again later."
@@ -54,7 +54,7 @@ func requireCyberRuleResponse(t *testing.T, c *gin.Context, rec *httptest.Respon
 	require.False(t, errors.As(err, &failover), "rewriting a cyber rejection must not retry another account")
 	require.Equal(t, http.StatusForbidden, rec.Code)
 	require.True(t, gjson.Valid(rec.Body.String()), "a pre-output error must not flush staged SSE metadata into its JSON body")
-	require.Equal(t, cyberPolicyRuleMessage, gjson.Get(rec.Body.String(), "error.message").String())
+	require.Equal(t, CyberPolicyClientMessage, gjson.Get(rec.Body.String(), "error.message").String())
 	mark := GetOpsCyberPolicy(c)
 	require.NotNil(t, mark)
 	require.Equal(t, upstreamStatus, mark.UpstreamStatus)
@@ -91,8 +91,8 @@ func TestCyberPolicyHTTPPassthroughProductionRules(t *testing.T) {
 				}
 				requireCyberRuleResponse(t, c, rec, err, status, original)
 				if path == "native" || path == "passthrough" {
-					require.Equal(t, "cyber_policy", gjson.Get(rec.Body.String(), "error.code").String())
-					require.Equal(t, "input", gjson.Get(rec.Body.String(), "error.param").String())
+					require.Equal(t, CyberPolicyClientCode, gjson.Get(rec.Body.String(), "error.code").String())
+					require.False(t, gjson.Get(rec.Body.String(), "error.param").Exists())
 				}
 			})
 		}
@@ -134,7 +134,7 @@ func TestCyberPolicyResponsesSSEPassthroughProductionRules(t *testing.T) {
 						if started {
 							require.Equal(t, http.StatusOK, rec.Code)
 							require.Contains(t, rec.Body.String(), "hello")
-							require.Contains(t, rec.Body.String(), cyberPolicyRuleMessage)
+							require.Contains(t, rec.Body.String(), CyberPolicyClientMessage)
 							require.Contains(t, rec.Body.String(), "cyber_policy")
 							require.NotContains(t, rec.Body.String(), "original policy rejection")
 							var failover *UpstreamFailoverError
@@ -227,7 +227,7 @@ func TestCyberPolicyCompatPassthroughProductionRules(t *testing.T) {
 					if committed {
 						require.Error(t, err)
 						require.Equal(t, http.StatusOK, rec.Code)
-						require.Contains(t, rec.Body.String(), cyberPolicyRuleMessage)
+						require.Contains(t, rec.Body.String(), CyberPolicyClientMessage)
 						if path == "chat" {
 							require.Contains(t, rec.Body.String(), "data: [DONE]")
 						} else {
@@ -242,7 +242,7 @@ func TestCyberPolicyCompatPassthroughProductionRules(t *testing.T) {
 	}
 }
 
-func TestCyberPolicyRuleOptionsAndUnmatchedPreservation(t *testing.T) {
+func TestCyberPolicyIgnoresAllPassthroughRuleOptions(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, mode := range []string{"custom_status", "original_message", "disabled", "wrong_platform"} {
 		t.Run(mode, func(t *testing.T) {
@@ -266,19 +266,12 @@ func TestCyberPolicyRuleOptionsAndUnmatchedPreservation(t *testing.T) {
 			original := append([]byte(nil), payload...)
 			client, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, payload, 0)
 			require.Equal(t, original, payload, "the evidence buffer must not change")
-			switch mode {
-			case "custom_status":
-				require.True(t, matched)
-				require.Equal(t, http.StatusUnavailableForLegalReasons, status)
-				require.Equal(t, int64(status), gjson.GetBytes(client, "status").Int())
-				require.True(t, c.GetBool(OpsSkipPassthroughKey))
-			case "original_message":
-				require.True(t, matched)
-				require.Equal(t, "original message", gjson.GetBytes(client, "error.message").String())
-			default:
-				require.False(t, matched)
-				require.Equal(t, original, client)
-			}
+			require.True(t, matched)
+			require.Equal(t, http.StatusForbidden, status)
+			require.Equal(t, CyberPolicyClientCode, gjson.GetBytes(client, "error.code").String())
+			require.Equal(t, CyberPolicyClientMessage, gjson.GetBytes(client, "error.message").String())
+			require.False(t, c.GetBool(OpsSkipPassthroughKey), "Cyber never evaluates skip-monitoring rules")
+			require.NotContains(t, string(client), "original message")
 		})
 	}
 }
@@ -301,7 +294,7 @@ func TestCyberPolicyRawChatStreamProductionRules(t *testing.T) {
 			if committed {
 				require.ErrorIs(t, err, errOpenAIErrorPassthroughForwarded)
 				require.Equal(t, http.StatusOK, rec.Code)
-				require.Contains(t, rec.Body.String(), cyberPolicyRuleMessage)
+				require.Contains(t, rec.Body.String(), CyberPolicyClientMessage)
 				require.Contains(t, rec.Body.String(), "data: [DONE]")
 			} else {
 				requireCyberRuleResponse(t, c, rec, err, 200, "original policy rejection")
@@ -345,7 +338,7 @@ func TestCyberPolicyChatUpstreamFallbackProductionRules(t *testing.T) {
 					if committed {
 						require.Error(t, err)
 						require.Equal(t, http.StatusOK, rec.Code)
-						require.Contains(t, rec.Body.String(), cyberPolicyRuleMessage)
+						require.Contains(t, rec.Body.String(), CyberPolicyClientMessage)
 						if path == "responses" {
 							require.Contains(t, rec.Body.String(), "event: response.failed")
 						} else {
