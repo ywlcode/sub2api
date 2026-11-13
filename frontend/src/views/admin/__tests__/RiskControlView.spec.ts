@@ -497,17 +497,23 @@ describe('admin RiskControlView', () => {
     wrapper.unmount()
   })
 
-  it('loads and saves the OpenAI-only ban scope without changing audit scope', async () => {
-    getConfig.mockResolvedValue({ ...baseConfig(), ban_scope: 'openai' })
+  it.each([
+    ['all', 'openai'],
+    ['openai', 'all'],
+  ] as const)('saves ban scope from %s to %s and retains it when reopening settings', async (initial, selected) => {
+    getConfig.mockResolvedValue({ ...baseConfig(), ban_scope: initial })
     const wrapper = mount(RiskControlView, { global: { stubs: { AppLayout: AppLayoutStub, BaseDialog: BaseDialogStub, Icon: true, Select: true, Toggle: true, Pagination: true, ProxySelector: true } } })
     await flushPromises()
     await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
     await findButtonByText(wrapper, 'admin.riskControl.tabs.response').trigger('click')
-    expect(wrapper.get<HTMLSelectElement>('[data-test="moderation-ban-scope"]').element.value).toBe('openai')
-    await wrapper.get('[data-test="moderation-ban-scope"]').setValue('all')
+    expect(wrapper.get<HTMLSelectElement>('[data-test="moderation-ban-scope"]').element.value).toBe(initial)
+    await wrapper.get('[data-test="moderation-ban-scope"]').setValue(selected)
     await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
     await flushPromises()
-    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({ ban_scope: 'all', all_groups: baseConfig().all_groups }))
+    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({ ban_scope: selected, all_groups: baseConfig().all_groups }))
+    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
+    await findButtonByText(wrapper, 'admin.riskControl.tabs.response').trigger('click')
+    expect(wrapper.get<HTMLSelectElement>('[data-test="moderation-ban-scope"]').element.value).toBe(selected)
     expect(showError).not.toHaveBeenCalled()
     wrapper.unmount()
   })

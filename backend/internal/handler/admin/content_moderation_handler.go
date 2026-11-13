@@ -54,6 +54,7 @@ type contentModerationConfigRequest struct {
 	BlockStatus          *int                `json:"block_status"`
 	BlockMessage         *string             `json:"block_message"`
 	EmailOnHit           *bool               `json:"email_on_hit"`
+	BanScope             *string             `json:"ban_scope"`
 	AutoBanEnabled       *bool               `json:"auto_ban_enabled"`
 	BanThreshold         *int                `json:"ban_threshold"`
 	ViolationWindowHours *int                `json:"violation_window_hours"`
@@ -123,6 +124,7 @@ func (h *ContentModerationHandler) UpdateConfig(c *gin.Context) {
 		BlockStatus:                    req.BlockStatus,
 		BlockMessage:                   req.BlockMessage,
 		EmailOnHit:                     req.EmailOnHit,
+		BanScope:                       req.BanScope,
 		AutoBanEnabled:                 req.AutoBanEnabled,
 		BanThreshold:                   req.BanThreshold,
 		ViolationWindowHours:           req.ViolationWindowHours,
