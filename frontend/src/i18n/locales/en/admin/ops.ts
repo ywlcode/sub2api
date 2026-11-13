@@ -742,7 +742,7 @@ export default {
         billingDedupHotRetentionDays: 'Billing Dedup Hot Retention Days',
         billingDedupArchiveRetentionDays: 'Billing Dedup Additional Archive Days',
         userTrafficRetentionDays: 'Traffic Detail Retention Days',
-        retentionDaysHint: 'Request details are configured separately under System Logs and default to 30d. Defaults here: errors 7d, diagnostics 3d, timings 3d, completed billing events 7d, dedup hot 15d plus 15d archive, and traffic 7d. Billing cleanup only removes complete/legacy events; total dedup protection is hot plus archive days. Zero truncates metric datasets on schedule.',
+        retentionDaysHint: 'Request details are configured separately under System Logs and default to 90d. Defaults here: errors 30d, diagnostics 30d, timings 30d, completed billing events 7d, dedup hot 15d plus 350d archive, and traffic 7d. Billing cleanup only removes complete/legacy events; dedup protection is the maximum of hot plus archive days, usage retention, and server dedup retention; indefinite usage also keeps dedup indefinitely. Zero truncates metric datasets on schedule.',
         aggregation: 'Pre-aggregation Tasks',
         enableAggregation: 'Enable Pre-aggregation',
         aggregationHint: 'Pre-aggregation improves query performance for long time windows',

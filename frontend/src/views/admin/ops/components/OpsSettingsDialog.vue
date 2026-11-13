@@ -54,11 +54,11 @@ async function loadAllSettings() {
     advancedSettings.value = advanced
     if (advancedSettings.value?.data_retention) {
       const retention = advancedSettings.value.data_retention
-      retention.request_connection_retention_days ??= 3
-      retention.request_timing_retention_days ??= 3
+      retention.request_connection_retention_days ??= 30
+      retention.request_timing_retention_days ??= 30
       retention.completed_billing_event_retention_days ??= 7
       retention.billing_dedup_hot_retention_days ??= 15
-      retention.billing_dedup_archive_retention_days ??= 15
+      retention.billing_dedup_archive_retention_days ??= 350
       retention.user_traffic_retention_days ??= 7
     }
     // 兼容旧 payload：后端未返回该字段时补默认值，保证表单可绑定

@@ -423,10 +423,15 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 	if err != nil {
 		return out, err
 	}
-	dedupTotalDays := effective.BillingDedupHotRetentionDays + effective.BillingDedupArchiveRetentionDays
-	out.billingDedupDeleted, err = deleteOldRowsByCTID(ctx, s.db, "usage_billing_dedup_archive", "created_at", now.AddDate(0, 0, -dedupTotalDays), "", opsCleanupBatchSize)
+	dedupTotalDays, err := s.billingDedupRetentionDays(ctx, effective)
 	if err != nil {
-		return out, err
+		return out, err // Never guess a shorter protection window on a settings failure.
+	}
+	if dedupTotalDays > 0 {
+		out.billingDedupDeleted, err = deleteOldRowsByCTID(ctx, s.db, "usage_billing_dedup_archive", "created_at", now.AddDate(0, 0, -dedupTotalDays), "", opsCleanupBatchSize)
+		if err != nil {
+			return out, err
+		}
 	}
 
 	// Channel monitor 每日维护（聚合昨日明细 + 软删过期明细/聚合）。
@@ -516,4 +521,19 @@ func (s *OpsCleanupService) recordHeartbeatError(runAt time.Time, duration time.
 		LastError:      &msg,
 		LastDurationMs: &durMs,
 	})
+}
+
+// Zero means usage history is indefinite, so its idempotency claims must also
+// remain. Both YAML and the live request-history override are respected.
+func (s *OpsCleanupService) billingDedupRetentionDays(ctx context.Context, effective opsCleanupEffectiveConfig) (int, error) {
+	policy := &DashboardAggregationService{settingRepo: s.settingRepo}
+	if s.cfg != nil {
+		policy.cfg = s.cfg.DashboardAgg
+	}
+	usageDays, err := policy.requestRetentionDays(ctx)
+	if err != nil || usageDays == 0 {
+		return 0, err
+	}
+	return max(usageDays, max(policy.cfg.Retention.UsageBillingDedupDays,
+		effective.BillingDedupHotRetentionDays+effective.BillingDedupArchiveRetentionDays)), nil
 }
