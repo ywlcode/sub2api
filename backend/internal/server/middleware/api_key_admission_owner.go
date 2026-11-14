@@ -83,7 +83,7 @@ func newAPIKeyAuthRevalidator(lookup func(context.Context, string) (*service.API
 			if errors.Is(err, service.ErrAPIKeyNotFound) {
 				return 0, service.NewAPIKeyQueueAuthRejected(infraerrors.Unauthorized("INVALID_API_KEY", "Invalid API key"))
 			}
-			return 0, service.NewAPIKeyQueueAuthRejected(infraerrors.ServiceUnavailable("API_KEY_AUTH_UNAVAILABLE", "API key authentication is temporarily unavailable"))
+			return 0, service.NewAPIKeyQueueAuthRejected(infraerrors.ServiceUnavailable("API_KEY_AUTH_UNAVAILABLE", "API key authentication is temporarily unavailable").WithCause(err))
 		}
 		if latest == nil || latest.ID != identity.keyID {
 			return 0, service.NewAPIKeyQueueAuthRejected(infraerrors.Unauthorized("INVALID_API_KEY", "Invalid API key"))

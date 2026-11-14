@@ -324,6 +324,12 @@ type APIKeyService struct {
 	authCfg                   apiKeyAuthCacheConfig
 	authGroup                 singleflight.Group
 	authLookupSlots           chan struct{}
+	secondaryAuthWaiters      chan struct{}
+	secondaryAuthConfig       requestConfigCache[string, []byte]
+	secondaryAuthEpoch        atomic.Uint64
+	secondaryAuthInstalling   atomic.Int64
+	secondaryAuthConfigLoads  atomic.Uint64
+	secondaryAuthStateReads   atomic.Uint64
 	authLookupTotal           atomic.Uint64
 	authLookupRejected        atomic.Uint64
 	authLookupInFlight        atomic.Int64
@@ -340,21 +346,34 @@ type APIKeyService struct {
 }
 
 type APIKeyAuthLookupMetrics struct {
-	Total    uint64 `json:"total"`
-	Rejected uint64 `json:"rejected"`
-	InFlight int64  `json:"in_flight"`
-	Capacity int    `json:"capacity"`
+	Total                 uint64 `json:"total"`
+	Rejected              uint64 `json:"rejected"`
+	InFlight              int64  `json:"in_flight"`
+	Capacity              int    `json:"capacity"`
+	Waiting               int    `json:"waiting"`
+	SecondaryConfigLoads  uint64 `json:"secondary_config_loads"`
+	SecondaryStateReads   uint64 `json:"secondary_state_reads"`
+	SecondaryCacheEntries int    `json:"secondary_cache_entries"`
+	SecondaryCacheBytes   int    `json:"secondary_cache_bytes"`
 }
 
 func (s *APIKeyService) AuthLookupMetrics() APIKeyAuthLookupMetrics {
 	if s == nil {
 		return APIKeyAuthLookupMetrics{}
 	}
+	s.secondaryAuthConfig.mu.Lock()
+	entries, bytes := len(s.secondaryAuthConfig.entries), s.secondaryAuthConfig.bytes
+	s.secondaryAuthConfig.mu.Unlock()
 	return APIKeyAuthLookupMetrics{
-		Total:    s.authLookupTotal.Load(),
-		Rejected: s.authLookupRejected.Load(),
-		InFlight: s.authLookupInFlight.Load(),
-		Capacity: cap(s.authLookupSlots),
+		Total:                 s.authLookupTotal.Load(),
+		Rejected:              s.authLookupRejected.Load(),
+		InFlight:              s.authLookupInFlight.Load(),
+		Capacity:              cap(s.authLookupSlots),
+		Waiting:               len(s.secondaryAuthWaiters),
+		SecondaryConfigLoads:  s.secondaryAuthConfigLoads.Load(),
+		SecondaryStateReads:   s.secondaryAuthStateReads.Load(),
+		SecondaryCacheEntries: entries,
+		SecondaryCacheBytes:   bytes,
 	}
 }
 
@@ -383,6 +402,9 @@ func NewAPIKeyService(
 		lookupConcurrency = cfg.APIKeyAuth.LookupConcurrency
 	}
 	svc.authLookupSlots = make(chan struct{}, lookupConcurrency)
+	if cfg.IsSecondary() {
+		svc.secondaryAuthWaiters = make(chan struct{}, secondaryAuthMaxWaiting)
+	}
 	svc.invalidAuthAbuse = newInvalidAuthAbuseLimiter(cfg)
 	return svc
 }
@@ -783,7 +805,7 @@ func (s *APIKeyService) GetByID(ctx context.Context, id int64) (*APIKey, error) 
 // GetByKey 根据Key字符串获取API Key（用于认证）
 func (s *APIKeyService) GetByKey(ctx context.Context, key string) (*APIKey, error) {
 	if s.cfg.IsSecondary() {
-		return s.GetByKeyUncached(ctx, key)
+		return s.getSecondaryAPIKey(ctx, key)
 	}
 	if s.localAuth != nil {
 		return s.localAuth.GetByKey(ctx, key)

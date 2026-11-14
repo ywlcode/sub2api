@@ -8,15 +8,16 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/apikey"
 	"github.com/Wei-Shaw/sub2api/ent/group"
 	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
-	"github.com/Wei-Shaw/sub2api/ent/user"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 
@@ -25,8 +26,10 @@ import (
 )
 
 type apiKeyRepository struct {
-	client *dbent.Client
-	sql    sqlExecutor
+	client               *dbent.Client
+	sql                  sqlExecutor
+	secondaryAuthStmt    atomic.Pointer[sql.Stmt]
+	secondaryAuthPrepare singleflight.Group
 }
 
 func NewAPIKeyRepository(client *dbent.Client, sqlDB *sql.DB) service.APIKeyRepository {
@@ -139,116 +142,15 @@ func (r *apiKeyRepository) GetByKey(ctx context.Context, key string) (*service.A
 func (r *apiKeyRepository) GetByKeyForAuth(ctx context.Context, key string) (*service.APIKey, error) {
 	m, err := r.activeQuery().
 		Where(apikey.KeyEQ(key)).
-		Select(
-			apikey.FieldID,
-			apikey.FieldUserID,
-			apikey.FieldGroupID,
-			apikey.FieldName,
-			apikey.FieldStatus,
-			apikey.FieldModelMapping,
-			apikey.FieldReasoningEffort,
-			apikey.FieldAllowLongContext,
-			apikey.FieldIPWhitelist,
-			apikey.FieldIPBlacklist,
-			apikey.FieldQuota,
-			apikey.FieldQuotaUsed,
-			apikey.FieldExpiresAt,
-			apikey.FieldRateLimit5h,
-			apikey.FieldConcurrencyLimit,
-			apikey.FieldRateLimit1d,
-			apikey.FieldRateLimit7d,
-		).
+		Select(authKeyColumns...).
 		WithUser(func(q *dbent.UserQuery) {
-			q.Select(
-				user.FieldID,
-				user.FieldEmail,
-				user.FieldUsername,
-				user.FieldStatus,
-				user.FieldRole,
-				user.FieldBalance,
-				user.FieldConcurrency,
-				user.FieldPlatformConcurrencyLimits,
-				user.FieldBalanceNotifyEnabled,
-				user.FieldRestrictPublicGroups,
-				user.FieldBalanceNotifyThresholdType,
-				user.FieldBalanceNotifyThreshold,
-				user.FieldBalanceNotifyExtraEmails,
-				user.FieldTotalRecharged,
-				user.FieldSignupSource,
-				user.FieldLastLoginAt,
-				user.FieldLastActiveAt,
-				user.FieldRpmLimit,
-			)
+			q.Select(authUserColumns...)
 			q.WithAllowedGroups(func(gq *dbent.GroupQuery) {
 				gq.Select(group.FieldID)
 			})
 		}).
 		WithGroup(func(q *dbent.GroupQuery) {
-			q.Select(
-				group.FieldID,
-				group.FieldName,
-				group.FieldPlatform,
-				group.FieldIsExclusive,
-				group.FieldStatus,
-				group.FieldSubscriptionType,
-				group.FieldRateMultiplier,
-				group.FieldDailyLimitUsd,
-				group.FieldWeeklyLimitUsd,
-				group.FieldMonthlyLimitUsd,
-				group.FieldAllowImageGeneration,
-				group.FieldAllowBatchImageGeneration,
-				group.FieldImageCountBilling,
-				group.FieldImageRateIndependent,
-				group.FieldImageRateMultiplier,
-				group.FieldImagePrice1k,
-				group.FieldImagePrice2k,
-				group.FieldImagePrice4k,
-				group.FieldVideoRateIndependent,
-				group.FieldVideoRateMultiplier,
-				group.FieldVideoPrice480p,
-				group.FieldVideoPrice720p,
-				group.FieldVideoPrice1080p,
-				group.FieldVideoModelPrices,
-				group.FieldWebSearchPricePerCall,
-				group.FieldSearchPricePer1k,
-				group.FieldAudioRealtimePricePerMin,
-				group.FieldAudioTtsPricePerMillionChars,
-				group.FieldAudioSttPricePerHour,
-				group.FieldLongContextPricingEnabled,
-				group.FieldModelPricing,
-				group.FieldClaudeCodeOnly,
-				group.FieldFallbackGroupID,
-				group.FieldFallbackGroupIDOnInvalidRequest,
-				group.FieldStreamOnly,
-				group.FieldCodexCliOnly,
-				group.FieldBlockSubagents,
-				group.FieldModelRoutingEnabled,
-				group.FieldModelRouting,
-				group.FieldMcpXMLInject,
-				group.FieldSupportedModelScopes,
-				group.FieldAllowMessagesDispatch,
-				group.FieldAllowLive,
-				group.FieldForceOpenaiFast,
-				group.FieldFreeOpenaiFast,
-				group.FieldDefaultMappedModel,
-				group.FieldMessagesDispatchModelConfig,
-				group.FieldModelAllowlist,
-				group.FieldCodexModelsManifestConfig,
-				group.FieldRpmLimit,
-				group.FieldMaxReasoningEffort,
-				group.FieldMaxReasoningEffortOverLimit,
-				group.FieldReasoningEffortMappings,
-				group.FieldPeakRateEnabled,
-				group.FieldPeakStart,
-				group.FieldPeakEnd,
-				group.FieldPeakRateMultiplier,
-				// 分组利润控制：认证快照是调度门 enable 判定的直接来源，
-				// 漏选会让门静默失效；新增快照分组字段时必须同步本投影，
-				// 集成测试对账兜底。
-				group.FieldProfitControlEnabled,
-				group.FieldProfitMinMargin,
-				group.FieldProfitSafetyBuffer,
-			)
+			q.Select(authGroupColumns...)
 		}).
 		Only(ctx)
 	if err != nil {
