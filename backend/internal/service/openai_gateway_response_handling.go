@@ -943,8 +943,10 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 			// 写入客户端（客户端断开后继续 drain 上游）
 			if !clientDisconnected && !failureDelivered && !suppressCurrentEvent {
 				shouldFlush := queueDrained && (clientOutputStarted || startsClientOutput)
-				if !legacyTTFTObserved && startsVisibleOutput {
-					// 保证首个 token 事件尽快出站，避免影响 TTFT。
+				if startsVisibleOutput && (!legacyTTFTObserved || !clientOutputStarted) {
+					// Empty items can satisfy legacy TTFT before any output is
+					// flushed. Force the first visible event at its blank-line
+					// boundary even when the scanner still has queued lines.
 					shouldFlush = true
 				}
 				eventShouldFlush = eventShouldFlush || shouldFlush
