@@ -2073,7 +2073,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			// Rule rewriting must not suppress credential health handling. Only
 			// a Cyber rejection or an already blocked session bypasses them.
 			cyberHit, _, _ := detectOpenAICyberPolicy(upstreamMessage)
-			if eventType == "error" && (!cyberHit || !clientRuleMatched) && !isOpenAIUpstreamSessionBlocked(upstreamMessage) {
+			if eventType == "error" && !cyberHit && !isOpenAIUpstreamSessionBlocked(upstreamMessage) {
 				eventCtx := openAIWSForwardStreamPhaseContext(openAI429LeaseObservation(ctx, lease), turnOutputStarted, upstreamMessage)
 				modelHandled := s.handleOpenAIWSErrorEventTransientFailure(eventCtx, account, mappedModel, lease.HandshakeHeaders(), upstreamMessage)
 				modelUnavailable = openAIWSModelFailureStatus(account, upstreamMessage) != 0

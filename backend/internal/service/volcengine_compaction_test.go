@@ -163,7 +163,11 @@ func TestVolcengineCompactionRecovery(t *testing.T) {
 						require.Error(t, err)
 						var failover *UpstreamFailoverError
 						require.False(t, errors.As(err, &failover), "recovery must not enter another retry/scheduling loop")
-						require.Contains(t, wire, "did not produce a complete text summary")
+						if scenario == "failed" {
+							require.Contains(t, wire, "Upstream request failed during context compaction")
+						} else {
+							require.Contains(t, wire, "did not produce a complete text summary")
+						}
 						require.NotContains(t, wire, "response.completed")
 						require.NotContains(t, wire, "message_stop")
 						if !stream {
@@ -405,8 +409,13 @@ func TestVolcengineCompactionDoesNotRetryBarePolicyError(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, "https://ark.example/api/v3/responses", bytes.NewReader(body))
 	require.NoError(t, err)
 	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":\"invalid_request_error\",\"message\":\"Invalid request history\"}}\n\n"))}}
-	_, err = accountVolcengineHTTP(upstream, volcengineTestAccount()).Do(req, "", 144, 1)
-	require.Error(t, err)
+	resp, err := accountVolcengineHTTP(upstream, volcengineTestAccount()).Do(req, "", 144, 1)
+	require.NoError(t, err)
+	defer func() { _ = resp.Body.Close() }()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	errorBody, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(errorBody), "invalid_request_error")
 	require.Len(t, upstream.requests, 1)
 }
 

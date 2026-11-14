@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
+
+	"github.com/google/uuid"
 )
 
 // Row keys and table names are validated against a fixed repository allowlist.
@@ -25,39 +28,95 @@ type Event struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
+// Use the HTTP RawMessage encoding, including HTML escaping. Decoding into
+// floats would lose billing precision; hashing raw JSONB would retain whitespace
+// absent from legacy wire receipts. Key order and number spelling stay intact.
+func EventDigest(e Event) string {
+	encoded, err := json.Marshal(e.Payload)
+	if err != nil {
+		return ""
+	}
+	h := sha256.New()
+	_, _ = h.Write([]byte(e.Kind + "\x00"))
+	_, _ = h.Write(encoded)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+func ValidReplicaID(id string) bool {
+	if id == "" {
+		return true
+	} // Upgraded databases retain their legacy namespace.
+	u, err := uuid.Parse(id)
+	return err == nil && u != uuid.Nil && u.String() == id
+}
+
+func (p Peer) StorageID() string {
+	if p.ReplicaID == "" {
+		return p.ID
+	}
+	return p.ID + "@" + p.ReplicaID
+}
+
+func ValidReceiptDigests(ids []int64, digests map[int64]string) bool {
+	if len(ids) != len(digests) {
+		return false
+	}
+	seen := make(map[int64]bool, len(ids))
+	for _, id := range ids {
+		digest := digests[id]
+		if id <= 0 || seen[id] || len(digest) != 64 || strings.ToLower(digest) != digest {
+			return false
+		}
+		seen[id] = true
+		if _, err := hex.DecodeString(digest); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+type ReceiptStore interface {
+	ReplicaID() string
+	PendingReceipts(context.Context) (map[int64]string, error)
+}
+
 type SyncRequest struct {
-	Protocol      int     `json:"protocol"`
-	NodeID        string  `json:"node_id"`
-	Version       string  `json:"version"`
-	Schema        string  `json:"schema"`
-	Events        []Event `json:"events,omitempty"`
-	PendingIDs    []int64 `json:"pending_ids,omitempty"`
-	TargetVersion string  `json:"target_version,omitempty"`
-	Cursor        string  `json:"cursor,omitempty"`
+	ReplicaID      string           `json:"replica_id,omitempty"`
+	PendingDigests map[int64]string `json:"pending_digests,omitempty"`
+	Protocol       int              `json:"protocol"`
+	NodeID         string           `json:"node_id"`
+	Version        string           `json:"version"`
+	Schema         string           `json:"schema"`
+	Events         []Event          `json:"events,omitempty"`
+	PendingIDs     []int64          `json:"pending_ids,omitempty"`
+	TargetVersion  string           `json:"target_version,omitempty"`
+	Cursor         string           `json:"cursor,omitempty"`
 }
 
 type SyncResponse struct {
-	Protocol     int         `json:"protocol"`
-	PrimaryID    string      `json:"primary_id"`
-	NodeID       string      `json:"node_id"`
-	BaseVersion  string      `json:"base_version"`
-	Version      string      `json:"version"`
-	Schema       string      `json:"schema"`
-	Full         bool        `json:"full"`
-	Rows         []Row       `json:"rows"`
-	Acknowledged []int64     `json:"acknowledged"`
-	Rejected     []Rejection `json:"rejected,omitempty"`
-	Cursor       string      `json:"cursor,omitempty"`
+	ReceiptDigests map[int64]string `json:"receipt_digests,omitempty"`
+	Protocol       int              `json:"protocol"`
+	PrimaryID      string           `json:"primary_id"`
+	NodeID         string           `json:"node_id"`
+	BaseVersion    string           `json:"base_version"`
+	Version        string           `json:"version"`
+	Schema         string           `json:"schema"`
+	Full           bool             `json:"full"`
+	Rows           []Row            `json:"rows"`
+	Acknowledged   []int64          `json:"acknowledged"`
+	Rejected       []Rejection      `json:"rejected,omitempty"`
+	Cursor         string           `json:"cursor,omitempty"`
 }
 
 type Snapshot struct {
-	Schema       string
-	Rows         []Row
-	Acknowledged []int64
-	Rejected     []Rejection
-	Version      string
-	Full         bool
-	Cursor       string
+	ReceiptDigests map[int64]string
+	Schema         string
+	Rows           []Row
+	Acknowledged   []int64
+	Rejected       []Rejection
+	Version        string
+	Full           bool
+	Cursor         string
 }
 
 // Store performs all monetary mutations, receipt acknowledgements and replica
@@ -105,15 +164,17 @@ func diffRows(previous, current []Row) []Row {
 
 // Receipt rejections are durable evidence, never silently accepted charges.
 type Rejection struct {
+	Attempts  int    `json:"attempts,omitempty"`
 	ID        int64  `json:"id"`
 	Reason    string `json:"reason"`
 	Retryable bool   `json:"retryable,omitempty"`
 }
 type DeliveryResponse struct {
-	Protocol     int         `json:"protocol"`
-	NodeID       string      `json:"node_id"`
-	Acknowledged []int64     `json:"acknowledged"`
-	Rejected     []Rejection `json:"rejected,omitempty"`
+	ReceiptDigests map[int64]string `json:"receipt_digests,omitempty"`
+	Protocol       int              `json:"protocol"`
+	NodeID         string           `json:"node_id"`
+	Acknowledged   []int64          `json:"acknowledged"`
+	Rejected       []Rejection      `json:"rejected,omitempty"`
 }
 type DeliveryStore interface {
 	Deliver(context.Context, Peer, []Event) (DeliveryResponse, error)

@@ -2,9 +2,7 @@ package repository
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -96,6 +94,9 @@ func (s *SiteStore) ResolveSiteRejection(ctx context.Context, node string, id in
 		}
 		bill, e := s.importEvent(ctx, tx, site.Peer{ID: node}, site.Event{ID: id, Kind: r.Kind, Payload: r.Payload})
 		if e != nil {
+			if !permanentSiteEventError(e) && !retryableSiteEvent(e) {
+				return nil, e
+			}
 			return nil, service.ErrSiteReconciliationBlocked.WithCause(e)
 		}
 		if digest != "" {
@@ -108,13 +109,16 @@ func (s *SiteStore) ResolveSiteRejection(ctx context.Context, node string, id in
 		}
 		action = "settled"
 	} else {
-		digest := sha256.Sum256(append([]byte(r.Kind+"\x00"), r.Payload...))
-		if _, err = tx.ExecContext(ctx, `INSERT INTO site_receipts(node_id,event_id,digest,rejection) VALUES($1,$2,$3,$4) ON CONFLICT(node_id,event_id) DO NOTHING`, node, id, hex.EncodeToString(digest[:]), r.Reason); err != nil {
+		digest := site.EventDigest(site.Event{Kind: r.Kind, Payload: r.Payload})
+		if _, err = tx.ExecContext(ctx, `INSERT INTO site_receipts(node_id,event_id,digest,rejection) VALUES($1,$2,$3,$4) ON CONFLICT(node_id,event_id) DO NOTHING`, node, id, digest, r.Reason); err != nil {
 			return nil, err
 		}
 	}
 	now := time.Now().UTC()
 	if _, err = tx.ExecContext(ctx, `UPDATE site_rejected_events SET state=$3,resolution_note=$4,resolved_at=$5,resolved_by=NULLIF($6,0),updated_at=$5 WHERE node_id=$1 AND event_id=$2`, node, id, action, note, now, actor); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE site_receipts SET rejection='' WHERE node_id=$1 AND event_id=$2`, node, id); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -132,25 +136,36 @@ func (s *SiteStore) ResolveSiteRejection(ctx context.Context, node string, id in
 // authoritative balance so release and payment can never be installed apart.
 func (s *SiteStore) stageSiteSettlements(ctx context.Context, tx *sql.Tx, node string) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO site_projection_stage(table_name,row_key,value)
- SELECT '$settlements',event_id::text,jsonb_build_object('state',state,'note',resolution_note,'at',resolved_at,'by',resolved_by)
- FROM site_rejected_events WHERE node_id=$1 AND state IN ('settled','waived')`, node)
+ SELECT '$settlements',event_id::text,jsonb_build_object('state',q.state,'note',q.resolution_note,'at',q.resolved_at,'by',q.resolved_by,'digest',r.digest)
+ FROM site_rejected_events q JOIN site_receipts r USING(node_id,event_id) WHERE node_id=$1 AND q.state IN ('settled','waived') AND q.confirmed_at IS NULL`, node)
 	return err
 }
 
 func (s *SiteStore) installSiteSettlements(ctx context.Context, tx *sql.Tx, rows []site.Row) error {
 	for _, r := range rows {
-		if r.Table != "$settlements" {
+		if r.Table != "$settlements" || len(r.Value) == 0 {
 			continue
 		}
 		id, err := strconv.ParseInt(r.Key, 10, 64)
 		var settled struct {
-			State string    `json:"state"`
-			Note  string    `json:"note"`
-			At    time.Time `json:"at"`
-			By    *int64    `json:"by"`
+			Digest string    `json:"digest"`
+			State  string    `json:"state"`
+			Note   string    `json:"note"`
+			At     time.Time `json:"at"`
+			By     *int64    `json:"by"`
 		}
 		if err != nil || id <= 0 || json.Unmarshal(r.Value, &settled) != nil || (settled.State != "settled" && settled.State != "waived") || settled.At.IsZero() {
 			return errors.New("invalid site settlement metadata")
+		}
+		if settled.Digest != "" {
+			var event site.Event
+			err := tx.QueryRowContext(ctx, `SELECT event_id,kind,payload FROM (SELECT id event_id,kind,payload FROM site_outbox UNION ALL SELECT event_id,kind,payload FROM site_rejected_events WHERE node_id=$2) b WHERE event_id=$1 LIMIT 1`, id, s.cfg.ID).Scan(&event.ID, &event.Kind, &event.Payload)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if err == nil && site.EventDigest(event) != settled.Digest {
+				continue
+			}
 		}
 		// The resolution can precede a lost upload response. Preserve evidence
 		// directly from outbox before removing it, including deferred bills.
@@ -165,4 +180,30 @@ func (s *SiteStore) installSiteSettlements(ctx context.Context, tx *sql.Tx, rows
 		}
 	}
 	return nil
+}
+
+// A client only echoes a version after its complete snapshot is installed.
+// Retire settlement projections then, retaining operator evidence for 90 days.
+func (s *SiteStore) confirmSiteSettlements(ctx context.Context, conn *sql.Conn, node, version string) error {
+	parts := strings.Split(version, ":")
+	if len(parts) != 2 {
+		return nil
+	}
+	revision, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || revision <= 0 {
+		return nil
+	}
+	_, err = conn.ExecContext(ctx, `UPDATE site_rejected_events q SET confirmed_at=NOW()
+ FROM site_export_nodes n,site_export_rows r WHERE q.node_id=$1 AND n.node_id=q.node_id
+ AND n.epoch=$2 AND n.revision>=$3 AND r.node_id=q.node_id AND r.table_name='$settlements'
+ AND r.row_key=q.event_id::text AND r.revision<=$3 AND r.value IS NOT NULL
+ AND q.state IN ('settled','waived') AND q.confirmed_at IS NULL`, node, parts[0], revision)
+	if err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(ctx, `WITH expired AS (SELECT node_id,event_id FROM site_rejected_events
+ WHERE node_id=$1 AND confirmed_at<NOW()-INTERVAL '90 days' AND state IN ('settled','waived')
+ ORDER BY event_id LIMIT 512 FOR UPDATE SKIP LOCKED)
+ DELETE FROM site_rejected_events q USING expired e WHERE q.node_id=e.node_id AND q.event_id=e.event_id`, node)
+	return err
 }

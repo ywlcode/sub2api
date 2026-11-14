@@ -2,9 +2,7 @@ package repository
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,24 +16,46 @@ import (
 // A delivery transaction is independent of the authorization lease. PostgreSQL
 // serializes a peer across primary instances, including lost-response retries.
 func (s *SiteStore) Deliver(ctx context.Context, p site.Peer, events []site.Event) (site.DeliveryResponse, error) {
-	out := site.DeliveryResponse{Protocol: site.ProtocolVersion, NodeID: p.ID}
+	out := site.DeliveryResponse{Protocol: site.ProtocolVersion, NodeID: p.ID, ReceiptDigests: map[int64]string{}}
+	p.ID, p.ReplicaID = p.StorageID(), ""
+	var billing, diagnostics []site.Event
+	for _, e := range events {
+		if e.Kind == "billing" {
+			billing = append(billing, e)
+		} else {
+			diagnostics = append(diagnostics, e)
+		}
+	}
+	// Commit money independently: a broken diagnostic cannot roll back bills.
+	for _, batch := range [][]site.Event{billing, diagnostics} {
+		if len(batch) == 0 {
+			continue
+		}
+		if err := s.deliverBatch(ctx, p, batch, &out); err != nil {
+			return out, err
+		}
+	}
+	return out, nil
+}
+
+func (s *SiteStore) deliverBatch(ctx context.Context, p site.Peer, events []site.Event, out *site.DeliveryResponse) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return out, err
+		return err
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('site-delivery:'||$1,0))`, p.ID); err != nil {
-		return out, err
+		return err
 	}
-	imported, err := s.importEvents(ctx, tx, p, events, &out)
+	imported, err := s.importEvents(ctx, tx, p, events, out)
 	if err != nil {
-		return out, err
+		return err
 	}
 	if err = tx.Commit(); err != nil {
-		return out, err
+		return err
 	}
 	s.afterSiteImport(ctx, imported)
-	return out, nil
+	return nil
 }
 
 func (s *SiteStore) afterSiteImport(ctx context.Context, events []service.UsageBillingEvent) {
@@ -50,27 +70,42 @@ func (s *SiteStore) afterSiteImport(ctx context.Context, events []service.UsageB
 
 func (s *SiteStore) importEvents(ctx context.Context, tx *sql.Tx, p site.Peer, events []site.Event, out *site.DeliveryResponse) ([]service.UsageBillingEvent, error) {
 	var imported []service.UsageBillingEvent
+	if out.ReceiptDigests == nil {
+		out.ReceiptDigests = map[int64]string{}
+	}
 	for _, e := range events {
+		digest := site.EventDigest(e)
+		out.ReceiptDigests[e.ID] = digest
+		var attempts int
 		var state string
 		var same bool
-		queueErr := tx.QueryRowContext(ctx, `SELECT state,kind=$3 AND payload=$4::jsonb FROM site_rejected_events WHERE node_id=$1 AND event_id=$2`, p.ID, e.ID, e.Kind, string(e.Payload)).Scan(&state, &same)
+		queueErr := tx.QueryRowContext(ctx, `SELECT state,kind=$3 AND payload=$4::jsonb,attempts FROM site_rejected_events WHERE node_id=$1 AND event_id=$2`, p.ID, e.ID, e.Kind, string(e.Payload)).Scan(&state, &same, &attempts)
 		if queueErr != nil && !errors.Is(queueErr, sql.ErrNoRows) {
 			return nil, queueErr
 		}
 		if queueErr == nil && !same {
-			return nil, errors.New("site reconciliation event identity conflict")
+			if err := s.recordSiteEventConflict(ctx, tx, p, e, digest, out); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		if state == "settled" || state == "waived" {
 			out.Acknowledged = append(out.Acknowledged, e.ID)
 			continue
 		}
-		var rejection string
-		err := tx.QueryRowContext(ctx, `SELECT rejection FROM site_receipts WHERE node_id=$1 AND event_id=$2`, p.ID, e.ID).Scan(&rejection)
+		var rejection, existingDigest string
+		err := tx.QueryRowContext(ctx, `SELECT rejection,digest FROM site_receipts WHERE node_id=$1 AND event_id=$2`, p.ID, e.ID).Scan(&rejection, &existingDigest)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
+		if err == nil && existingDigest != digest {
+			if err := s.recordSiteEventConflict(ctx, tx, p, e, digest, out); err != nil {
+				return nil, err
+			}
+			continue
+		}
 		if rejection != "" {
-			out.Rejected = append(out.Rejected, site.Rejection{ID: e.ID, Reason: rejection})
+			out.Rejected = append(out.Rejected, site.Rejection{ID: e.ID, Reason: rejection, Attempts: attempts})
 			continue
 		}
 		if _, err = tx.ExecContext(ctx, `SAVEPOINT site_event`); err != nil {
@@ -78,8 +113,9 @@ func (s *SiteStore) importEvents(ctx context.Context, tx *sql.Tx, p site.Peer, e
 		}
 		bill, err := s.importEvent(ctx, tx, p, e)
 		if err != nil {
-			retryable := retryableSiteEvent(err)
-			if !retryable && !permanentSiteEventError(err) {
+			classifiedRetry := retryableSiteEvent(err) || e.Kind != "billing" && quarantineSiteDiagnostic(err)
+			retryable := classifiedRetry && attempts < 20
+			if !classifiedRetry && !permanentSiteEventError(err) {
 				return nil, err
 			}
 			if _, rollbackErr := tx.ExecContext(ctx, `ROLLBACK TO SAVEPOINT site_event`); rollbackErr != nil {
@@ -89,7 +125,6 @@ func (s *SiteStore) importEvents(ctx context.Context, tx *sql.Tx, p site.Peer, e
 			if len(reason) > 2048 {
 				reason = reason[:2048]
 			}
-			digest := sha256.Sum256(append([]byte(e.Kind+"\x00"), e.Payload...))
 			state := "pending"
 			if retryable {
 				state = "retrying"
@@ -98,12 +133,16 @@ func (s *SiteStore) importEvents(ctx context.Context, tx *sql.Tx, p site.Peer, e
 				return nil, err
 			}
 			if !retryable {
-				if _, err = tx.ExecContext(ctx, `INSERT INTO site_receipts(node_id,event_id,digest,rejection) VALUES($1,$2,$3,$4) ON CONFLICT(node_id,event_id) DO NOTHING`, p.ID, e.ID, hex.EncodeToString(digest[:]), reason); err != nil {
+				if _, err = tx.ExecContext(ctx, `INSERT INTO site_receipts(node_id,event_id,digest,rejection) VALUES($1,$2,$3,$4) ON CONFLICT(node_id,event_id) DO NOTHING`, p.ID, e.ID, digest, reason); err != nil {
 					return nil, err
 				}
 			}
-			out.Rejected = append(out.Rejected, site.Rejection{ID: e.ID, Reason: reason, Retryable: retryable})
-			slog.Error("site event quarantined; reconciliation required", "node", p.ID, "event_id", e.ID, "kind", e.Kind, "reason", reason)
+			out.Rejected = append(out.Rejected, site.Rejection{ID: e.ID, Reason: reason, Retryable: retryable, Attempts: attempts + 1})
+			if retryable {
+				slog.Warn("site event deferred", "node", p.ID, "event_id", e.ID, "attempt", attempts+1, "reason", reason)
+			} else {
+				slog.Error("site event quarantined; reconciliation required", "node", p.ID, "event_id", e.ID, "reason", reason)
+			}
 		} else {
 			if _, err = tx.ExecContext(ctx, `UPDATE site_rejected_events SET state='settled',resolution_note='Imported successfully after retry',resolved_at=NOW(),updated_at=NOW() WHERE node_id=$1 AND event_id=$2 AND state='retrying'`, p.ID, e.ID); err != nil {
 				return nil, err
@@ -154,7 +193,12 @@ func (s *SiteStore) MarkDelivered(ctx context.Context, out site.DeliveryResponse
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err = tx.ExecContext(ctx, `UPDATE site_outbox SET delivered=true WHERE id=ANY($1) AND kind='billing'`, pq.Array(out.Acknowledged)); err != nil {
+	if out.Protocol >= 6 {
+		if err = s.validateLocalReceipts(ctx, tx, out.ReceiptDigests, out.Acknowledged, out.Rejected); err != nil {
+			return err
+		}
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE site_outbox SET delivered=true,delivered_at=COALESCE(delivered_at,NOW()) WHERE id=ANY($1) AND kind='billing'`, pq.Array(out.Acknowledged)); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `DELETE FROM site_outbox WHERE id=ANY($1) AND kind<>'billing'`, pq.Array(out.Acknowledged)); err != nil {
@@ -177,7 +221,7 @@ func (s *SiteStore) quarantineLocal(ctx context.Context, tx *sql.Tx, rejected []
 		if r.Retryable {
 			// No accepted receipt exists. Retain the original debit in outbox
 			// and retry later without occupying the in-flight receipt window.
-			if _, err := tx.ExecContext(ctx, `UPDATE site_outbox SET attempted=false,delivered=false,available_at=NOW()+INTERVAL '30 seconds' WHERE id=$1`, r.ID); err != nil {
+			if _, err := tx.ExecContext(ctx, `UPDATE site_outbox SET attempted=false,delivered=false,delivered_at=NULL,available_at=NOW()+make_interval(secs=>$2) WHERE id=$1`, r.ID, min(900, 30<<min(max(r.Attempts-1, 0), 5))); err != nil {
 				return err
 			}
 		} else if _, err := tx.ExecContext(ctx, `DELETE FROM site_outbox WHERE id=$1`, r.ID); err != nil {
@@ -239,4 +283,27 @@ func (s *SiteStore) PendingCoverage(ctx context.Context) (bool, error) {
 	var more bool
 	err := s.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM site_outbox WHERE kind='billing' AND attempted ORDER BY id OFFSET 4096 LIMIT 1)`).Scan(&more)
 	return !more, err
+}
+
+func quarantineSiteDiagnostic(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var pg *pq.Error
+	if errors.As(err, &pg) {
+		switch pg.Code.Class() {
+		case "08", "40", "53", "57", "58":
+			return false
+		}
+	}
+	return true
+}
+
+func (s *SiteStore) recordSiteEventConflict(ctx context.Context, tx *sql.Tx, p site.Peer, e site.Event, digest string, out *site.DeliveryResponse) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO site_event_conflicts(node_id,event_id,digest,kind,payload) VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT DO NOTHING`, p.ID, e.ID, digest, e.Kind, string(e.Payload)); err != nil {
+		return err
+	}
+	out.Rejected = append(out.Rejected, site.Rejection{ID: e.ID, Reason: "site event identity conflict; original and conflicting evidence retained for reconciliation"})
+	slog.Error("site event identity conflict; other bills continue", "node", p.ID, "event_id", e.ID, "digest", digest)
+	return nil
 }

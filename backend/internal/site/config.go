@@ -15,7 +15,7 @@ const (
 	Secondary       = "secondary"
 	SyncInterval    = 5 * time.Second
 	ReplicaTTL      = time.Minute
-	ProtocolVersion = 5
+	ProtocolVersion = 6
 	SyncPath        = "/internal/sites/sync"
 	DeliveryPath    = "/internal/sites/events"
 )
@@ -32,8 +32,10 @@ type Config struct {
 }
 
 type Peer struct {
-	ID    string `mapstructure:"id" json:"id"`
-	Token string `mapstructure:"token" json:"-"`
+	// ReplicaID is supplied by the authenticated control request, never config.
+	ReplicaID string `mapstructure:"-" json:"-"`
+	ID        string `mapstructure:"id" json:"id"`
+	Token     string `mapstructure:"token" json:"-"`
 	// Account credentials remain maintained on the primary. An override changes
 	// only the base URL used by this peer (e.g. the direct domestic provider URL).
 	BaseURLs map[int64]string `mapstructure:"base_urls" json:"base_urls,omitempty"`

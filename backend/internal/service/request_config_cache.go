@@ -31,12 +31,14 @@ func (e requestConfigEntry[V]) valid(now time.Time) bool {
 // A generation fences both publication and return of an invalidated load. Errors
 // are never cached; cancellation does not keep followers waiting for the leader.
 type requestConfigCache[K comparable, V any] struct {
-	mu       sync.Mutex
-	entries  map[K]requestConfigEntry[V]
-	versions map[K]uint64
-	epoch    uint64
-	bytes    int
-	flight   singleflight.Group
+	mu         sync.Mutex
+	entries    map[K]requestConfigEntry[V]
+	versions   map[K]uint64
+	active     map[K]int
+	generation uint64
+	epoch      uint64
+	bytes      int
+	flight     singleflight.Group
 }
 
 func (c *requestConfigCache[K, V]) invalidate(matches func(K) bool) {
@@ -51,13 +53,15 @@ func (c *requestConfigCache[K, V]) invalidate(matches func(K) bool) {
 	}
 	for key := range c.versions {
 		if matches(key) {
-			c.versions[key]++
+			c.generation++
+			c.versions[key] = c.generation
 		}
 	}
 	for key, entry := range c.entries {
 		if matches(key) {
 			delete(c.entries, key)
 			c.bytes -= entry.cost
+			c.pruneVersion(key)
 		}
 	}
 }
@@ -78,17 +82,21 @@ func (c *requestConfigCache[K, V]) getWithTTL(ctx context.Context, key K, ttl ti
 			c.mu.Unlock()
 			return entry.value, nil
 		}
-		// Keep per-key fences bounded even for failed or oversize loads. A full
-		// reset changes the epoch, so no old loader can reuse a reset version.
-		if _, known := c.versions[key]; !known && len(c.versions) >= 4096 {
-			c.epoch++
-			c.entries, c.versions, c.bytes = nil, nil, 0
-		}
+		// Keep fences only for retained entries or current callers. Failed-key
+		// churn cannot invalidate every cached user, and unique generations prevent
+		// a cancelled, late loader from publishing into a reused key.
 		if c.versions == nil {
 			c.versions = make(map[K]uint64)
 		}
+		if c.active == nil {
+			c.active = make(map[K]int)
+		}
+		if _, known := c.versions[key]; !known {
+			c.generation++
+			c.versions[key] = c.generation
+		}
+		c.active[key]++
 		epoch, version := c.epoch, c.versions[key]
-		c.versions[key] = version
 		c.mu.Unlock()
 		result := c.flight.DoChan(fmt.Sprintf("%d:%d:%v", epoch, version, key), func() (any, error) {
 			c.mu.Lock()
@@ -100,7 +108,15 @@ func (c *requestConfigCache[K, V]) getWithTTL(ctx context.Context, key K, ttl ti
 				c.mu.Unlock()
 				return entry.value, nil
 			}
+			// The bounded shared load also owns a reference. A disconnected
+			// leader must not evict its fence before a healthy follower joins.
+			c.active[key]++
 			c.mu.Unlock()
+			defer func() {
+				c.mu.Lock()
+				c.releaseLookup(key)
+				c.mu.Unlock()
+			}()
 			// A coalesced lookup belongs to all waiters, not the first request.
 			// Preserve tracing/context values, but bound its lifetime independently
 			// so a disconnect or short caller deadline cannot fail healthy peers.
@@ -129,12 +145,14 @@ func (c *requestConfigCache[K, V]) getWithTTL(ctx context.Context, key K, ttl ti
 					if k == key || !e.valid(now) {
 						delete(c.entries, k)
 						c.bytes -= e.cost
+						c.pruneVersion(k)
 					}
 				}
 				for len(c.entries) >= 2048 || c.bytes+cost > 16<<20 {
 					for k, e := range c.entries {
 						delete(c.entries, k)
 						c.bytes -= e.cost
+						c.pruneVersion(k)
 						break
 					}
 				}
@@ -149,14 +167,18 @@ func (c *requestConfigCache[K, V]) getWithTTL(ctx context.Context, key K, ttl ti
 		})
 		select {
 		case <-ctx.Done():
+			c.mu.Lock()
+			c.releaseLookup(key)
+			c.mu.Unlock()
 			return zero, ctx.Err()
 		case r := <-result:
+			c.mu.Lock()
+			unchanged := c.epoch == epoch && c.versions[key] == version
+			c.releaseLookup(key)
+			c.mu.Unlock()
 			if err := ctx.Err(); err != nil {
 				return zero, err
 			}
-			c.mu.Lock()
-			unchanged := c.epoch == epoch && c.versions[key] == version
-			c.mu.Unlock()
 			if !unchanged || errors.Is(r.Err, errRequestConfigChanged) {
 				continue
 			}
@@ -171,4 +193,22 @@ func (c *requestConfigCache[K, V]) getWithTTL(ctx context.Context, key K, ttl ti
 		}
 	}
 	return zero, errRequestConfigChanged
+}
+
+// Called with mu held. Retain a fence while either a waiter or its bounded
+// shared load exists. Invalidation changes generations even after callers leave.
+func (c *requestConfigCache[K, V]) pruneVersion(key K) {
+	if c.active[key] != 0 {
+		return
+	}
+	if _, cached := c.entries[key]; !cached {
+		delete(c.versions, key)
+	}
+}
+func (c *requestConfigCache[K, V]) releaseLookup(key K) {
+	c.active[key]--
+	if c.active[key] == 0 {
+		delete(c.active, key)
+		c.pruneVersion(key)
+	}
 }

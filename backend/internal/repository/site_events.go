@@ -2,9 +2,7 @@ package repository
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -44,7 +42,7 @@ func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, ev
 	if event.ID <= 0 || len(event.Payload) == 0 {
 		return nil, invalidSiteEvent(errors.New("invalid site event"))
 	}
-	digest := sha256.Sum256(append([]byte(event.Kind+"\x00"), event.Payload...))
+	digest := site.EventDigest(event)
 	var existing string
 	err := tx.QueryRowContext(ctx, `SELECT digest FROM site_receipts WHERE node_id=$1 AND event_id=$2`, p.ID, event.ID).Scan(&existing)
 	duplicate := err == nil
@@ -52,7 +50,7 @@ func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, ev
 		return nil, err
 	}
 	if duplicate {
-		if existing != hex.EncodeToString(digest[:]) {
+		if existing != digest {
 			return nil, invalidSiteEvent(errors.New("site event identity conflict"))
 		}
 		return nil, nil // A committed receipt survives deleted owners and old timestamps.
@@ -161,7 +159,7 @@ func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, ev
 		return nil, invalidSiteEvent(errors.New("unknown site event kind"))
 	}
 	if !duplicate {
-		_, err = tx.ExecContext(ctx, `INSERT INTO site_receipts(node_id,event_id,digest) VALUES($1,$2,$3)`, p.ID, event.ID, hex.EncodeToString(digest[:]))
+		_, err = tx.ExecContext(ctx, `INSERT INTO site_receipts(node_id,event_id,digest) VALUES($1,$2,$3)`, p.ID, event.ID, digest)
 		if err != nil {
 			return nil, err
 		}

@@ -1507,6 +1507,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}()
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if result, handled := writeVolcengineCompactionError(c, err, reqStream, originalModel); handled {
+			if headerGuard != nil {
+				headerGuard.close()
+			}
 			result.UpstreamModel, result.BillingModel = upstreamModel, billingModel
 			return result, err
 		}
@@ -1552,6 +1555,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 
 		// Handle error response
+		if resp.StatusCode >= 400 && resp.Request != nil && resp.Request.Context().Value(volcengineCompactionUsageKey{}) != nil {
+			result, forwardErr := s.handleVolcengineCompactionConsumedError(ctx, c, account, resp, reqStream, originalModel, billingModel)
+			result.UpstreamModel = upstreamModel
+			return result, forwardErr
+		}
 		if resp.StatusCode >= 400 {
 			respBody := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()

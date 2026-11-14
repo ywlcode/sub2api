@@ -376,6 +376,16 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 	if !effective.Enabled {
 		return out, nil
 	}
+	// Independent maintenance must still run when a retention setting or another
+	// cleanup step fails. Keep the original cleanup error for the heartbeat.
+	defer func() {
+		if s.channelMonitorSvc != nil && ctx.Err() == nil {
+			if err := s.channelMonitorSvc.RunDailyMaintenance(ctx); err != nil {
+				logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] channel monitor maintenance failed: %v", err)
+			}
+		}
+	}()
+
 	now := time.Now().UTC()
 
 	targets := []opsCleanupTarget{
@@ -431,15 +441,6 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 		out.billingDedupDeleted, err = deleteOldRowsByCTID(ctx, s.db, "usage_billing_dedup_archive", "created_at", now.AddDate(0, 0, -dedupTotalDays), "", opsCleanupBatchSize)
 		if err != nil {
 			return out, err
-		}
-	}
-
-	// Channel monitor 每日维护（聚合昨日明细 + 软删过期明细/聚合）。
-	// 失败只记日志，不影响 ops 清理的成功状态（与 ops 各步骤风格一致）；
-	// 维护本身已经把每步错误打到 slog，heartbeat result 不再分项记录。
-	if s.channelMonitorSvc != nil {
-		if err := s.channelMonitorSvc.RunDailyMaintenance(ctx); err != nil {
-			logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] channel monitor maintenance failed: %v", err)
 		}
 	}
 
