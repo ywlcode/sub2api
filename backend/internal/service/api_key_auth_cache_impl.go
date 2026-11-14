@@ -358,6 +358,12 @@ func (s *APIKeyService) lookupAPIKeyForAuth(ctx context.Context, key string) (*A
 		return nil, err
 	}
 	defer release()
+	if s.cfg.IsSecondary() {
+		readCtx, cancel := context.WithTimeout(ctx, secondaryAuthReadTimeout)
+		defer cancel()
+		apiKey, readErr := lookup(readCtx, key)
+		return apiKey, secondaryAuthReadError(readCtx, readErr)
+	}
 	return lookup(ctx, key)
 }
 

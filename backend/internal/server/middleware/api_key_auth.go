@@ -137,6 +137,10 @@ func apiKeyAuthWithSubscription(apiKeyService *service.APIKeyService, subscripti
 			if abortIfAPIKeyLookupClientGone(c, err) {
 				return
 			}
+			if errors.Is(err, service.ErrAPIKeyAuthUnavailable) {
+				AbortWithError(c, http.StatusServiceUnavailable, "API_KEY_AUTH_UNAVAILABLE", "API key authentication is temporarily unavailable")
+				return
+			}
 			AbortWithError(c, 500, "INTERNAL_ERROR", "Failed to validate API key")
 			return
 		}
