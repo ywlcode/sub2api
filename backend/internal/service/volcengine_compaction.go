@@ -129,6 +129,7 @@ func forwardVolcengineTextCompaction(req *http.Request, body []byte, send func(*
 		retryable, reason, status := true, "upstream connection failed", http.StatusBadGateway
 		var final *apicompat.ResponsesResponse
 		var cyberBody []byte
+		retryHTTP := false
 		if resp != nil && resp.Body != nil {
 			stopClose := context.AfterFunc(ctx, func() { _ = resp.Body.Close() })
 			if err == nil && resp.StatusCode < 400 {
@@ -138,7 +139,13 @@ func forwardVolcengineTextCompaction(req *http.Request, body []byte, send func(*
 				if isCyberPolicyRejection(errorBody) {
 					cyberBody = errorBody
 				}
-				retryable = resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+				retryHTTP = len(cyberBody) == 0 && resp.StatusCode >= 500 && !isOpenAIContextWindowError(extractUpstreamErrorMessage(errorBody), errorBody)
+				if len(cyberBody) == 0 && (!retryHTTP || attempt > 0) {
+					stopClose()
+					_ = resp.Body.Close()
+					return volcengineCompactionHTTPResponse(req, resp, errorBody, total), nil
+				}
+				retryable = retryHTTP
 				reason, status = fmt.Sprintf("upstream HTTP %d", resp.StatusCode), mapUpstreamStatusCode(resp.StatusCode)
 			}
 			stopClose()
@@ -153,6 +160,11 @@ func forwardVolcengineTextCompaction(req *http.Request, body []byte, send func(*
 		if ctx.Err() != nil {
 			return nil, &volcengineCompactionError{reason: "request canceled or deadline exceeded", usage: total, status: http.StatusGatewayTimeout}
 		}
+		if final != nil && final.Error != nil && len(cyberBody) == 0 {
+			payload, _ := json.Marshal(map[string]any{"error": final.Error})
+			resp.StatusCode = openAIStreamFailedEventSemanticStatus(payload, final.Error.Message)
+			return volcengineCompactionHTTPResponse(req, resp, payload, total), nil
+		}
 		if reason == "" && final != nil {
 			final.Usage = total
 			completed, encodeErr := encodeVolcengineCompactionResponse(resp, final, stream)
@@ -164,6 +176,10 @@ func forwardVolcengineTextCompaction(req *http.Request, body []byte, send func(*
 		}
 		if attempt != 0 || !retryable {
 			return nil, &volcengineCompactionError{reason: reason, usage: total, status: status}
+		}
+		if retryHTTP {
+			logger.LegacyPrintf("service.openai_gateway", "volcengine_compaction_retry reason=%s", reason)
+			continue
 		}
 		// Keep history, model, tools, explicit output cap and all other settings.
 		// Only disable thinking for the single recovery attempt.
@@ -320,7 +336,11 @@ func readVolcengineCompactionWithCyber(resp *http.Response, cyberBody *[]byte) (
 			case "response.refusal.delta", "response.refusal.done":
 				return nil, false, "summary refused by upstream"
 			case "error":
-				return nil, openAIStreamErrorEventShouldFailover([]byte(data), extractOpenAISSEErrorMessage([]byte(data))), "upstream rejected the summary request"
+				upstreamError := event.Error
+				if upstreamError == nil {
+					upstreamError = &apicompat.ResponsesError{Code: event.Code, Message: event.Message}
+				}
+				return &apicompat.ResponsesResponse{Status: "failed", Error: upstreamError, Usage: event.Usage}, false, "upstream rejected the summary request"
 			case "response.completed", "response.done", "response.incomplete", "response.failed", "response.cancelled", "response.canceled":
 				terminal, final = event.Type, event.Response
 				if final != nil && final.Usage == nil {
@@ -480,4 +500,53 @@ func writeVolcengineCompactionError(c *gin.Context, err error, stream bool, mode
 		writeResponsesError(c, failure.status, "volcengine_compaction_failed", message)
 	}
 	return result, true
+}
+
+type volcengineCompactionUsageKey struct{}
+
+func volcengineCompactionHTTPResponse(req *http.Request, resp *http.Response, body []byte, usage *apicompat.ResponsesUsage) *http.Response {
+	resp.Body = io.NopCloser(bytes.NewReader(body))
+	resp.ContentLength = int64(len(body))
+	resp.Header = resp.Header.Clone()
+	resp.Header.Del("Content-Length")
+	resp.Header.Set("Content-Type", "application/json")
+	ctx := req.Context()
+	if usage != nil {
+		ctx = context.WithValue(ctx, volcengineCompactionUsageKey{}, usage)
+	}
+	resp.Request = req.Clone(ctx)
+	return resp
+}
+
+// A previous buffered attempt can already have consumed tokens. Settle that
+// usage before returning an error; switching accounts here would lose it under
+// the gateway's result=nil failover contract. The account still receives normal
+// credential/rate-limit side effects so subsequent requests can select another.
+func (s *OpenAIGatewayService) handleVolcengineCompactionConsumedError(ctx context.Context, c *gin.Context, account *Account, resp *http.Response, stream bool, model, billingModel string) (*OpenAIForwardResult, error) {
+	usage, _ := resp.Request.Context().Value(volcengineCompactionUsageKey{}).(*apicompat.ResponsesUsage)
+	body := s.readUpstreamErrorBody(resp)
+	_ = resp.Body.Close()
+	message := sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(body))
+	if !isOpenAIContextWindowError(message, body) {
+		s.handleOpenAIAccountUpstreamError(ctx, account, resp.StatusCode, resp.Header, body, billingModel)
+	}
+	setOpsUpstreamError(c, resp.StatusCode, message, "")
+	status, kind, clientMessage, _ := applyErrorPassthroughRule(c, account.Platform, resp.StatusCode, body, mapUpstreamStatusCode(resp.StatusCode), "upstream_error", "Upstream request failed during context compaction")
+	code := "volcengine_compaction_failed"
+	if isOpenAIContextWindowError(message, body) {
+		status, kind, code = http.StatusBadRequest, "invalid_request_error", "context_length_exceeded"
+		clientMessage = message
+	}
+	result := &OpenAIForwardResult{Model: model, BillingModel: billingModel, Usage: copyOpenAIUsageFromResponsesUsage(usage), ObservedUsageOnError: true, Stream: stream}
+	MarkResponseCommitted(c)
+	if stream {
+		payload, _ := json.Marshal(map[string]any{"error": map[string]any{"type": kind, "code": code, "message": clientMessage}})
+		c.Header("Content-Type", "text/event-stream")
+		c.Writer.Header().Del("Content-Length")
+		_, _ = c.Writer.WriteString(buildOpenAIResponseFailedSSE("", model, time.Now().Unix(), payload, clientMessage))
+		c.Writer.Flush()
+	} else {
+		c.JSON(status, gin.H{"error": gin.H{"type": kind, "code": code, "message": clientMessage}})
+	}
+	return result, fmt.Errorf("volcengine compaction upstream HTTP %d: %s", resp.StatusCode, message)
 }

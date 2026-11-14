@@ -62,6 +62,7 @@ func (s *SiteStore) registerProjectionOn(ctx context.Context, executor interface
 }
 
 func (s *SiteStore) ExportPage(ctx context.Context, p site.Peer, input site.SyncRequest) (site.Snapshot, error) {
+	p.ReplicaID = input.ReplicaID
 	return s.exportRetry(ctx, p, input, nil, true)
 }
 func (s *SiteStore) Export(ctx context.Context, p site.Peer, events []site.Event, ids []int64) (site.Snapshot, error) {
@@ -93,12 +94,16 @@ func (s *SiteStore) projectionConnection(ctx context.Context, node string) (*sql
 }
 
 func (s *SiteStore) exportRetry(ctx context.Context, p site.Peer, input site.SyncRequest, events []site.Event, paged bool) (site.Snapshot, error) {
+	p.ID, p.ReplicaID = p.StorageID(), ""
 	conn, release, err := s.projectionConnection(ctx, p.ID)
 	if err != nil {
 		return site.Snapshot{}, err
 	}
 	defer release()
 	if err := s.registerProjectionOn(ctx, conn, p); err != nil {
+		return site.Snapshot{}, err
+	}
+	if err := s.confirmSiteSettlements(ctx, conn, p.ID, input.Version); err != nil {
 		return site.Snapshot{}, err
 	}
 	// Legacy in-process callers also import outside the export snapshot. Runtime
@@ -122,7 +127,7 @@ func (s *SiteStore) exportRetry(ctx context.Context, p site.Peer, input site.Syn
 }
 
 func (s *SiteStore) exportProjection(ctx context.Context, conn *sql.Conn, p site.Peer, input site.SyncRequest, paged bool) (site.Snapshot, error) {
-	out := site.Snapshot{Schema: s.schema}
+	out := site.Snapshot{Schema: s.schema, ReceiptDigests: map[int64]string{}}
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return out, err
@@ -171,17 +176,21 @@ func (s *SiteStore) exportProjection(ctx context.Context, conn *sql.Conn, p site
 	}
 	// Receipts and monetary rows share the repeatable-read snapshot, including
 	// accepted uploads whose HTTP response was lost.
-	ack, err := tx.QueryContext(ctx, `SELECT r.event_id,CASE WHEN q.state IN ('settled','waived') THEN '' ELSE r.rejection END FROM site_receipts r LEFT JOIN site_rejected_events q USING(node_id,event_id) WHERE r.node_id=$1 AND r.event_id=ANY($2::bigint[]) ORDER BY r.event_id`, p.ID, pq.Array(input.PendingIDs))
+	ack, err := tx.QueryContext(ctx, `SELECT r.event_id,r.digest,CASE WHEN q.state IN ('settled','waived') THEN '' ELSE r.rejection END FROM site_receipts r LEFT JOIN site_rejected_events q USING(node_id,event_id) WHERE r.node_id=$1 AND r.event_id=ANY($2::bigint[]) ORDER BY r.event_id`, p.ID, pq.Array(input.PendingIDs))
 	if err != nil {
 		return out, err
 	}
 	for ack.Next() {
 		var id int64
-		var reason string
-		if err = ack.Scan(&id, &reason); err != nil {
+		var reason, digest string
+		if err = ack.Scan(&id, &digest, &reason); err != nil {
 			_ = ack.Close()
 			return out, err
 		}
+		if input.PendingDigests != nil && input.PendingDigests[id] != digest {
+			continue
+		}
+		out.ReceiptDigests[id] = digest
 		if reason == "" {
 			out.Acknowledged = append(out.Acknowledged, id)
 		} else {
@@ -411,7 +420,7 @@ func (s *SiteStore) refreshProjection(ctx context.Context, tx *sql.Tx, p site.Pe
 	if err = s.stageProjection(ctx, tx, quality); err != nil {
 		return false, err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE site_export_rows r SET value=NULL,revision=$2 WHERE node_id=$1 AND table_name='$quality' AND value IS NOT NULL AND NOT EXISTS(SELECT 1 FROM site_projection_stage s WHERE s.table_name=r.table_name AND s.row_key=r.row_key)`, p.ID, revision)
+	result, err := tx.ExecContext(ctx, `UPDATE site_export_rows r SET value=NULL,revision=$2 WHERE node_id=$1 AND table_name IN ('$quality','$settlements') AND value IS NOT NULL AND (table_name='$quality' OR $3) AND NOT EXISTS(SELECT 1 FROM site_projection_stage s WHERE s.table_name=r.table_name AND s.row_key=r.row_key)`, p.ID, revision, full || dirty["$settlements"] != nil)
 	if err != nil {
 		return false, err
 	}

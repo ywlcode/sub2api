@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/site"
+	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
 
@@ -80,6 +81,7 @@ type SiteStore struct {
 	tables               []siteTable
 	logColumns           map[string][]string
 	schema               string
+	replicaID            string
 	AfterInstall         func(context.Context) error
 	BeforeAuthCommit     func() func()
 	AfterPolicyInstall   func(context.Context, map[string]bool) error
@@ -199,7 +201,7 @@ func (s *SiteStore) bindIdentity(ctx context.Context) error {
 		return err
 	}
 	var mode, id string
-	err = tx.QueryRowContext(ctx, `SELECT mode,node_id FROM site_identity WHERE singleton`).Scan(&mode, &id)
+	err = tx.QueryRowContext(ctx, `SELECT mode,node_id,replica_id FROM site_identity WHERE singleton`).Scan(&mode, &id, &s.replicaID)
 	if err == nil {
 		if mode != s.cfg.EffectiveMode() || id != s.cfg.ID {
 			return errors.New("site database identity mismatch; use an independent database for each site")
@@ -223,14 +225,18 @@ func (s *SiteStore) bindIdentity(ctx context.Context) error {
 			return err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO site_identity(singleton,mode,node_id) VALUES(true,$1,$2)`, s.cfg.EffectiveMode(), s.cfg.ID)
+	if s.cfg.EffectiveMode() == site.Secondary {
+		s.replicaID = uuid.NewString()
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO site_identity(singleton,mode,node_id,replica_id) VALUES(true,$1,$2,$3)`, s.cfg.EffectiveMode(), s.cfg.ID, s.replicaID)
 	if err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func (s *SiteStore) Schema() string { return s.schema }
+func (s *SiteStore) Schema() string    { return s.schema }
+func (s *SiteStore) ReplicaID() string { return s.replicaID }
 
 func (s *SiteStore) Pending(ctx context.Context, limit int) ([]site.Event, error) {
 	return s.pendingDelivery(ctx, limit)
@@ -370,11 +376,19 @@ func (s *SiteStore) Install(ctx context.Context, response site.SyncResponse) err
 	if !response.Full && version != response.BaseVersion {
 		return errors.New("replica diff base mismatch")
 	}
+	if _, err = tx.ExecContext(ctx, `UPDATE site_outbox SET delivered=false,delivered_at=NULL WHERE kind='billing' AND delivered AND delivered_at<now()-interval '2 minutes' AND NOT (id=ANY(COALESCE($1::bigint[],'{}')))`, pq.Array(response.Acknowledged)); err != nil {
+		return err
+	}
 	if !response.Full && len(response.Rows) == 0 && len(response.Acknowledged) == 0 && len(response.Rejected) == 0 {
 		if _, err = tx.ExecContext(ctx, `UPDATE site_identity SET version=$1,primary_id=$2 WHERE singleton`, response.Version, response.PrimaryID); err != nil {
 			return err
 		}
 		return tx.Commit()
+	}
+	if response.Protocol >= 6 {
+		if err = s.validateLocalReceipts(ctx, tx, response.ReceiptDigests, response.Acknowledged, response.Rejected); err != nil {
+			return err
+		}
 	}
 	dirty, changed, previousAccounts, hadPendingBills, err := s.prepareSiteInstall(ctx, tx, response)
 	if err != nil {

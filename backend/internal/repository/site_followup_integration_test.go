@@ -43,6 +43,11 @@ func newSiteFollowupPair(t *testing.T) *siteFollowupPair {
 	require.NoError(t, err)
 	p.local, err = NewSiteStore(replica, &config.Config{Site: site.Config{Mode: site.Secondary, ID: p.peer.ID, Token: p.peer.Token}})
 	require.NoError(t, err)
+	// Exercise the upgraded legacy namespace here. Fresh database identity is
+	// covered separately by TestSiteFreshDatabaseCannotConsumePreviousDatabaseReceipt.
+	_, err = replica.Exec(`UPDATE site_identity SET replica_id=''`)
+	require.NoError(t, err)
+	p.local.replicaID = ""
 	p.sync(t)
 	return p
 }
@@ -52,10 +57,12 @@ func (p *siteFollowupPair) sync(t *testing.T) site.Snapshot {
 	ctx := context.Background()
 	ids, err := p.local.PendingIDs(ctx)
 	require.NoError(t, err)
-	snap, err := p.primary.ExportPage(ctx, p.peer, site.SyncRequest{Version: p.version, PendingIDs: ids})
+	digests, err := p.local.PendingReceipts(ctx)
+	require.NoError(t, err)
+	snap, err := p.primary.ExportPage(ctx, p.peer, site.SyncRequest{Version: p.version, ReplicaID: p.peer.ReplicaID, PendingIDs: ids, PendingDigests: digests})
 	require.NoError(t, err)
 	require.Empty(t, snap.Cursor)
-	require.NoError(t, p.local.Install(ctx, site.SyncResponse{PrimaryID: "main", Full: snap.Full, BaseVersion: p.version, Version: snap.Version, Rows: snap.Rows, Acknowledged: snap.Acknowledged, Rejected: snap.Rejected}))
+	require.NoError(t, p.local.Install(ctx, site.SyncResponse{Protocol: site.ProtocolVersion, ReceiptDigests: snap.ReceiptDigests, PrimaryID: "main", Full: snap.Full, BaseVersion: p.version, Version: snap.Version, Rows: snap.Rows, Acknowledged: snap.Acknowledged, Rejected: snap.Rejected}))
 	p.version = snap.Version
 	return snap
 }
@@ -211,7 +218,7 @@ func TestSiteReconciliationManualSettlementAndWaiver(t *testing.T) {
 	raw, err := json.Marshal(bad)
 	require.NoError(t, err)
 	e.Payload = raw
-	_, err = p.replica.Exec(`UPDATE site_outbox SET payload=$2::jsonb WHERE id=$1`, e.ID, string(raw))
+	err = p.replica.QueryRow(`UPDATE site_outbox SET payload=$2::jsonb WHERE id=$1 RETURNING payload`, e.ID, string(raw)).Scan(&e.Payload)
 	require.NoError(t, err)
 	result, err := p.primary.Deliver(ctx, p.peer, []site.Event{e})
 	require.NoError(t, err)
@@ -249,7 +256,7 @@ func TestSiteReconciliationManualSettlementAndWaiver(t *testing.T) {
 	bad.Usage.CreatedAt = time.Now().Add(time.Hour)
 	e.Payload, err = json.Marshal(bad)
 	require.NoError(t, err)
-	_, err = p.replica.Exec(`UPDATE site_outbox SET payload=$2::jsonb WHERE id=$1`, e.ID, string(e.Payload))
+	err = p.replica.QueryRow(`UPDATE site_outbox SET payload=$2::jsonb WHERE id=$1 RETURNING payload`, e.ID, string(e.Payload)).Scan(&e.Payload)
 	require.NoError(t, err)
 	result, err = p.primary.Deliver(ctx, p.peer, []site.Event{e})
 	require.NoError(t, err)
@@ -273,7 +280,7 @@ func TestSiteDeferredClockBillRetriesWithoutBlockingOthers(t *testing.T) {
 	var err error
 	deferred.Payload, err = json.Marshal(future)
 	require.NoError(t, err)
-	_, err = p.replica.Exec(`UPDATE site_outbox SET payload=$2::jsonb WHERE id=$1`, deferred.ID, string(deferred.Payload))
+	err = p.replica.QueryRow(`UPDATE site_outbox SET payload=$2::jsonb WHERE id=$1 RETURNING payload`, deferred.ID, string(deferred.Payload)).Scan(&deferred.Payload)
 	require.NoError(t, err)
 	r, err := p.primary.Deliver(ctx, p.peer, []site.Event{deferred, good})
 	require.NoError(t, err)
@@ -312,7 +319,7 @@ func TestSiteReconciliationRetriesLegacyRejectedBill(t *testing.T) {
 	// Reproduce a pre-fix permanent rejection after its dependency was repaired.
 	_, err := p.db.Exec(`INSERT INTO site_rejected_events(node_id,event_id,kind,payload,reason) VALUES($1,$2,$3,$4::jsonb,'legacy missing account')`, p.peer.ID, e.ID, e.Kind, string(e.Payload))
 	require.NoError(t, err)
-	_, err = p.db.Exec(`INSERT INTO site_receipts(node_id,event_id,digest,rejection) VALUES($1,$2,'original-wire-digest','legacy missing account')`, p.peer.ID, e.ID)
+	_, err = p.db.Exec(`INSERT INTO site_receipts(node_id,event_id,digest,rejection) VALUES($1,$2,$3,'legacy missing account')`, p.peer.ID, e.ID, site.EventDigest(e))
 	require.NoError(t, err)
 	require.NoError(t, p.local.MarkDelivered(ctx, site.DeliveryResponse{Rejected: []site.Rejection{{ID: e.ID, Reason: "legacy missing account"}}}))
 	_, err = p.primary.ResolveSiteRejection(ctx, p.peer.ID, e.ID, "retry", "Dependency repaired; retry original bill", 1)

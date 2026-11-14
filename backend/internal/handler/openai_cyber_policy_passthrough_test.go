@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/model"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	coderws "github.com/coder/websocket"
@@ -95,4 +97,64 @@ func TestResponsesWebSocketCyberHandshakeStillRecordsAuditAndBlock(t *testing.T)
 	identity := service.ResolveCyberSessionIdentity(harness.apiKey.ID, c, body)
 	require.NotEmpty(t, harness.handler.gatewayService.FindCyberSessionBlockedForIdentityAndBody(ctx, service.PlatformOpenAI, harness.apiKey.ID, identity, body))
 	require.Empty(t, harness.handler.gatewayService.FindCyberSessionBlockedForIdentityAndBody(ctx, service.PlatformDeepseek, harness.apiKey.ID, identity, body))
+}
+
+func TestResponsesWebSocketLaterRetryCyberHandshakeKeepsCurrentSessionIdentity(t *testing.T) {
+	var connections atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if connections.Add(1) > 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":"cyber_policy","message":"retry handshake policy evidence"}}`))
+			return
+		}
+		conn, err := coderws.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.CloseNow() }()
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		defer cancel()
+		if _, _, err = conn.Read(ctx); err != nil {
+			return
+		}
+		if err = conn.Write(ctx, coderws.MessageText, []byte(`{"type":"response.completed","response":{"id":"resp_before_retry","model":"gpt-5.1","status":"completed","usage":{"input_tokens":2,"output_tokens":1}}}`)); err != nil {
+			return
+		}
+		if _, _, err = conn.Read(ctx); err != nil {
+			return
+		}
+		_ = conn.Write(ctx, coderws.MessageText, []byte(`{"type":"error","error":{"code":"rate_limit_exceeded","message":"Rate limit reached"}}`))
+		_, _, _ = conn.Read(ctx)
+	}))
+	defer upstream.Close()
+	harness := newOpenAIWSPassthroughHandlerHarnessWithOptions(t, upstream.URL, nil, map[string]string{service.SettingKeyCyberSessionIdentityStrictEnabled: "true"}, func(a *service.Account, cfg *config.Config, _ *service.HTTPUpstream, repo *service.AccountRepository) {
+		a.Extra["openai_apikey_responses_websockets_v2_mode"] = service.OpenAIWSIngressModeCtxPool
+		cfg.Gateway.MaxAccountSwitches = 1
+		a.Priority = 1
+		other := *a
+		other.ID++
+		other.Priority = 2
+		*repo = &openAIWSFailoverHandlerAccountRepoStub{accounts: []service.Account{*a, other}}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	first := []byte(`{"type":"response.create","model":"gpt-5.1","response":{"client_metadata":{"thread_id":"retry-bound-thread"},"input":"first"}}`)
+	second := []byte(`{"type":"response.create","model":"gpt-5.1","response":{"input":"second turn needs retry"}}`)
+	require.NoError(t, harness.clientConn.Write(ctx, coderws.MessageText, first))
+	_, frame, err := harness.clientConn.Read(ctx)
+	require.NoError(t, err)
+	require.Equal(t, "resp_before_retry", gjson.GetBytes(frame, "response.id").String())
+	require.NoError(t, harness.clientConn.Write(ctx, coderws.MessageText, second))
+	_, frame, err = harness.clientConn.Read(ctx)
+	require.NoError(t, err)
+	require.Contains(t, string(frame), service.CyberPolicyClientMessage)
+	require.NotContains(t, string(frame), "retry handshake policy evidence")
+	require.GreaterOrEqual(t, connections.Load(), int32(2))
+	require.Eventually(t, func() bool { return len(harness.moderationRepo.logSnapshot()) == 1 }, 3*time.Second, 10*time.Millisecond)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	identity := service.ResolveCyberSessionIdentity(harness.apiKey.ID, c, first)
+	require.NotEmpty(t, harness.handler.gatewayService.FindCyberSessionBlockedForIdentityAndBody(ctx, service.PlatformOpenAI, harness.apiKey.ID, identity, second))
+	require.Empty(t, harness.handler.gatewayService.FindCyberSessionBlockedForIdentityAndBody(ctx, service.PlatformDeepseek, harness.apiKey.ID, identity, second))
 }

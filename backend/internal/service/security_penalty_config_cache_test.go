@@ -12,8 +12,34 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/site"
 	"github.com/stretchr/testify/require"
 )
+
+func TestPenaltyConfigSecondaryDoesNotQueryUnreplicatedPolicy(t *testing.T) {
+	for _, mode := range []string{site.Secondary, site.Primary, site.Standalone} {
+		t.Run(mode, func(t *testing.T) {
+			calls := 0
+			failure := errors.New("policy source unavailable")
+			keys := &APIKeyService{cfg: &config.Config{Site: site.Config{Mode: mode}}}
+			penalties := NewSecurityPenaltyService(nil, penaltyConfigSettings{read: func(context.Context) (map[string]string, error) { calls++; return nil, failure }}, keys)
+			cfg, err := keys.SecurityPenaltyConfig(context.Background())
+			if mode != site.Secondary {
+				require.ErrorIs(t, err, failure)
+				require.Equal(t, 1, calls)
+				return
+			}
+			require.NoError(t, err)
+			require.False(t, cfg.Applies(42))
+			admission, err := penalties.Admission(context.Background(), 42, "session")
+			require.NoError(t, err)
+			require.False(t, admission.Blocked)
+			require.Nil(t, admission.TargetGroupID)
+			require.Zero(t, calls)
+		})
+	}
+}
 
 type penaltyConfigSettings struct {
 	SettingRepository

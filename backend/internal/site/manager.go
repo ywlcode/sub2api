@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -151,11 +152,25 @@ func (m *Manager) syncOnce(parent context.Context) error {
 			return err
 		}
 	}
-	ids, err := m.store.PendingIDs(ctx)
+	var ids []int64
+	var err error
+	var digests map[int64]string
+	replicaID := ""
+	if store, ok := m.store.(ReceiptStore); ok {
+		replicaID = store.ReplicaID()
+		digests, err = store.PendingReceipts(ctx)
+		ids = nil
+		for id := range digests {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	} else {
+		ids, err = m.store.PendingIDs(ctx)
+	}
 	if err != nil {
 		return err
 	}
-	input := SyncRequest{Protocol: ProtocolVersion, NodeID: m.cfg.ID, Version: m.version, Schema: m.store.Schema(), PendingIDs: ids}
+	input := SyncRequest{Protocol: ProtocolVersion, NodeID: m.cfg.ID, ReplicaID: replicaID, PendingDigests: digests, Version: m.version, Schema: m.store.Schema(), PendingIDs: ids}
 	if _, modern := m.store.(DeliveryStore); !modern {
 		input.Events, err = m.store.Pending(ctx, 128)
 		if err != nil {
@@ -198,6 +213,11 @@ func (m *Manager) syncOnce(parent context.Context) error {
 	}
 	if err = validateReceipts(ids, output.Acknowledged, output.Rejected, false); err != nil {
 		return err
+	}
+	if digests != nil {
+		if err = validateReceiptProofs(digests, output.ReceiptDigests, output.Acknowledged, output.Rejected); err != nil {
+			return err
+		}
 	}
 	for _, e := range input.Events {
 		found := false
@@ -244,7 +264,7 @@ func (m *Manager) SyncHandler(c *gin.Context) {
 		return
 	}
 	var input SyncRequest
-	if err := decodeSiteRequest(c, &input); err != nil || input.Protocol != ProtocolVersion || input.NodeID != peer.ID || input.Schema != m.store.Schema() || len(input.Events) > 128 || len(input.PendingIDs) > MaxPendingBills {
+	if err := decodeSiteRequest(c, &input); err != nil || input.Protocol != ProtocolVersion || input.NodeID != peer.ID || input.Schema != m.store.Schema() || len(input.Events) > 128 || len(input.PendingIDs) > MaxPendingBills || !ValidReplicaID(input.ReplicaID) || !ValidReceiptDigests(input.PendingIDs, input.PendingDigests) {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
@@ -265,7 +285,7 @@ func (m *Manager) SyncHandler(c *gin.Context) {
 			c.AbortWithStatus(http.StatusServiceUnavailable)
 			return
 		}
-		encodeSiteResponse(c, SyncResponse{Protocol: ProtocolVersion, PrimaryID: m.cfg.ID, NodeID: peer.ID, BaseVersion: input.Version, Version: snapshot.Version, Schema: snapshot.Schema, Full: snapshot.Full, Rows: snapshot.Rows, Acknowledged: snapshot.Acknowledged, Rejected: snapshot.Rejected, Cursor: snapshot.Cursor})
+		encodeSiteResponse(c, SyncResponse{Protocol: ProtocolVersion, PrimaryID: m.cfg.ID, NodeID: peer.ID, BaseVersion: input.Version, Version: snapshot.Version, Schema: snapshot.Schema, Full: snapshot.Full, Rows: snapshot.Rows, Acknowledged: snapshot.Acknowledged, ReceiptDigests: snapshot.ReceiptDigests, Rejected: snapshot.Rejected, Cursor: snapshot.Cursor})
 		return
 	}
 	state := m.peers[peer.ID]

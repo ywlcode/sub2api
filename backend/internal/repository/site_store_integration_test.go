@@ -89,6 +89,7 @@ func TestSiteReplicationBillingRetryPendingOverlayAndRevocation(t *testing.T) {
 	snapshot, err = primary.Export(ctx, peer, nil, nil)
 	require.NoError(t, err)
 	response.Rows = snapshot.Rows
+	response.ReceiptDigests = snapshot.ReceiptDigests
 	require.NoError(t, local.Install(ctx, response))
 	require.NoError(t, localDB.QueryRow(`SELECT status,temp_unschedulable_until IS NULL AND NOT(extra ? 'model_rate_limits') FROM accounts WHERE id=$1`, account.ID).Scan(&status, &blocked))
 	require.Equal(t, "active", status)
@@ -130,6 +131,7 @@ func TestSiteReplicationBillingRetryPendingOverlayAndRevocation(t *testing.T) {
 	require.Equal(t, 1, count)
 	response.Version = "v2"
 	response.Rows = snapshot.Rows
+	response.ReceiptDigests = snapshot.ReceiptDigests
 	response.Acknowledged = []int64{pending[0].ID}
 	require.NoError(t, local.Install(ctx, response))
 	require.NoError(t, localDB.QueryRow(`SELECT balance::text FROM users WHERE id=$1`, user.ID).Scan(&balance))
@@ -142,6 +144,7 @@ func TestSiteReplicationBillingRetryPendingOverlayAndRevocation(t *testing.T) {
 	snapshot, err = primary.Export(ctx, peer, nil, nil)
 	require.NoError(t, err)
 	response.Rows = snapshot.Rows
+	response.ReceiptDigests = snapshot.ReceiptDigests
 	response.Version = "v3"
 	response.Acknowledged = nil
 	require.NoError(t, local.Install(ctx, response))
@@ -175,6 +178,7 @@ func TestSiteReplicationBillingRetryPendingOverlayAndRevocation(t *testing.T) {
 	require.ElementsMatch(t, ids, snapshot.Acknowledged)
 	response.Version = "v4"
 	response.Rows = snapshot.Rows
+	response.ReceiptDigests = snapshot.ReceiptDigests
 	response.Acknowledged = snapshot.Acknowledged
 	require.NoError(t, local.Install(ctx, response))
 	// Simultaneous local settlement and snapshot refresh cannot lose a debit.
@@ -227,6 +231,7 @@ func TestSiteReplicationBillingRetryPendingOverlayAndRevocation(t *testing.T) {
 	require.Equal(t, "original-client-id", clientID)
 	require.Equal(t, 1234, upload)
 	response.Rows, response.Acknowledged = snapshot.Rows, snapshot.Acknowledged
+	response.ReceiptDigests = snapshot.ReceiptDigests
 	require.NoError(t, local.Install(ctx, response))
 	// Revoke an account with one final in-flight bill still pending. Subsequent
 	// heartbeats must not repeatedly add that debit to the retained FK row.

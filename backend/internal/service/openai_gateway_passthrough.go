@@ -1567,6 +1567,9 @@ func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
 	if hit, _, _ := detectOpenAICyberPolicy(payload); hit || isOpenAIUpstreamSessionBlocked(payload) {
 		return http.StatusForbidden
 	}
+	if isUpstreamQuotaError(payload) {
+		return http.StatusTooManyRequests
+	}
 	if isOpenAIContextWindowError(message, payload) {
 		return http.StatusBadRequest
 	}
@@ -1586,14 +1589,14 @@ func openAIStreamFailedEventSemanticStatus(payload []byte, message string) int {
 	switch {
 	case strings.Contains(combined, "rate_limit"):
 		return http.StatusTooManyRequests
-	case strings.Contains(errType, "invalid_request"):
-		return http.StatusBadRequest
 	case strings.Contains(combined, "authentication") || strings.Contains(combined, "unauthorized") || strings.Contains(combined, "invalid_api_key"):
 		return http.StatusUnauthorized
 	case strings.Contains(combined, "permission") || strings.Contains(combined, "forbidden") || strings.Contains(combined, "access denied"):
 		return http.StatusForbidden
 	case isOpenAIUpstreamAccessStateError(message, payload):
 		return http.StatusForbidden
+	case strings.Contains(errType, "invalid_request") || code == "invalid_request_error" || code == "invalid_argument":
+		return http.StatusBadRequest
 	case isOpenAIUpstreamCapacityShedEvent(payload):
 		return http.StatusServiceUnavailable
 	default:
