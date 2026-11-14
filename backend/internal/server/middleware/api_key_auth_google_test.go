@@ -73,6 +73,26 @@ func TestGoogleAPIKeyAuthMarksLookupBulkheadRejection(t *testing.T) {
 	require.Equal(t, IngressRejectAPIKeyAuthOverloaded, reason)
 }
 
+func TestGoogleAPIKeyAuthDatabaseTimeoutIsRetryable(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	repo := fakeAPIKeyRepo{getByKey: func(context.Context, string) (*service.APIKey, error) {
+		return nil, service.ErrAPIKeyAuthUnavailable.WithCause(errors.New("private database lock detail"))
+	}}
+	cfg := &config.Config{RunMode: config.RunModeSimple}
+	svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg)
+	r := gin.New()
+	r.Use(APIKeyAuthGoogle(svc, cfg))
+	r.GET("/v1beta/models", func(c *gin.Context) { t.Error("timed-out auth reached handler") })
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1beta/models", nil)
+	req.Header.Set("x-goog-api-key", "valid-shape")
+	r.ServeHTTP(w, req)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+	require.Contains(t, w.Body.String(), `"code":503`)
+	require.Contains(t, w.Body.String(), "temporarily unavailable")
+	require.NotContains(t, w.Body.String(), "private database lock detail")
+}
+
 type fakeAPIKeyRepo struct {
 	getByKey       func(ctx context.Context, key string) (*service.APIKey, error)
 	updateLastUsed func(ctx context.Context, id int64, usedAt time.Time) error
