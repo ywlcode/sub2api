@@ -14,6 +14,7 @@ import (
 const (
 	secondaryAuthMaxWaiting  = 512
 	secondaryAuthWaitTimeout = 5 * time.Second
+	secondaryAuthReadTimeout = 5 * time.Second
 )
 
 // Optional repository extension: an authoritative local read of identity,
@@ -100,7 +101,10 @@ func (s *APIKeyService) getSecondaryAPIKey(ctx context.Context, key string) (*AP
 		return nil, err
 	}
 	s.secondaryAuthStateReads.Add(1)
-	state, err := reader.GetSecondaryAuthState(ctx, digest)
+	readCtx, cancel := context.WithTimeout(ctx, secondaryAuthReadTimeout)
+	state, err := reader.GetSecondaryAuthState(readCtx, digest)
+	err = secondaryAuthReadError(readCtx, err)
+	cancel()
 	release()
 	if err != nil {
 		return nil, err
@@ -133,6 +137,16 @@ func (s *APIKeyService) getSecondaryAPIKey(ctx context.Context, key string) (*AP
 	}
 	s.compileAPIKeyIPRules(&current)
 	return &current, nil
+}
+
+// A warm cache still needs live balances; replica installation also bypasses
+// the cache. Neither path may wait indefinitely on a database lock. Keep the
+// caller's shorter admission deadline and never serve stale money on timeout.
+func secondaryAuthReadError(ctx context.Context, err error) error {
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return ErrAPIKeyAuthUnavailable.WithCause(err)
+	}
+	return err
 }
 
 // BeginSiteAuthInstall brackets the replica transaction's commit and policy

@@ -638,6 +638,14 @@ func TestAPIKeyAuthMarksOnlyExpectedIngressRejections(t *testing.T) {
 			wantCode:   "INTERNAL_ERROR",
 		},
 		{
+			name:       "secondary database deadline is retryable without exposing database details",
+			path:       "/t",
+			key:        "valid-shape",
+			repoErr:    service.ErrAPIKeyAuthUnavailable.WithCause(errors.New("private database lock detail")),
+			wantStatus: http.StatusServiceUnavailable,
+			wantCode:   "API_KEY_AUTH_UNAVAILABLE",
+		},
+		{
 			name:       "auth lookup bulkhead rejection is an admission rejection",
 			path:       "/t",
 			key:        "valid-shape",
@@ -677,6 +685,7 @@ func TestAPIKeyAuthMarksOnlyExpectedIngressRejections(t *testing.T) {
 
 			require.Equal(t, tt.wantStatus, w.Code)
 			require.Contains(t, w.Body.String(), tt.wantCode)
+			require.NotContains(t, w.Body.String(), "private database lock detail")
 			require.Equal(t, tt.wantReason != "", rejected)
 			require.Equal(t, tt.wantReason, reason)
 		})
