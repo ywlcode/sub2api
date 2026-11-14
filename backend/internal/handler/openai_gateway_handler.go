@@ -3265,12 +3265,14 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 	cyberBlockedThisConn := false
 	cyberBlockPendingAfterFailover := false
 	var cyberTurnBodiesMu sync.Mutex
+	currentCyberIdentity := firstIdentityDecision.effective
 	cyberTurnBodies := map[int]openAIWSCyberTurnContext{1: {
 		body:     append([]byte(nil), firstMessage...),
 		identity: firstIdentityDecision.effective,
 	}}
 	setCyberTurnBody := func(turn int, payload []byte, identity service.CyberSessionIdentityResolution) {
 		cyberTurnBodiesMu.Lock()
+		currentCyberIdentity = identity
 		cyberTurnBodies[turn] = openAIWSCyberTurnContext{
 			body:     append([]byte(nil), payload...),
 			identity: identity,
@@ -4150,6 +4152,12 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			hooks.InitialTurnStartedAt = firstTurnStartedAt
 			hooks.InitialFrameArrivedAt = firstFrameArrivedAt
 			initialDispatchStarted = true
+			// Each ingress attempt starts at turn 1. The previous attempt consumed
+			// its body; retain the current retry frame and trusted conversation identity
+			// for a rejected handshake that never reaches BeforeRequest/AfterTurn.
+			cyberTurnBodiesMu.Lock()
+			cyberTurnBodies[1] = openAIWSCyberTurnContext{body: append([]byte(nil), wsFirstMessage...), identity: currentCyberIdentity}
+			cyberTurnBodiesMu.Unlock()
 			err := h.gatewayService.ProxyResponsesWebSocketFromClient(ctx, c, wsConn, account, token, wsFirstMessage, hooks)
 			// A rejected upstream handshake has no accepted turn and some ingress
 			// modes therefore never invoke AfterTurn. Consume its Cyber evidence

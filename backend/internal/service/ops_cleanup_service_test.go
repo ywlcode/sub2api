@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -9,6 +10,40 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
+
+type cleanupMaintenanceRepo struct {
+	ChannelMonitorRepository
+	steps int
+}
+
+func (r *cleanupMaintenanceRepo) LoadAggregationWatermark(context.Context) (*time.Time, error) {
+	r.steps++
+	now := time.Now().UTC()
+	return &now, nil
+}
+func (r *cleanupMaintenanceRepo) DeleteHistoryBefore(context.Context, time.Time) (int64, error) {
+	r.steps++
+	return 0, nil
+}
+func (r *cleanupMaintenanceRepo) DeleteRollupsBefore(context.Context, time.Time) (int64, error) {
+	r.steps++
+	return 0, nil
+}
+
+func TestOpsCleanupFailureStillRunsIndependentMaintenance(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	failure := errors.New("injected retention cleanup failure")
+	mock.ExpectQuery("SELECT COUNT.*ops_error_logs").WillReturnError(failure)
+	repo := &cleanupMaintenanceRepo{}
+	svc := &OpsCleanupService{db: db, cfg: &config.Config{}, channelMonitorSvc: NewChannelMonitorService(repo, nil)}
+	svc.effective.Enabled = true
+	_, err = svc.runCleanupOnce(context.Background())
+	require.ErrorIs(t, err, failure)
+	require.Equal(t, 3, repo.steps)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 func TestOpsCleanupDisabledDoesNotQueryDatabase(t *testing.T) {
 	db, mock, err := sqlmock.New()

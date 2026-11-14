@@ -60,13 +60,15 @@ func (m *Manager) DeliveryHandler(c *gin.Context) {
 		return
 	}
 	var input SyncRequest
-	if err := decodeSiteRequest(c, &input); err != nil || input.Protocol != ProtocolVersion || input.NodeID != peer.ID || input.Schema != m.store.Schema() || len(input.Events) > DeliveryBatch {
+	if err := decodeSiteRequest(c, &input); err != nil || input.Protocol != ProtocolVersion || input.NodeID != peer.ID || input.Schema != m.store.Schema() || len(input.Events) > DeliveryBatch || !ValidReplicaID(input.ReplicaID) {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
 	defer cancel()
-	output, err := store.Deliver(ctx, *peer, input.Events)
+	storagePeer := *peer
+	storagePeer.ReplicaID = input.ReplicaID
+	output, err := store.Deliver(ctx, storagePeer, input.Events)
 	if err != nil {
 		slog.Warn("site event delivery failed", "node", peer.ID, "error", err)
 		c.AbortWithStatus(http.StatusServiceUnavailable)
@@ -190,6 +192,9 @@ func (m *Manager) deliverOnce(parent context.Context) (bool, error) {
 		return true, nil
 	}
 	input := SyncRequest{Protocol: ProtocolVersion, NodeID: m.cfg.ID, Schema: m.store.Schema(), Events: events}
+	if receipts, ok := m.store.(ReceiptStore); ok {
+		input.ReplicaID = receipts.ReplicaID()
+	}
 	var out DeliveryResponse
 	_, err = m.postSite(parent, DeliveryPath, &input, &out)
 	if err != nil {
@@ -204,6 +209,15 @@ func (m *Manager) deliverOnce(parent context.Context) (bool, error) {
 	}
 	if err = validateReceipts(ids, out.Acknowledged, out.Rejected, true); err != nil {
 		return false, err
+	}
+	if _, ok := m.store.(ReceiptStore); ok {
+		expected := make(map[int64]string, len(input.Events))
+		for _, event := range input.Events {
+			expected[event.ID] = EventDigest(event)
+		}
+		if err = validateReceiptProofs(expected, out.ReceiptDigests, out.Acknowledged, out.Rejected); err != nil {
+			return false, err
+		}
 	}
 	return true, store.MarkDelivered(parent, out)
 }
@@ -267,4 +281,24 @@ func encodeSiteResponse(c *gin.Context, output SyncResponse) {
 	c.Header("Content-Encoding", "gzip")
 	c.Header("Cache-Control", "no-store")
 	c.Data(http.StatusOK, "application/json", packed)
+}
+
+func validateReceiptProofs(expected, received map[int64]string, accepted []int64, rejected []Rejection) error {
+	check := func(id int64) error {
+		if expected[id] == "" || received[id] != expected[id] {
+			return errors.New("site receipt does not match the original event")
+		}
+		return nil
+	}
+	for _, id := range accepted {
+		if err := check(id); err != nil {
+			return err
+		}
+	}
+	for _, r := range rejected {
+		if err := check(r.ID); err != nil {
+			return err
+		}
+	}
+	return nil
 }

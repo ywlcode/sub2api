@@ -80,6 +80,9 @@ func (u *apiKeyHealthUpstream) send(req *http.Request, send func(*http.Request) 
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			observation.once.Do(func() {}) // Neutral, including explicit gateway failure notifications.
 		}
+		if apiKeyHealthFailureStatus(resp.StatusCode) {
+			inspectAPIKeyHealthHTTPFailure(resp, observation)
+		}
 		body := &apiKeyHealthBody{ReadCloser: resp.Body, observation: observation, status: resp.StatusCode,
 			stream: strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream"),
 			json:   strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "json")}
@@ -378,9 +381,15 @@ func (b *apiKeyHealthBody) finish() {
 // Do not infer attribution from arbitrary message substrings. Use protocol
 // error codes/types, including HTTP-200 streaming error envelopes.
 func apiKeyHealthClientErrorJSON(data []byte) bool {
+	if isUpstreamQuotaError(data) {
+		return false
+	}
+	if isCyberPolicyRejection(data) {
+		return true
+	}
 	for _, path := range []string{"error.type", "error.code", "response.error.type", "response.error.code", "type", "code"} {
 		switch strings.ToLower(gjson.GetBytes(data, path).String()) {
-		case "invalid_request_error", "invalid_request", "invalid_argument", "context_length_exceeded", "context_window_exceeded", "max_tokens_exceeded", "content_policy_violation", "content_filter", "rate_limit_error", "rate_limit_exceeded", "insufficient_quota":
+		case "invalid_request_error", "invalid_request", "invalid_argument", "context_length_exceeded", "context_window_exceeded", "max_tokens_exceeded", "content_policy_violation", "content_filter", "rate_limit_error", "rate_limit_exceeded":
 			return true
 		}
 	}
@@ -399,4 +408,54 @@ func (b *apiKeyHealthBody) Close() error {
 		b.finish()
 	})
 	return b.closeErr
+}
+
+// Only failures are prefetched, bounded in size and time. Their classification
+// must not depend on whether a caller reads the error body or just closes it.
+func inspectAPIKeyHealthHTTPFailure(resp *http.Response, o *apiKeyHealthObservation) {
+	if resp.Body == nil {
+		o.record(false, resp.StatusCode, fmtAPIKeyHealthStatus(resp.StatusCode))
+		return
+	}
+	source := resp.Body
+	stop := time.AfterFunc(2*time.Second, func() { _ = source.Close() })
+	prefix, _ := io.ReadAll(io.LimitReader(source, int64(priorityAttemptInspectBytes)))
+	stop.Stop()
+	resp.Body = &apiKeyHealthReplayBody{Reader: io.MultiReader(bytes.NewReader(prefix), source), Closer: source}
+	if explicitAPIKeyHealthClientError(prefix) {
+		o.once.Do(func() {})
+		return
+	}
+	o.record(false, resp.StatusCode, fmtAPIKeyHealthStatus(resp.StatusCode))
+}
+
+type apiKeyHealthReplayBody struct {
+	io.Reader
+	io.Closer
+}
+
+func isUpstreamQuotaError(data []byte) bool {
+	for _, path := range []string{"error.code", "error.type", "response.error.code", "response.error.type", "code", "type"} {
+		switch strings.ToLower(gjson.GetBytes(data, path).String()) {
+		case "insufficient_quota", "quota_exceeded":
+			return true
+		}
+	}
+	return false
+}
+
+func explicitAPIKeyHealthClientError(data []byte) bool {
+	if isUpstreamQuotaError(data) {
+		return false
+	}
+	if isCyberPolicyRejection(data) {
+		return true
+	}
+	for _, path := range []string{"error.code", "error.type", "response.error.code", "response.error.type", "code", "type"} {
+		switch strings.ToLower(gjson.GetBytes(data, path).String()) {
+		case "context_length_exceeded", "context_window_exceeded", "max_tokens_exceeded", "invalid_argument", "content_policy_violation", "content_filter":
+			return true
+		}
+	}
+	return false
 }

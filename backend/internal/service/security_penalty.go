@@ -112,6 +112,12 @@ func (s *SecurityPenaltyService) GetConfig(ctx context.Context) (SecurityPenalty
 	if s == nil {
 		return DefaultSecurityPenaltyConfig(), nil
 	}
+	// Security punishment is deliberately outside the secondary replication
+	// contract. Foreign requests are authorized by the primary; local requests
+	// must not query an absent policy or inherit stale local punishment state.
+	if s.keys != nil && s.keys.cfg.IsSecondary() {
+		return DefaultSecurityPenaltyConfig(), nil
+	}
 	if s.keys == nil || !s.keys.requestConfigCacheReady() {
 		cfg, _, err := s.loadConfig(ctx)
 		return cloneSecurityPenaltyConfig(cfg), err
