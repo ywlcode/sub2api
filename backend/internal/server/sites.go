@@ -45,6 +45,7 @@ func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db 
 		store.ExportPricing = pricing.ExportSitePricing
 		store.InstallPricing = pricing.InstallSitePricing
 		store.AfterInstall = func(ctx context.Context) error { apiKeyService.InvalidateSiteReplica(); return nil }
+		store.BeforeAuthCommit = apiKeyService.BeginSiteAuthInstall
 		store.AfterPolicyInstall = func(ctx context.Context, changed map[string]bool) error {
 			if changed["$full"] || changed["settings"] || changed["$policy"] {
 				if err := settingService.RefreshSiteReplica(ctx); err != nil {

@@ -139,8 +139,9 @@ func (s *ErrorPassthroughService) RefreshSiteReplica(ctx context.Context) error 
 }
 
 // InvalidateSiteReplica is synchronous: no new replica lease is published until
-// policy caches have been invalidated. Auth/billing/scheduler reads on secondary
-// nodes use their local database directly, independently of Redis availability.
+// policy caches have been invalidated. Secondary auth configuration is separately
+// fenced across commit by BeginSiteAuthInstall; money and scheduler state still
+// come from the local database, independently of Redis availability.
 func (s *APIKeyService) InvalidateSiteReplica() {
 	s.applyRequestConfigInvalidation(RequestConfigInvalidationPrefix + "all:0")
 	if p := s.groupAntiDistillation; p != nil {

@@ -81,6 +81,7 @@ type SiteStore struct {
 	logColumns           map[string][]string
 	schema               string
 	AfterInstall         func(context.Context) error
+	BeforeAuthCommit     func() func()
 	AfterPolicyInstall   func(context.Context, map[string]bool) error
 	MapChannelModel      func(int64, string) string
 	AfterImport          func(context.Context, []service.UsageBillingEvent) error
@@ -471,6 +472,12 @@ func (s *SiteStore) Install(ctx context.Context, response site.SyncResponse) err
 	if err != nil {
 		return err
 	}
+	if s.BeforeAuthCommit != nil && siteAuthConfigurationChanged(changed) {
+		finish := s.BeforeAuthCommit()
+		if finish != nil {
+			defer finish()
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return err
 	}
@@ -513,6 +520,15 @@ func (s *SiteStore) Install(ctx context.Context, response site.SyncResponse) err
 		}
 	}
 	return nil
+}
+
+func siteAuthConfigurationChanged(changed map[string]bool) bool {
+	for _, table := range []string{"$full", "users", "api_keys", "groups", "api_key_groups", "user_allowed_groups", "user_group_rate_multipliers"} {
+		if changed[table] {
+			return true
+		}
+	}
+	return false
 }
 
 func quotedColumns(columns []string) string {

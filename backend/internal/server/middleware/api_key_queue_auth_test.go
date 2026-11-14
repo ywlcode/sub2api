@@ -74,6 +74,19 @@ func TestNewAPIKeyQueueAuthRevalidatorRejectsDeletedKey(t *testing.T) {
 	require.Equal(t, "INVALID_API_KEY", infraerrors.Reason(err))
 }
 
+func TestNewAPIKeyQueueAuthRevalidatorPreservesLookupCause(t *testing.T) {
+	key := queueAuthTestKey(service.StatusActive, 1)
+	cause := errors.New("synthetic database timeout")
+	revalidate := newAPIKeyAuthRevalidator(func(context.Context, string) (*service.APIKey, error) {
+		return nil, cause
+	}, key.Key, "", key)
+	_, err := revalidate(context.Background())
+	require.ErrorIs(t, err, cause)
+	require.Equal(t, http.StatusServiceUnavailable, infraerrors.Code(err))
+	require.Equal(t, "API_KEY_AUTH_UNAVAILABLE", infraerrors.Reason(err))
+	require.Equal(t, "API key authentication is temporarily unavailable", infraerrors.Message(err))
+}
+
 func TestNewAPIKeyQueueAuthRevalidatorRejectsGroupChange(t *testing.T) {
 	current := queueAuthTestKey(service.StatusActive, 1)
 	repo := &stubApiKeyRepo{getByKey: func(context.Context, string) (*service.APIKey, error) {

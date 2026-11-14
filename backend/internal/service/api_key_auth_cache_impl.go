@@ -325,6 +325,12 @@ func (s *APIKeyService) loadAuthCacheEntry(ctx context.Context, key, cacheKey st
 
 // loadUserGroupDeniedModels 把 (user, group) 禁用模型填到 apiKey.User 上，随认证快照一起缓存。
 func (s *APIKeyService) loadUserGroupDeniedModels(ctx context.Context, apiKey *APIKey) error {
+	if s.cfg.IsSecondary() {
+		if _, combined := s.apiKeyRepo.(secondaryAuthRepository); combined {
+			// Already read in the same statement as identity and balances.
+			return nil
+		}
+	}
 	if apiKey == nil || apiKey.User == nil || apiKey.GroupID == nil || *apiKey.GroupID <= 0 || s.userGroupRateRepo == nil {
 		return nil
 	}
@@ -340,27 +346,19 @@ func (s *APIKeyService) lookupAPIKeyForAuth(ctx context.Context, key string) (*A
 	if s == nil || s.apiKeyRepo == nil {
 		return nil, ErrAPIKeyNotFound
 	}
+	lookup := s.apiKeyRepo.GetByKeyForAuth
 	if s.cfg.IsSecondary() {
 		key = site.KeyDigest(s.cfg.Site.Token, key)
+		if repo, ok := s.apiKeyRepo.(secondaryAuthRepository); ok {
+			lookup = repo.GetByKeyForSecondaryAuth
+		}
 	}
-	if s.authLookupSlots == nil {
-		return s.apiKeyRepo.GetByKeyForAuth(ctx, key)
+	release, err := s.beginAuthLookup(ctx)
+	if err != nil {
+		return nil, err
 	}
-	s.authLookupTotal.Add(1)
-	select {
-	case s.authLookupSlots <- struct{}{}:
-		s.authLookupInFlight.Add(1)
-		defer func() {
-			s.authLookupInFlight.Add(-1)
-			<-s.authLookupSlots
-		}()
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	default:
-		s.authLookupRejected.Add(1)
-		return nil, ErrAPIKeyAuthOverloaded
-	}
-	return s.apiKeyRepo.GetByKeyForAuth(ctx, key)
+	defer release()
+	return lookup(ctx, key)
 }
 
 func (s *APIKeyService) applyAuthCacheEntry(key string, entry *APIKeyAuthCacheEntry) (*APIKey, bool, error) {
