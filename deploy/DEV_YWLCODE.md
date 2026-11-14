@@ -150,6 +150,29 @@ git push --force-with-lease="refs/heads/dev-ywlcode:${ywlcode_remote_before}" or
 
 构建前先提交所有应包含的源码，确认位于 `dev-ywlcode` 且工作区干净。镜像标签、程序版本和 revision 都绑定实际构建提交，避免浮动的 `latest` 或仅有分支名的标签。
 
+### 本机 10800 代理依赖 Wi-Fi
+
+开发机的 `127.0.0.1:10800` 是本机代理入口，只有开发机已连接可用 Wi-Fi 时，才能沿该网络路径访问代理外部的服务器。Wi-Fi 断开时，10800 的本地监听可能仍存在，但通过它连接服务器会超时；以太网、Docker 网桥或能直接 SSH 到服务器，都不能证明 10800 代理链路可用。
+
+上传前检查 Wi-Fi 设备状态和本地监听：
+
+```bash
+nmcli -t -f DEVICE,TYPE,STATE device status | awk -F: '$2 == "wifi" { print $1 ": " $3 }'
+ss -ltn '( sport = :10800 )'
+```
+
+前一条必须显示一个已连接的 Wi-Fi 设备。后一条只验证本地端口在监听，不代表代理能连到目标服务器。使用 10800 SOCKS5 路径时，用实际部署 SSH 命令对两台目标机分别做认证前连通性探测：
+
+```bash
+for ywlcode_host in ecosserver boscserver; do
+  ssh -o BatchMode=yes -o ConnectTimeout=10 \
+    -o 'ProxyCommand=nc -X 5 -x 127.0.0.1:10800 %h %p' \
+    "$ywlcode_host" 'printf deploy-proxy-ok' || exit 1
+done
+```
+
+只有两台服务器都返回 `deploy-proxy-ok` 才通过代理继续上传。Wi-Fi 未连接或任一探测失败时，先恢复 Wi-Fi／本机代理链路后再测试；不要在上传命令中循环重试，也不要仅因 10800 本地端口可连接而继续。若本机代理客户端使用不同协议或本次选择直连，必须按该连接方式单独验证目标可达性。
+
 ```bash
 git switch dev-ywlcode
 git status --short --branch
