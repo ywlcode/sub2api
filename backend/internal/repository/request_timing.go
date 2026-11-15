@@ -33,34 +33,22 @@ func (r *usageLogRepository) RecordRequestTiming(ctx context.Context, requestID 
 		}
 	})
 }
+
+// OpsCleanupService owns timing-detail retention, including orphaned details.
+// Keep maintenance off this writer so it can continuously drain diagnostics.
 func (r *usageLogRepository) runTimingWriter() {
-	ticker := time.NewTicker(time.Hour)
-	defer ticker.Stop()
-	for {
-		select {
-		case job := <-r.timingQueue:
-			// All errors remain diagnostic-only. A short bounded retry handles transient
-			// SQL failures; it never retries billing or a model request.
-			for attempt := 0; attempt < 3; attempt++ {
-				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				err := r.writeTiming(ctx, job)
-				cancel()
-				if err == nil {
-					break
-				}
-				if attempt == 2 {
-					logger.LegacyPrintf("request_timing", "detail persistence failed: %v", err)
-				}
-			}
-		case <-ticker.C:
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_, err := r.db.ExecContext(ctx, `DELETE FROM request_timing_details WHERE (usage_log_id,trace_id) IN (
-   SELECT d.usage_log_id,d.trace_id FROM request_timing_details d
-   WHERE NOT EXISTS (SELECT 1 FROM usage_logs u WHERE u.id=d.usage_log_id)
-   LIMIT 10000)`)
+	for job := range r.timingQueue {
+		// All errors remain diagnostic-only. A short bounded retry handles transient
+		// SQL failures; it never retries billing or a model request.
+		for attempt := 0; attempt < 3; attempt++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			err := r.writeTiming(ctx, job)
 			cancel()
-			if err != nil {
-				logger.LegacyPrintf("request_timing", "detail retention failed: %v", err)
+			if err == nil {
+				break
+			}
+			if attempt == 2 {
+				logger.LegacyPrintf("request_timing", "detail persistence failed: %v", err)
 			}
 		}
 	}

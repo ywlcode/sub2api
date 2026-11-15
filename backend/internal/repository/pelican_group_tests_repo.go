@@ -184,10 +184,9 @@ func (r *pelicanGroupTestRepository) PruneResults(ctx context.Context, planID in
 	return err
 }
 
-// PruneExpiredResults runs every minute; bounded batches keep each transaction short.
+// PruneExpiredResults drains expired history in bounded transactions.
 func (r *pelicanGroupTestRepository) PruneExpiredResults(ctx context.Context, before time.Time) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM pelican_group_test_results WHERE id IN (
- SELECT id FROM pelican_group_test_results WHERE created_at < $1 LIMIT 1000)`, before)
+	_, err := deleteHistoryBatches(ctx, r.db, "pelican_group_test_results", "created_at", "", before)
 	return err
 }
 

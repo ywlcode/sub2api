@@ -229,9 +229,8 @@ func TestDashboardAggregationService_CleanupRetentionFailure_DoesNotRecord(t *te
 		},
 	}
 
-	svc.maybeCleanupRetention(context.Background(), time.Now().UTC())
+	require.Error(t, svc.RunRetention(context.Background(), time.Now().UTC()))
 
-	require.Nil(t, svc.lastRetentionCleanup.Load())
 	require.Equal(t, 1, repo.cleanupUsageCalls)
 	require.Zero(t, repo.cleanupDedupCalls)
 }
@@ -250,9 +249,8 @@ func TestDashboardAggregationService_CleanupUsageFailure_DoesNotRecord(t *testin
 		},
 	}
 
-	svc.maybeCleanupRetention(context.Background(), time.Now().UTC())
+	require.Error(t, svc.RunRetention(context.Background(), time.Now().UTC()))
 
-	require.Nil(t, svc.lastRetentionCleanup.Load())
 	require.Equal(t, 1, repo.cleanupUsageCalls)
 	require.Zero(t, repo.cleanupDedupCalls)
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 )
@@ -90,9 +91,12 @@ func TestRuntimeRoleKeepsLocalAuditWritesAndGatesSharedRetention(t *testing.T) {
 			repo := &roleMatrixAuditRepository{written: make(chan []*AuditLog, 1)}
 			svc := ProvideAuditLogService(repo, nil, cfg)
 			defer svc.Stop()
-			retentionNotStarted := false
-			svc.retentionOnce.Do(func() { retentionNotStarted = true })
-			require.Equal(t, role == config.RuntimeRoleGateway, retentionNotStarted)
+			db, _, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			cleanup := ProvideOpsCleanupService(&roleMatrixOpsRepository{}, db, cfg, nil, nil, nil, nil, svc, nil, nil, nil, nil, nil, nil)
+			defer cleanup.Stop()
+			require.Equal(t, role != config.RuntimeRoleGateway, cleanup.started)
 			svc.Record(&AuditLog{Action: "role_matrix.audit"})
 			svc.Stop()
 			select {
@@ -105,3 +109,5 @@ func TestRuntimeRoleKeepsLocalAuditWritesAndGatesSharedRetention(t *testing.T) {
 		})
 	}
 }
+
+type roleMatrixOpsRepository struct{ OpsRepository }

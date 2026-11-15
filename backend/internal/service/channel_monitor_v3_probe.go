@@ -201,8 +201,7 @@ type ChannelMonitorV3Prober struct {
 	settings channelMonitorRuntimeReader
 	now      func() time.Time
 
-	tick     sync.Mutex
-	prunedAt time.Time
+	tick sync.Mutex
 
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -261,7 +260,6 @@ func (p *ChannelMonitorV3Prober) RunDue(ctx context.Context, now time.Time) {
 		logger.LegacyPrintf("service.channel_monitor_v3", "idle probe config failed: %v", err)
 		return
 	}
-	p.prune(ctx, cfg.AvailabilityRange, now)
 	if !cfg.IdleProbe.Enabled || len(cfg.IdleProbe.Groups) == 0 || p.settings == nil || !p.settings.GetChannelMonitorRuntime(ctx).V3Active() {
 		return
 	}
@@ -312,14 +310,16 @@ func (p *ChannelMonitorV3Prober) RunDue(ctx context.Context, now time.Time) {
 	wg.Wait()
 }
 
-func (p *ChannelMonitorV3Prober) prune(ctx context.Context, availabilityRange string, now time.Time) {
-	if !p.prunedAt.IsZero() && now.Sub(p.prunedAt) < time.Hour {
-		return
+// RunRetention is scheduled by the common daily history cleanup.
+func (p *ChannelMonitorV3Prober) RunRetention(ctx context.Context, now time.Time) error {
+	if p == nil || p.repo == nil {
+		return nil
 	}
-	p.prunedAt = now
-	if err := p.repo.PruneProbes(ctx, now.Add(-channelMonitorV3ProbeRetention(availabilityRange))); err != nil {
-		logger.LegacyPrintf("service.channel_monitor_v3", "idle probe retention failed: %v", err)
+	cfg, err := p.repo.GetConfig(ctx)
+	if err != nil {
+		return err
 	}
+	return p.repo.PruneProbes(ctx, now.Add(-channelMonitorV3ProbeRetention(cfg.AvailabilityRange)))
 }
 
 func (p *ChannelMonitorV3Prober) runOne(ctx context.Context, target channelMonitorV3ProbeTarget, slot time.Time, slotMinutes int) {

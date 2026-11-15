@@ -37,7 +37,7 @@ func TestRequestLogRetention_RuntimePolicy(t *testing.T) {
 			}})
 			svc.settingRepo = settings
 			now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-			svc.maybeCleanupRetention(context.Background(), now)
+			require.NoError(t, svc.RunRetention(context.Background(), now))
 			if tt.wantCleanup {
 				require.Equal(t, 1, repo.cleanupUsageCalls)
 				require.Equal(t, GroupUsageTodayStart(now.AddDate(0, 0, -tt.wantDays)), repo.cleanupUsageCutoff)
@@ -50,8 +50,8 @@ func TestRequestLogRetention_RuntimePolicy(t *testing.T) {
 			}
 			// Read the updated policy at the next rolling cleanup.
 			settings.values[SettingKeyOpsRuntimeLogConfig] = `{"request_retention_days":180}`
-			next := now.Add(dashboardAggregationRetentionInterval)
-			svc.maybeCleanupRetention(context.Background(), next)
+			next := now.Add(24 * time.Hour)
+			require.NoError(t, svc.RunRetention(context.Background(), next))
 			require.Equal(t, GroupUsageTodayStart(next.AddDate(0, 0, -180)), repo.cleanupUsageCutoff)
 		})
 	}
@@ -63,16 +63,14 @@ func TestRequestLogRetention_ReadFailureSkipsDeletion(t *testing.T) {
 		settings.values[SettingKeyOpsRuntimeLogConfig] = raw
 		repo := &dashboardAggregationRepoTestStub{}
 		svc := &DashboardAggregationService{repo: repo, settingRepo: settings}
-		svc.runScheduledRetention()
+		require.Error(t, svc.RunRetention(context.Background(), time.Now()))
 		require.Zero(t, repo.cleanupUsageCalls)
 		require.Zero(t, repo.cleanupDedupCalls)
-		require.Nil(t, svc.lastRetentionCleanup.Load())
 	}
 	settings := newRuntimeSettingRepoStub()
 	settings.getValueFn = func(string) (string, error) { return "", errors.New("database unavailable") }
 	svc := &DashboardAggregationService{repo: &dashboardAggregationRepoTestStub{}, settingRepo: settings}
-	svc.runScheduledRetention()
-	require.Nil(t, svc.lastRetentionCleanup.Load())
+	require.Error(t, svc.RunRetention(context.Background(), time.Now()))
 }
 
 func TestRuntimeLogConfig_RequestRetentionCompatibility(t *testing.T) {
@@ -129,7 +127,7 @@ func TestRequestLogRetention_CutoffAlignsToConfiguredDayStart(t *testing.T) {
 				Retention: config.DashboardAggregationRetentionConfig{UsageLogsDays: 90, UsageBillingDedupDays: tt.dedupDays, HourlyDays: 180, DailyDays: 730},
 			}})
 			now := time.Date(2026, 9, 15, 12, 0, 0, 0, time.UTC)
-			svc.maybeCleanupRetentionInLocation(context.Background(), now, loc)
+			require.NoError(t, svc.runRetentionInLocation(context.Background(), now, loc))
 
 			require.Equal(t, time.Date(2026, 6, 16, 16, 0, 0, 0, time.UTC), repo.cleanupUsageCutoff)
 			require.Zero(t, repo.cleanupDedupCalls)
@@ -159,11 +157,10 @@ func TestDashboardRetentionDoesNotOverrideOpsDedupPolicy(t *testing.T) {
 			},
 		}}
 		now := time.Now().UTC()
-		svc.maybeCleanupRetention(context.Background(), now)
+		require.NoError(t, svc.RunRetention(context.Background(), now))
 		require.Zero(t, repo.cleanupDedupCalls, "dashboard must not bypass the Ops retention policy or switch")
 		require.Equal(t, 1, repo.cleanupUsageCalls)
 		require.Equal(t, 1, repo.cleanupAggregateCalls)
-		require.Equal(t, now, svc.lastRetentionCleanup.Load())
 	}
 }
 

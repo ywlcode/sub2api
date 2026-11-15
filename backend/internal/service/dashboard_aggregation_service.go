@@ -19,7 +19,6 @@ import (
 const (
 	defaultDashboardAggregationTimeout         = 2 * time.Minute
 	defaultDashboardAggregationBackfillTimeout = 30 * time.Minute
-	dashboardAggregationRetentionInterval      = 6 * time.Hour
 
 	// dashboardAggregationLeaderLockKey 保证多副本部署中每个周期只有一个实例执行聚合。
 	dashboardAggregationLeaderLockKey = "dashboard:aggregation:leader"
@@ -55,12 +54,11 @@ type DashboardAggregationRepository interface {
 
 // DashboardAggregationService 负责定时聚合与回填。
 type DashboardAggregationService struct {
-	repo                 DashboardAggregationRepository
-	timingWheel          *TimingWheelService
-	cfg                  config.DashboardAggregationConfig
-	settingRepo          SettingRepository
-	running              int32
-	lastRetentionCleanup atomic.Value // time.Time
+	repo        DashboardAggregationRepository
+	timingWheel *TimingWheelService
+	cfg         config.DashboardAggregationConfig
+	settingRepo SettingRepository
+	running     int32
 
 	lockCache  LeaderLockCache
 	db         *sql.DB
@@ -99,8 +97,6 @@ func (s *DashboardAggregationService) Start() {
 	}
 	if !s.cfg.Enabled {
 		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合作业已禁用")
-		// Explicit runtime retention remains available without dashboard aggregation.
-		s.timingWheel.ScheduleRecurring("dashboard:retention", time.Minute, s.runScheduledRetention)
 		return
 	}
 	go s.runStartupGroupUsageSync()
@@ -276,7 +272,6 @@ func (s *DashboardAggregationService) runScheduledAggregation() {
 		"watermark_updated", updateErr == nil,
 	)
 
-	s.maybeCleanupRetention(ctx, now)
 }
 
 func (s *DashboardAggregationService) runScheduledGroupUsageSync() {
@@ -344,7 +339,6 @@ func (s *DashboardAggregationService) backfillRange(ctx context.Context, start, 
 		updateErr == nil,
 	)
 
-	s.maybeCleanupRetention(ctx, endUTC)
 	return nil
 }
 
@@ -358,47 +352,41 @@ func (s *DashboardAggregationService) aggregateRange(ctx context.Context, start,
 	return s.repo.AggregateRange(ctx, start, end)
 }
 
-func (s *DashboardAggregationService) maybeCleanupRetention(ctx context.Context, now time.Time) {
-	s.maybeCleanupRetentionInLocation(ctx, now, timezone.Location())
+// RunRetention is called only by the shared daily cleanup job. Aggregation and
+// backfills must not independently delete history or bypass the cleanup switch.
+func (s *DashboardAggregationService) RunRetention(ctx context.Context, now time.Time) error {
+	return s.runRetentionInLocation(ctx, now, timezone.Location())
 }
 
-func (s *DashboardAggregationService) maybeCleanupRetentionInLocation(ctx context.Context, now time.Time, loc *time.Location) {
-	lastAny := s.lastRetentionCleanup.Load()
-	if lastAny != nil {
-		if last, ok := lastAny.(time.Time); ok && now.Sub(last) < dashboardAggregationRetentionInterval {
-			return
-		}
+func (s *DashboardAggregationService) runRetentionInLocation(ctx context.Context, now time.Time, loc *time.Location) error {
+	if s == nil || s.repo == nil {
+		return nil
 	}
-
+	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
+		return errRetentionBusy
+	}
+	defer atomic.StoreInt32(&s.running, 0)
+	release, ok := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, dashboardAggregationLeaderLockKey, s.instanceID, dashboardAggregationLeaderLockTTL)
+	if !ok {
+		return errRetentionBusy
+	}
+	defer release()
 	usageDays, err := s.requestRetentionDays(ctx)
 	if err != nil {
-		// Never fall back to a shorter window after a settings read failure.
-		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 读取日志保留设置失败，跳过清理: %v", err)
-		return
+		return fmt.Errorf("read request retention: %w", err)
 	}
-	hourlyCutoff := now.AddDate(0, 0, -s.cfg.Retention.HourlyDays)
-	dailyCutoff := now.AddDate(0, 0, -s.cfg.Retention.DailyDays)
-	// usage_logs 按服务端配置时区整日保留，与分组日桶的日界对齐。
-	usageCutoff := groupUsageTodayStartInLocation(now.AddDate(0, 0, -usageDays), loc)
-	// OpsCleanupService exclusively owns dedup hot/archive retention and its
-	// enable switch. A second YAML-driven worker could archive rows earlier
-	// than the admin policy, including when that policy disables cleanup.
-	var aggErr, usageErr error
+	var failures []error
 	if s.cfg.Enabled {
-		aggErr = s.repo.CleanupAggregates(ctx, hourlyCutoff, dailyCutoff)
+		if err := s.repo.CleanupAggregates(ctx, now.AddDate(0, 0, -s.cfg.Retention.HourlyDays), now.AddDate(0, 0, -s.cfg.Retention.DailyDays)); err != nil {
+			failures = append(failures, fmt.Errorf("dashboard aggregates: %w", err))
+		}
 	}
-	if aggErr != nil {
-		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] 聚合保留清理失败: %v", aggErr)
+	if usageDays > 0 && ctx.Err() == nil {
+		if err := s.repo.CleanupUsageLogs(ctx, groupUsageTodayStartInLocation(now.AddDate(0, 0, -usageDays), loc)); err != nil {
+			failures = append(failures, fmt.Errorf("usage logs: %w", err))
+		}
 	}
-	if usageDays > 0 {
-		usageErr = s.repo.CleanupUsageLogs(ctx, usageCutoff)
-	}
-	if usageErr != nil {
-		logger.LegacyPrintf("service.dashboard_aggregation", "[DashboardAggregation] usage_logs 保留清理失败: %v", usageErr)
-	}
-	if aggErr == nil && usageErr == nil {
-		s.lastRetentionCleanup.Store(now)
-	}
+	return errors.Join(append(failures, ctx.Err())...)
 }
 
 func (s *DashboardAggregationService) requestRetentionDays(ctx context.Context) (int, error) {
@@ -429,21 +417,6 @@ func (s *DashboardAggregationService) requestRetentionDays(ctx context.Context) 
 		}
 	}
 	return days, nil
-}
-
-func (s *DashboardAggregationService) runScheduledRetention() {
-	if !atomic.CompareAndSwapInt32(&s.running, 0, 1) {
-		return
-	}
-	defer atomic.StoreInt32(&s.running, 0)
-	ctx, cancel := context.WithTimeout(context.Background(), defaultDashboardAggregationTimeout)
-	defer cancel()
-	release, ok := tryAcquireSingletonLeaderLock(ctx, s.lockCache, s.db, dashboardAggregationLeaderLockKey, s.instanceID, dashboardAggregationLeaderLockTTL)
-	if !ok {
-		return
-	}
-	defer release()
-	s.maybeCleanupRetention(ctx, time.Now().UTC())
 }
 
 func truncateToDayUTC(t time.Time) time.Time {

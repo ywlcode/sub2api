@@ -238,23 +238,15 @@ func (r *contentModerationRepository) CleanupExpiredLogs(ctx context.Context, hi
 	if r == nil || r.db == nil {
 		return result, nil
 	}
-	hitExec, err := r.db.ExecContext(ctx, `
-DELETE FROM content_moderation_logs
-WHERE flagged = TRUE AND created_at < $1
-`, hitBefore)
+	var err error
+	result.DeletedHit, err = deleteHistoryBatches(ctx, r.db, "content_moderation_logs", "created_at", "AND flagged = TRUE", hitBefore)
 	if err != nil {
 		return nil, fmt.Errorf("delete expired hit content moderation logs: %w", err)
 	}
-	result.DeletedHit, _ = hitExec.RowsAffected()
-
-	nonHitExec, err := r.db.ExecContext(ctx, `
-DELETE FROM content_moderation_logs
-WHERE flagged = FALSE AND created_at < $1
-`, nonHitBefore)
+	result.DeletedNonHit, err = deleteHistoryBatches(ctx, r.db, "content_moderation_logs", "created_at", "AND flagged = FALSE", nonHitBefore)
 	if err != nil {
 		return nil, fmt.Errorf("delete expired non-hit content moderation logs: %w", err)
 	}
-	result.DeletedNonHit, _ = nonHitExec.RowsAffected()
 
 	result.FinishedAt = time.Now()
 	return result, nil

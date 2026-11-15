@@ -49,7 +49,7 @@ func retentionWorker(db *sql.DB, enabled bool) *OpsCleanupService {
 	cfg.DashboardAgg.Enabled = true
 	cfg.DashboardAgg.Retention.UsageLogsDays = 30
 	cfg.DashboardAgg.Retention.UsageBillingDedupDays = 30
-	svc := NewOpsCleanupService(nil, db, nil, cfg, nil, retentionSettings{policy: policy})
+	svc := NewOpsCleanupService(nil, db, cfg, nil, retentionSettings{policy: policy})
 	svc.refreshEffectiveBeforeRun(context.Background())
 	return svc
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -777,25 +778,14 @@ func (s *ChannelMonitorService) cleanupOldHistory(ctx context.Context) error {
 //   - watermark 保证已聚合的日期不会重复处理；
 //   - UpsertDailyRollupsFor 内部使用 ON CONFLICT DO UPDATE，同一日重复跑结果一致。
 //
-// 每一步失败都只记 slog.Warn，整体函数始终返回 nil 让后续步骤能继续跑
-// （与 OpsCleanupService.runCleanupOnce 风格一致）。
+// Steps remain independent; report failures to the shared cleanup heartbeat.
 func (s *ChannelMonitorService) RunDailyMaintenance(ctx context.Context) error {
-	now := time.Now().UTC()
-	today := now.Truncate(24 * time.Hour)
-
-	if err := s.runDailyAggregation(ctx, today); err != nil {
-		slog.Warn("channel_monitor: maintenance step failed",
-			"step", "aggregate", "error", err)
-	}
-	if err := s.cleanupOldHistory(ctx); err != nil {
-		slog.Warn("channel_monitor: maintenance step failed",
-			"step", "prune_history", "error", err)
-	}
-	if err := s.cleanupOldRollups(ctx, today); err != nil {
-		slog.Warn("channel_monitor: maintenance step failed",
-			"step", "prune_rollups", "error", err)
-	}
-	return nil
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	return errors.Join(
+		s.runDailyAggregation(ctx, today),
+		s.cleanupOldHistory(ctx),
+		s.cleanupOldRollups(ctx, today),
+	)
 }
 
 // runDailyAggregation 从 watermark+1 聚合到昨天（UTC）。

@@ -47,9 +47,10 @@ func (r *pelicanShowcaseRepository) Publish(ctx context.Context, snapshot servic
 	return tx.Commit()
 }
 
-// Prune runs every minute; bounded batches keep each transaction short.
+// Prune drains expired/hidden history on the common cleanup schedule.
 func (r *pelicanShowcaseRepository) Prune(ctx context.Context, maxItems int, before time.Time) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM pelican_showcase_items WHERE id IN (
+	const batchSize = 5000
+	const query = `DELETE FROM pelican_showcase_items WHERE id IN (
  SELECT id FROM (
   SELECT id, group_id, generated_at,
    ROW_NUMBER() OVER (PARTITION BY group_id ORDER BY generated_at DESC, id DESC) AS rn
@@ -57,8 +58,17 @@ func (r *pelicanShowcaseRepository) Prune(ctx context.Context, maxItems int, bef
  ) ranked
  WHERE NOT EXISTS (SELECT 1 FROM pelican_group_test_plans p WHERE p.group_id = ranked.group_id)
   OR rn > $1 OR ($2::timestamptz IS NOT NULL AND generated_at < $2)
- LIMIT 1000)`, maxItems, nullableTime(before))
-	return err
+ LIMIT $3)`
+	for {
+		result, err := r.db.ExecContext(ctx, query, maxItems, nullableTime(before), batchSize)
+		if err != nil {
+			return err
+		}
+		n, err := result.RowsAffected()
+		if err != nil || n < batchSize {
+			return err
+		}
+	}
 }
 
 func (r *pelicanShowcaseRepository) ListGroups(ctx context.Context) ([]*service.PelicanShowcaseGroup, error) {
