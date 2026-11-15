@@ -168,22 +168,22 @@ func TestPelicanShowcaseCleanupAppliesLimitsAndFailsClosed(t *testing.T) {
 	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 
 	repo := &showcaseRepoStub{}
-	(&PelicanShowcaseService{repo: repo, settings: &showcaseSettingsStub{err: errors.New("corrupt")}}).Cleanup(ctx, now)
+	require.ErrorContains(t, (&PelicanShowcaseService{repo: repo, settings: &showcaseSettingsStub{err: errors.New("corrupt")}}).Cleanup(ctx, now), "corrupt")
 	require.Empty(t, repo.pruned, "unreadable settings must never delete snapshots")
 
 	settings := enabledShowcase()
 	settings.runtime.Enabled = false
-	(&PelicanShowcaseService{repo: repo, settings: settings}).Cleanup(ctx, now)
+	require.NoError(t, (&PelicanShowcaseService{repo: repo, settings: settings}).Cleanup(ctx, now))
 	require.Equal(t, []pruneCall{{maxItems: 12, before: now.Add(-72 * time.Hour)}}, repo.pruned,
 		"cleanup keeps running while the gallery is off")
 
 	repo = &showcaseRepoStub{}
 	settings.runtime.Config.AutoCleanup = false
-	(&PelicanShowcaseService{repo: repo, settings: settings}).Cleanup(ctx, now)
+	require.NoError(t, (&PelicanShowcaseService{repo: repo, settings: settings}).Cleanup(ctx, now))
 	require.True(t, repo.pruned[0].before.IsZero(), "auto cleanup off keeps only the count limit")
 
 	var nilService *PelicanShowcaseService
-	require.NotPanics(t, func() { nilService.Cleanup(ctx, now) })
+	require.NotPanics(t, func() { require.NoError(t, nilService.Cleanup(ctx, now)) })
 }
 
 func TestPelicanShowcaseViewAndItemVisibility(t *testing.T) {

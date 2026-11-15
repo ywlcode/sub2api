@@ -75,8 +75,8 @@ func TestOpenAINativeFirstVisibleOutputFlushesAfterEmptyItem(t *testing.T) {
 			}
 			t.Run(tc.name+"/"+mode, func(t *testing.T) {
 				reader, writer := io.Pipe()
-				defer reader.Close()
-				defer writer.Close()
+				defer func() { _ = reader.Close() }()
+				defer func() { _ = writer.Close() }()
 				releaseTerminal := make(chan struct{})
 				var releaseOnce sync.Once
 				release := func() { releaseOnce.Do(func() { close(releaseTerminal) }) }
@@ -88,7 +88,7 @@ func TestOpenAINativeFirstVisibleOutputFlushesAfterEmptyItem(t *testing.T) {
 				writerDone := make(chan struct{})
 				go func() {
 					defer close(writerDone)
-					defer writer.Close()
+					defer func() { _ = writer.Close() }()
 					if _, err := io.WriteString(writer, preamble+firstEvent); err != nil {
 						return
 					}
