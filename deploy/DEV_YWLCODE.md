@@ -150,28 +150,33 @@ git push --force-with-lease="refs/heads/dev-ywlcode:${ywlcode_remote_before}" or
 
 构建前先提交所有应包含的源码，确认位于 `dev-ywlcode` 且工作区干净。镜像标签、程序版本和 revision 都绑定实际构建提交，避免浮动的 `latest` 或仅有分支名的标签。
 
-### 本机 10800 代理依赖 Wi-Fi
+### 按 Wi-Fi 状态选择代理或直连 SSH
 
-开发机的 `127.0.0.1:10800` 是本机 HTTP CONNECT 代理入口，只有开发机已连接可用 Wi-Fi 时，才能沿该网络路径访问代理外部的服务器。Wi-Fi 断开时，10800 的本地监听或代理的 CONNECT 响应可能仍存在，但不代表到目标的 TCP 隧道可用；以太网、Docker 网桥或能直连 SSH 到服务器，也不能证明 10800 代理链路可用。
+**连接 Wi-Fi 时可使用本机 `127.0.0.1:10800` 代理加速上传；Wi-Fi 断开时不用 10800，直接通过 SSH／SCP 连接服务器并继续部署，无需等待 Wi-Fi 恢复。** 10800 不可用只影响这条代理路径，不阻止直连 SSH。
 
-上传前检查 Wi-Fi 设备状态和本地监听：
+当前 Xray 的 10800 入站配置为 SOCKS5，SSH 可使用 `nc -X 5`。本地端口仍在监听或国内目标可访问，均不能证明海外代理链路可用；选用代理后应探测实际部署目标，失败则回退直连。
 
-```bash
-nmcli -t -f DEVICE,TYPE,STATE device status | awk -F: '$2 == "wifi" { print $1 ": " $3 }'
-ss -ltn '( sport = :10800 )'
-```
-
-前一条必须显示一个已连接的 Wi-Fi 设备。后一条只验证本地端口在监听，不代表代理能连到目标服务器。10800 使用 HTTP CONNECT，不要用 SOCKS5 探测。用实际部署 SSH 命令对两台目标机分别做认证前连通性探测：
+在同一个 Bash 终端中设置以下传输参数，后续 SSH／SCP 共用该数组。直连显式关闭 `ProxyCommand`、`ProxyJump` 及已有复用连接，避免继承 SSH 配置中的代理：
 
 ```bash
+ywlcode_direct_ssh=(-o BatchMode=yes -o ConnectTimeout=10 -o ProxyCommand=none -o ProxyJump=none -o ControlPath=none)
+ywlcode_ssh_options=("${ywlcode_direct_ssh[@]}")
+if LC_ALL=C nmcli -t -f TYPE,STATE device status 2>/dev/null |
+  awk -F: '$1 == "wifi" && $2 == "connected" { connected=1 } END { exit !connected }'; then
+  ywlcode_ssh_options=(-o BatchMode=yes -o ConnectTimeout=10 -o 'ProxyCommand=nc -X 5 -x 127.0.0.1:10800 %h %p' -o ProxyJump=none -o ControlPath=none)
+  for ywlcode_host in ecosserver boscserver; do
+    if ! ssh "${ywlcode_ssh_options[@]}" "$ywlcode_host" 'printf "deploy-proxy-ok\n"'; then
+      ywlcode_ssh_options=("${ywlcode_direct_ssh[@]}")
+      break
+    fi
+  done
+fi
 for ywlcode_host in ecosserver boscserver; do
-  ssh -o BatchMode=yes -o ConnectTimeout=10 \
-    -o 'ProxyCommand=nc -X connect -x 127.0.0.1:10800 %h %p' \
-    "$ywlcode_host" 'printf deploy-proxy-ok' || exit 1
+  ssh "${ywlcode_ssh_options[@]}" "$ywlcode_host" 'printf "deploy-ssh-ok\n"' || exit 1
 done
 ```
 
-只有两台服务器都返回 `deploy-proxy-ok` 才通过代理继续上传。Wi-Fi 未连接或任一探测失败时，先恢复 Wi-Fi／本机代理链路后再测试；不要在上传命令中循环重试，也不要仅因 10800 本地端口或 CONNECT 响应正常而继续。若本次选择直连，必须按直连方式单独验证目标可达性。
+Wi-Fi 未连接时直接探测 SSH，不探测或重试 10800。只有实际选用的 SSH 路径也不可达时，才处理服务器连接问题。若构建或下载工具另行配置了 10800 代理，Wi-Fi 断开时也应为该操作取消代理；SSH 的传输参数不会修改这些工具的配置。
 
 ```bash
 git switch dev-ywlcode
@@ -224,9 +229,9 @@ docker image save --platform linux/amd64 "$ywlcode_image" | gzip -1 > "$ywlcode_
   sha256sum "sub2api-ywlcode-${ywlcode_sha}.tar.gz" \
     > "sub2api-ywlcode-${ywlcode_sha}.tar.gz.sha256"
 )
-scp "$ywlcode_archive" "${ywlcode_archive}.sha256" ecosserver:/root/sub2api-deploy/ &
+scp "${ywlcode_ssh_options[@]}" "$ywlcode_archive" "${ywlcode_archive}.sha256" ecosserver:/root/sub2api-deploy/ &
 ywlcode_ecos_upload=$!
-scp "$ywlcode_archive" "${ywlcode_archive}.sha256" boscserver:/root/sub2api-deploy/ &
+scp "${ywlcode_ssh_options[@]}" "$ywlcode_archive" "${ywlcode_archive}.sha256" boscserver:/root/sub2api-deploy/ &
 ywlcode_bosc_upload=$!
 ywlcode_upload_status=0
 wait "$ywlcode_ecos_upload" || ywlcode_upload_status=1
@@ -239,7 +244,7 @@ test "$ywlcode_upload_status" -eq 0
 ```bash
 (
   for ywlcode_host in ecosserver boscserver; do
-    ssh "$ywlcode_host" "cd /root/sub2api-deploy && sha256sum -c sub2api-ywlcode-${ywlcode_sha}.tar.gz.sha256 && docker load -i sub2api-ywlcode-${ywlcode_sha}.tar.gz && docker run --rm --network none sub2api-ywlcode:${ywlcode_sha} -version && docker image inspect sub2api-ywlcode:${ywlcode_sha} --format '{{.Id}} revision={{index .Config.Labels \"org.opencontainers.image.revision\"}}'" || exit 1
+    ssh "${ywlcode_ssh_options[@]}" "$ywlcode_host" "cd /root/sub2api-deploy && sha256sum -c sub2api-ywlcode-${ywlcode_sha}.tar.gz.sha256 && docker load -i sub2api-ywlcode-${ywlcode_sha}.tar.gz && docker run --rm --network none sub2api-ywlcode:${ywlcode_sha} -version && docker image inspect sub2api-ywlcode:${ywlcode_sha} --format '{{.Id}} revision={{index .Config.Labels \"org.opencontainers.image.revision\"}}'" || exit 1
   done
 )
 ```
