@@ -6,6 +6,8 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 
 自用分支同步上游、构建镜像和更新服务器的流程见 [dev-ywlcode 分支维护与 Docker 发布](DEV_YWLCODE.md)。
 
+本机连接 Wi-Fi 时可使用 `10800` 代理加速上传；Wi-Fi 断开时跳过该代理，直接通过 SSH／SCP 继续部署。代理不可用不代表 SSH 不可用，详见 [传输路径选择](DEV_YWLCODE.md#按-wi-fi-状态选择代理或直连-ssh)。
+
 ## 强制部署顺序：双机上传，先 ecosserver，后 boscserver
 
 **任何部署都必须将同一份镜像及校验文件上传到 `ecosserver` 和 `boscserver`。两机上传可以并行，应用切换必须串行：先在 `ecosserver` 部署并完成真实用户请求验收，再部署 `boscserver`。**
