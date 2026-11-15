@@ -210,6 +210,62 @@ docker image inspect "$ywlcode_image" \
 
 确认输出是 `linux/amd64`，程序 commit 和 revision 都与本次构建 SHA 一致。`-version` 只验证程序和镜像启动入口，不代表已经在生产数据库上完成升级或业务验收。
 
+### 发布镜像禁止携带本机代理
+
+**构建、下载和 SSH 上传的代理仅用于对应操作，发布镜像的运行环境不得预设 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 及其小写形式。** Wi-Fi 连接时仍可按上一节使用 `10800`；这里检查的是镜像中的默认环境变量。
+
+2026-11-15 部署曾复用带有 `127.0.0.1:10800` 代理变量的本机旧镜像，导致服务器上的 `wget` 健康探测误走不存在的代理。程序 `/readyz` 已正常响应，Docker 健康状态仍不通过，最终触发自动回退。修正产物 `737ea559f-r2` 已清空这些变量。
+
+优先使用仓库 Dockerfile 构建。复用旧运行层会继承它的 `ENV`；`docker commit` 也可能保留容器环境，包括 Docker 客户端 `~/.docker/config.json` 自动注入的代理。仅在宿主机执行 `unset`、只改变 SSH 传输路径或补充 `NO_PROXY`，都不能代替检查最终镜像。
+
+镜像变量已清空也不代表 `docker run` 启动后的环境一定为空：本机 Docker 客户端仍可能自动注入代理。因此下面的镜像检查和服务器实际探测都要执行，不要将本机临时测试容器直接 `commit` 为发布产物。
+
+导出归档前，以及两台服务器导入镜像后，在各自主机上将 `ywlcode_image` 设为候选镜像标签，执行以下检查。失败时先修正镜像，不进入应用切换；命令只输出变量名，不打印可能含凭据的代理地址：
+
+```bash
+docker image inspect "$ywlcode_image" | python3 -c '
+import json
+import sys
+
+image = json.load(sys.stdin)[0]
+proxy_names = {"http_proxy", "https_proxy", "all_proxy"}
+bad = []
+for entry in image["Config"].get("Env") or []:
+    name, _, value = entry.partition("=")
+    if name.lower() in proxy_names and value:
+        bad.append(name)
+if bad:
+    sys.exit("禁止发布：镜像带有非空代理默认值：" + ", ".join(bad))
+print("镜像代理检查通过")
+'
+```
+
+确需复用已有运行层时，在**最后一个 `FROM` 之后**显式覆盖继承值；清理步骤必须进入最终镜像，不能只写在构建阶段：
+
+```dockerfile
+ENV HTTP_PROXY="" HTTPS_PROXY="" ALL_PROXY="" \
+    http_proxy="" https_proxy="" all_proxy=""
+```
+
+重建使用新的不可变标签和归档名称，重新校验程序 commit、revision、二进制与归档 SHA256，再重复上述代理检查。不要覆盖旧发布标签或改写回退镜像。确有需要的服务器运行代理由该服务器配置显式提供，并核对 Compose、`.env` 和 Docker 客户端配置没有重新注入开发机地址。
+
+双机切换前，分别在服务器上用候选镜像检查实际运行环境，并使用镜像内的 `wget` 探测现有服务。此命令适用于现有 Linux、宿主机 IPv4 8080 端口部署；临时容器使用 host 网络访问仍在运行的旧服务，不启动第二个应用，也不挂载数据库或数据目录。使用 `127.0.0.1` 避免宿主机 `localhost` 解析为 IPv6 后，误测未监听的 IPv6 端口。不要在探测命令中临时覆盖代理变量，以免掩盖镜像或 Docker 客户端注入的问题：
+
+```bash
+docker run --rm --pull never --network host --entrypoint sh "$ywlcode_image" \
+  -c '
+for name in HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy; do
+    if [ -n "$(printenv "$name")" ]; then
+        echo "禁止发布：运行时注入了 $name" >&2
+        exit 1
+    fi
+done
+wget -q -T 5 -O /dev/null http://127.0.0.1:8080/health
+'
+```
+
+如果候选镜像的探测工具或宿主机发布端口改变，应相应调整命令。这里仅验证镜像中的探测工具和网络环境；切换后仍须确认新容器的原始 `Healthcheck.Test` 通过并达到 healthy、`/readyz` 正常，再完成真实用户响应验收。
+
 ## 阶段 A：双机导入镜像
 
 以下步骤只上传、校验和加载镜像，不修改运行配置，不切换应用。任何部署都必须完成两台服务器的镜像准备。
@@ -250,6 +306,8 @@ test "$ywlcode_upload_status" -eq 0
 ```
 
 两机文件校验、镜像加载和程序版本必须全部成功，镜像 ID、commit、revision 必须一致并与本地产物相符。镜像名是服务器本地已加载的标签，不需要先上传公共镜像仓库；`SUB2API_IMAGE` 也不能填写 GitHub 分支地址。
+
+两机分别通过上文的[镜像代理检查与健康探测](#发布镜像禁止携带本机代理)后，才进入阶段 B。
 
 ## 阶段 B：先切换 ecosserver
 
