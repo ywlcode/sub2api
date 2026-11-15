@@ -83,7 +83,7 @@ type siteTransfer struct {
 	downloadJSON, downloadWire int64
 }
 
-func (m *Manager) postSite(ctx context.Context, path string, input *SyncRequest, output any) (siteTransfer, error) {
+func (m *Manager) postSite(ctx context.Context, client *http.Client, path string, input *SyncRequest, output any) (siteTransfer, error) {
 	var stats siteTransfer
 	raw, err := marshalSyncRequest(input, maxSyncBody)
 	if err != nil {
@@ -102,7 +102,7 @@ func (m *Manager) postSite(ctx context.Context, path string, input *SyncRequest,
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
 	req.Header.Set("Accept-Encoding", "gzip")
-	resp, err := m.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return stats, err
 	}
@@ -196,7 +196,7 @@ func (m *Manager) deliverOnce(parent context.Context) (bool, error) {
 		input.ReplicaID = receipts.ReplicaID()
 	}
 	var out DeliveryResponse
-	_, err = m.postSite(parent, DeliveryPath, &input, &out)
+	_, err = m.postSite(parent, m.deliveryClient, DeliveryPath, &input, &out)
 	if err != nil {
 		return false, err
 	}
