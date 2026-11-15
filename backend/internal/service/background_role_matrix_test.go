@@ -93,7 +93,7 @@ func TestRuntimeRoleKeepsLocalAuditWritesAndGatesSharedRetention(t *testing.T) {
 			defer svc.Stop()
 			db, _, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			cleanup := ProvideOpsCleanupService(&roleMatrixOpsRepository{}, db, cfg, nil, nil, nil, nil, svc, nil, nil, nil, nil, nil, nil)
 			defer cleanup.Stop()
 			require.Equal(t, role != config.RuntimeRoleGateway, cleanup.started)

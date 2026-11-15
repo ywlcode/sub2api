@@ -36,7 +36,7 @@ func TestOpsCleanupUnreadableSettingsNeverDeletes(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			settings := cleanupSettingsFailure{read: func(context.Context) (map[string]string, error) {
 				switch name {
 				case "read failure":
@@ -63,7 +63,7 @@ func TestOpsCleanupUnreadableSettingsNeverDeletes(t *testing.T) {
 func TestOpsCleanupStopCancelsRunAndOverlapIsSkipped(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	entered, done := make(chan struct{}), make(chan struct{})
 	var calls atomic.Int32
 	settings := cleanupSettingsFailure{read: func(ctx context.Context) (map[string]string, error) {
@@ -141,7 +141,7 @@ func (r *cleanupModerationRepo) CleanupExpiredLogs(_ context.Context, _, _ time.
 func TestOpsCleanupIsSingleOwnerOfHistoryRetention(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	settings := newRuntimeSettingRepoStub()
 	settings.values[SettingKeyAuditLogRetentionDays] = "60"
 	dashboardRepo := &dashboardAggregationRepoTestStub{}
@@ -180,7 +180,7 @@ func TestOpsCleanupKeepsDedupWhenUsageCleanupFails(t *testing.T) {
 		t.Run(map[bool]string{false: "successful history cleanup", true: "failed history cleanup"}[usageFails], func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			cfg := &config.Config{DashboardAgg: config.DashboardAggregationConfig{Enabled: true,
 				Retention: config.DashboardAggregationRetentionConfig{UsageLogsDays: 90}}}
 			svc := NewOpsCleanupService(nil, db, cfg, nil, nil)
@@ -217,7 +217,7 @@ func TestOpsCleanupKeepsDedupWhenUsageCleanupFails(t *testing.T) {
 func TestCleanupAdvisoryLockDiscardsSessionOnUnlockFailure(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectQuery("SELECT pg_try_advisory_lock").WithArgs(int64(42)).WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(true))
 	release, acquired := tryAcquireDBAdvisoryLock(context.Background(), db, 42)
 	require.True(t, acquired)
@@ -239,7 +239,7 @@ func TestDashboardRetentionDoesNotOverlapAggregation(t *testing.T) {
 func TestOpsCleanupScheduleIsIndependentOfMetricsCollection(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	cfg := &config.Config{Ops: config.OpsConfig{Enabled: false, Cleanup: config.OpsCleanupConfig{
 		Enabled: true, Schedule: "0 0 1 1 *",
 	}}}
@@ -255,7 +255,7 @@ func TestOpsCleanupRetriesBusyHistoryWithinRunBudget(t *testing.T) {
 		t.Run(map[bool]string{false: "aggregation finishes", true: "shutdown while waiting"}[canceled], func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			for i := 0; i < 9; i++ {
 				mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
 			}
@@ -293,7 +293,7 @@ func TestOpsCleanupRetriesBusyHistoryWithinRunBudget(t *testing.T) {
 func TestChannelMonitorV2RetentionUsesAggregationLock(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	mock.ExpectQuery("SELECT pg_try_advisory_lock").
 		WithArgs(hashAdvisoryLockID(channelMonitorV2AggregatorLockKey)).
 		WillReturnRows(sqlmock.NewRows([]string{"acquired"}).AddRow(false))

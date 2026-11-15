@@ -457,7 +457,7 @@ func TestPelicanGroupTestRunNowAndRunDue(t *testing.T) {
 	var nilService *PelicanGroupTestService
 	require.NotPanics(t, func() {
 		nilService.RunDue(ctx, groupTestNow)
-		nilService.Cleanup(ctx, groupTestNow)
+		require.NoError(t, nilService.Cleanup(ctx, groupTestNow))
 	})
 }
 
@@ -465,7 +465,7 @@ func TestPelicanGroupTestCleanupAndHistoryPaging(t *testing.T) {
 	ctx := context.Background()
 	repo := newGroupTestRepoFake()
 	svc, showcase := newGroupTestService(repo, &groupTestRouterFake{}, nil)
-	svc.Cleanup(ctx, groupTestNow)
+	require.NoError(t, svc.Cleanup(ctx, groupTestNow))
 	require.Equal(t, groupTestNow.Add(-7*24*time.Hour), repo.expiredBefore)
 	require.Len(t, showcase.pruned, 1, "the gallery limits are applied on the same tick")
 
