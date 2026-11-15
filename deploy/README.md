@@ -8,6 +8,8 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 
 本机连接 Wi-Fi 时可使用 `10800` 代理加速上传；Wi-Fi 断开时跳过该代理，直接通过 SSH／SCP 继续部署。代理不可用不代表 SSH 不可用，详见 [传输路径选择](DEV_YWLCODE.md#按-wi-fi-状态选择代理或直连-ssh)。
 
+**发布镜像不得携带开发机代理默认值。** 构建或上传使用的 `127.0.0.1:10800` 不能写入镜像的运行环境；复用旧镜像或从容器生成镜像时尤其要检查。导出前、双机导入后均须检查 `Config.Env`，并在切换前用候选镜像实际执行健康探测，详见 [镜像代理检查与修复](DEV_YWLCODE.md#发布镜像禁止携带本机代理)。
+
 ## 强制部署顺序：双机上传，先 ecosserver，后 boscserver
 
 **任何部署都必须将同一份镜像及校验文件上传到 `ecosserver` 和 `boscserver`。两机上传可以并行，应用切换必须串行：先在 `ecosserver` 部署并完成真实用户请求验收，再部署 `boscserver`。**
