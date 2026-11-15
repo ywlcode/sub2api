@@ -694,13 +694,42 @@ func ProvideOpsAlertEvaluatorService(
 func ProvideOpsCleanupService(
 	opsRepo OpsRepository,
 	db *sql.DB,
-	redisClient *redis.Client,
 	cfg *config.Config,
 	channelMonitorSvc *ChannelMonitorService,
 	settingRepo SettingRepository,
 	opsService *OpsService,
+	dashboardSvc *DashboardAggregationService,
+	auditSvc *AuditLogService,
+	moderationSvc *ContentModerationService,
+	tokenRepo AccountTokenGuardRepository,
+	scheduledSvc *ScheduledTestService,
+	groupTests *PelicanGroupTestService,
+	probe *ChannelMonitorV3Prober,
+	monitorV2 *ChannelMonitorV2Aggregator,
 ) *OpsCleanupService {
-	svc := NewOpsCleanupService(opsRepo, db, redisClient, cfg, channelMonitorSvc, settingRepo)
+	svc := NewOpsCleanupService(opsRepo, db, cfg, channelMonitorSvc, settingRepo)
+	svc.dashboardSvc, svc.auditSvc, svc.moderationSvc = dashboardSvc, auditSvc, moderationSvc
+	svc.maintenance = []opsCleanupMaintenance{
+		{"token guard events", func(ctx context.Context, now time.Time) error {
+			if tokenRepo == nil {
+				return nil
+			}
+			return tokenRepo.PruneEvents(ctx, now.Add(-14*24*time.Hour))
+		}},
+		{"scheduled test history", func(ctx context.Context, now time.Time) error {
+			if scheduledSvc == nil {
+				return nil
+			}
+			return scheduledSvc.resultRepo.PruneExpiredPelican(ctx, now.Add(-7*24*time.Hour))
+		}},
+		{"group test history", groupTests.Cleanup},
+		{"channel monitor v3 probes", probe.RunRetention},
+		{"channel monitor v2 aggregates", monitorV2.RunRetention},
+		{"channel monitor v2 history", func(ctx context.Context, now time.Time) error {
+			_, err := deleteOldRowsByCTID(ctx, db, "channel_monitor_v2_candy_results", "checked_at", now.Add(-ChannelMonitorV2CandyRetention), "", opsCleanupBatchSize)
+			return err
+		}},
+	}
 	startBackgroundService(cfg, svc)
 	if opsService != nil && cfg.RunsBackgroundJobs() {
 		opsService.SetCleanupReloader(svc)
@@ -717,15 +746,12 @@ func ProvideOpsSystemLogSink(opsRepo OpsRepository) *OpsSystemLogSink {
 	return sink
 }
 
-// ProvideAuditLogService keeps local audit writes on every role and runs shared
-// retention cleanup only on full nodes.
+// ProvideAuditLogService keeps local audit writes on every role. Shared history
+// retention is owned by OpsCleanupService on nodes running background jobs.
 // 停止逻辑挂在 cmd/server 的 provideCleanup。
 func ProvideAuditLogService(repo AuditLogRepository, settingService *SettingService, cfg *config.Config) *AuditLogService {
 	svc := NewAuditLogService(repo, settingService)
 	svc.StartWriter()
-	if cfg.RunsBackgroundJobs() {
-		svc.StartRetentionCleanup()
-	}
 	return svc
 }
 

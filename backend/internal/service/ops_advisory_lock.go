@@ -3,8 +3,10 @@ package service
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"hash/fnv"
+	"sync"
 	"time"
 )
 
@@ -34,6 +36,9 @@ func tryAcquireDBAdvisoryLockWithError(ctx context.Context, db *sql.DB, lockID i
 
 	acquired := false
 	if err := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", lockID).Scan(&acquired); err != nil {
+		// The server may have acquired the session lock before the response was
+		// interrupted. Never return an uncertain lock-owning session to the pool.
+		_ = conn.Raw(func(any) error { return driver.ErrBadConn })
 		_ = conn.Close()
 		return nil, false, fmt.Errorf("query advisory lock: %w", err)
 	}
@@ -42,11 +47,13 @@ func tryAcquireDBAdvisoryLockWithError(ctx context.Context, db *sql.DB, lockID i
 		return nil, false, nil
 	}
 
-	release := func() {
+	release := sync.OnceFunc(func() {
 		unlockCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_, _ = conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", lockID)
+		if _, err := conn.ExecContext(unlockCtx, "SELECT pg_advisory_unlock($1)", lockID); err != nil {
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
 		_ = conn.Close()
-	}
+	})
 	return release, true, nil
 }

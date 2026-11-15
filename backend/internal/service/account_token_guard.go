@@ -971,12 +971,6 @@ func (s *AccountTokenGuardService) persistStates(states []AccountTokenGuardState
 	// Do not delete states outside this cycle. MaxProbePerCycle deliberately
 	// makes a cycle partial, so pruning here would erase the historical result
 	// of every account that was not selected in this wave.
-	storeCtx, storeCancel := newGuardStoreContext()
-	if err := s.repo.PruneEvents(storeCtx, time.Now().Add(-14*24*time.Hour)); err != nil {
-		slog.Warn("account_token_guard_event_prune_failed", "error", err)
-		failures++
-	}
-	storeCancel()
 	return failures
 }
 

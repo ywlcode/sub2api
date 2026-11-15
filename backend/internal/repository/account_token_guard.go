@@ -90,6 +90,6 @@ func (r *accountTokenGuardRepository) ListStates(ctx context.Context) ([]service
 }
 
 func (r *accountTokenGuardRepository) PruneEvents(ctx context.Context, before time.Time) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM account_token_guard_events WHERE created_at < $1`, before)
+	_, err := deleteHistoryBatches(ctx, r.db, "account_token_guard_events", "created_at", "", before)
 	return err
 }

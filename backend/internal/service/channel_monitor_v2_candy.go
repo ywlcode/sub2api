@@ -61,7 +61,7 @@ type ChannelMonitorV2CandyRepository interface {
 	ClaimCandyProbe(context.Context, ChannelMonitorV2CandyProbe, string, time.Time, int) (int64, error)
 	FinishCandyProbe(context.Context, ChannelMonitorV2CandyResult) error
 	CandyHistory(context.Context, []ChannelMonitorV2CandyScope, time.Time, int) ([]ChannelMonitorV2CandyResult, error)
-	PruneCandyHistory(context.Context, time.Time) error
+	RecoverExpiredCandyClaims(context.Context, time.Time) error
 }
 
 type ChannelMonitorV2CandyService struct {
@@ -161,8 +161,8 @@ func (s *ChannelMonitorV2CandyService) RunDue(ctx context.Context, now time.Time
 		return
 	}
 	defer s.tick.Unlock()
-	if err := s.repo.PruneCandyHistory(ctx, now); err != nil {
-		logger.LegacyPrintf("service.channel_monitor_v2", "candy retention failed: %v", err)
+	if err := s.repo.RecoverExpiredCandyClaims(ctx, now); err != nil {
+		logger.LegacyPrintf("service.channel_monitor_v2", "candy lease recovery failed: %v", err)
 	}
 	if s.settings == nil || !s.settings.GetChannelMonitorRuntime(ctx).V2Active() {
 		return

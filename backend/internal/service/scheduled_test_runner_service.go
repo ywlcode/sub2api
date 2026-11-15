@@ -112,10 +112,6 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 
 	now := time.Now()
 	s.finalizeQualityBatches(ctx)
-	if err := s.scheduledSvc.resultRepo.PruneExpiredPelican(ctx, now.Add(-7*24*time.Hour)); err != nil {
-		logger.LegacyPrintf("service.scheduled_test_runner", "pelican history cleanup failed: %v", err)
-	}
-	s.groupTests.Cleanup(ctx, now)
 	// Group tests run beside the account plans rather than after them.
 	var groupRuns sync.WaitGroup
 	groupRuns.Add(2)

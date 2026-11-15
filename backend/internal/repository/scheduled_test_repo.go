@@ -466,11 +466,8 @@ func (r *scheduledTestPlanRepository) FinishTriggeredQuality(ctx context.Context
 
 // Also prunes paused plans; bounded batches avoid long transactions on large histories.
 func (r *scheduledTestResultRepository) PruneExpiredPelican(ctx context.Context, before time.Time) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM scheduled_test_results WHERE id IN (
- SELECT results.id FROM scheduled_test_results results
- JOIN scheduled_test_plans plans ON plans.id = results.plan_id
- WHERE plans.pelican_config IS NOT NULL AND results.created_at < $1
- ORDER BY results.created_at LIMIT 1000)`, before)
+	_, err := deleteHistoryBatches(ctx, r.db, "scheduled_test_results", "created_at",
+		"AND EXISTS (SELECT 1 FROM scheduled_test_plans p WHERE p.id=scheduled_test_results.plan_id AND p.pelican_config IS NOT NULL)", before)
 	return err
 }
 

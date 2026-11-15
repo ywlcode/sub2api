@@ -131,19 +131,15 @@ func (s *PelicanShowcaseService) UpdateSettings(ctx context.Context, enabled boo
 // beyond the per-group count and, with auto cleanup on, snapshots past the retention
 // window. It also runs while the gallery is switched off, like paused-plan history
 // cleanup. Unreadable settings skip the round, so a bad config never deletes snapshots.
-func (s *PelicanShowcaseService) Cleanup(ctx context.Context, now time.Time) {
+func (s *PelicanShowcaseService) Cleanup(ctx context.Context, now time.Time) error {
 	if s == nil {
-		return
+		return nil
 	}
 	runtime, err := s.settings.GetPelicanShowcaseRuntime(ctx)
 	if err != nil {
-		logger.LegacyPrintf("service.pelican_showcase", "cleanup skipped: %v", err)
-		return
+		return err
 	}
-	cfg := runtime.Config
-	if err := s.repo.Prune(ctx, cfg.MaxItems, cfg.retentionCutoff(now)); err != nil {
-		logger.LegacyPrintf("service.pelican_showcase", "cleanup failed: %v", err)
-	}
+	return s.repo.Prune(ctx, runtime.Config.MaxItems, runtime.Config.retentionCutoff(now))
 }
 
 // View returns the gallery without HTML bodies: every group with a group test plan, in the

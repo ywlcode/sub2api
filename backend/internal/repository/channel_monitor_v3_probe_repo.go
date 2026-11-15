@@ -171,7 +171,7 @@ func (r *channelMonitorV3Repository) ProbeStats(ctx context.Context, since time.
 }
 
 func (r *channelMonitorV3Repository) PruneProbes(ctx context.Context, before time.Time) error {
-	if _, err := r.db.ExecContext(ctx, `DELETE FROM channel_monitor_v3_probe_results WHERE slot_start < $1`, before); err != nil {
+	if _, err := deleteHistoryBatches(ctx, r.db, "channel_monitor_v3_probe_results", "slot_start", "", before); err != nil {
 		return fmt.Errorf("prune channel monitor v3 probes: %w", err)
 	}
 	return nil

@@ -36,11 +36,25 @@ func TestOpsCleanupFailureStillRunsIndependentMaintenance(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	failure := errors.New("injected retention cleanup failure")
 	mock.ExpectQuery("SELECT COUNT.*ops_error_logs").WillReturnError(failure)
+	for i := 0; i < 8; i++ {
+		mock.ExpectQuery("SELECT COUNT").WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	}
+	for i := 0; i < 5; i++ {
+		mock.ExpectExec("WITH (batch|victims)").WillReturnResult(sqlmock.NewResult(0, 0))
+	}
+
 	repo := &cleanupMaintenanceRepo{}
 	svc := &OpsCleanupService{db: db, cfg: &config.Config{}, channelMonitorSvc: NewChannelMonitorService(repo, nil)}
 	svc.effective.Enabled = true
+	var maintenanceSteps int
+	svc.maintenance = []opsCleanupMaintenance{
+		{"failed history", func(context.Context, time.Time) error { maintenanceSteps++; return errors.New("history unavailable") }},
+		{"remaining history", func(context.Context, time.Time) error { maintenanceSteps++; return nil }},
+	}
 	_, err = svc.runCleanupOnce(context.Background())
 	require.ErrorIs(t, err, failure)
+	require.Contains(t, err.Error(), "failed history: history unavailable")
+	require.Equal(t, 2, maintenanceSteps)
 	require.Equal(t, 3, repo.steps)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
