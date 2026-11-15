@@ -80,6 +80,20 @@ func NewChannelMonitorV2Aggregator(repo ChannelMonitorV2Repository, db *sql.DB, 
 	}
 }
 
+// RunRetention shares the recompute lock so cleanup cannot remove source facts
+// while another process is rebuilding a rollup from them.
+func (s *ChannelMonitorV2Aggregator) RunRetention(ctx context.Context, now time.Time) error {
+	if s == nil || s.repo == nil {
+		return nil
+	}
+	release, ok := tryAcquireSingletonLeaderLock(ctx, nil, s.db, channelMonitorV2AggregatorLockKey, s.instanceID, opsCleanupStepTimeout)
+	if !ok {
+		return errRetentionBusy
+	}
+	defer release()
+	return s.repo.PruneRetention(ctx, now)
+}
+
 func (s *ChannelMonitorV2Aggregator) Start() {
 	if s == nil || s.repo == nil {
 		return

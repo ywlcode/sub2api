@@ -304,7 +304,7 @@ func TestChannelMonitorV3ProberGates(t *testing.T) {
 			mutate(p, repo, groups)
 			p.RunDue(context.Background(), p.now())
 			require.Empty(t, repo.claims)
-			require.Len(t, repo.prunedBefore, 1, "old probes are pruned whatever the switch")
+			require.Empty(t, repo.prunedBefore, "probe execution must not run retention")
 		})
 	}
 }
@@ -371,15 +371,17 @@ func TestChannelMonitorV3ProberAbandonsProbesOnShutdown(t *testing.T) {
 	require.Empty(t, repo.finished, "an interrupted probe must not paint the slot red")
 }
 
-func TestChannelMonitorV3ProberPrunesHourlyByRange(t *testing.T) {
+func TestChannelMonitorV3ProberDailyRetentionByRange(t *testing.T) {
 	p, repo, _ := monitorV3ProberFixture(&groupTestRouterFake{}, nil)
 	repo.config.IdleProbe.Enabled = false
 	p.RunDue(context.Background(), monitorV3ProbeTick)
 	p.RunDue(context.Background(), monitorV3ProbeTick.Add(30*time.Minute))
+	require.Empty(t, repo.prunedBefore)
+	require.NoError(t, p.RunRetention(context.Background(), monitorV3ProbeTick))
 	require.Equal(t, []time.Time{monitorV3ProbeTick.Add(-8 * 24 * time.Hour)}, repo.prunedBefore)
 
 	repo.config.AvailabilityRange = "30d"
-	p.RunDue(context.Background(), monitorV3ProbeTick.Add(time.Hour))
+	require.NoError(t, p.RunRetention(context.Background(), monitorV3ProbeTick.Add(time.Hour)))
 	require.Equal(t, monitorV3ProbeTick.Add(time.Hour-31*24*time.Hour), repo.prunedBefore[1])
 	require.Equal(t, 8*24*time.Hour, channelMonitorV3ProbeRetention("24h"), "bars still page back seven days")
 }

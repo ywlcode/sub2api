@@ -556,16 +556,12 @@ func (s *PelicanGroupTestService) GetResult(ctx context.Context, id int64) (*Pel
 	return result, nil
 }
 
-// Cleanup trims the admin history by age and applies the showcase limits; the
-// scheduled-test runner calls it once a minute.
-func (s *PelicanGroupTestService) Cleanup(ctx context.Context, now time.Time) {
+// Cleanup is called by OpsCleanupService under the common schedule and lock.
+func (s *PelicanGroupTestService) Cleanup(ctx context.Context, now time.Time) error {
 	if s == nil {
-		return
+		return nil
 	}
-	if err := s.repo.PruneExpiredResults(ctx, now.Add(-pelicanGroupTestHistoryAge)); err != nil {
-		logger.LegacyPrintf("service.pelican_group_test", "history cleanup failed: %v", err)
-	}
-	s.showcase.Cleanup(ctx, now)
+	return errors.Join(s.repo.PruneExpiredResults(ctx, now.Add(-pelicanGroupTestHistoryAge)), s.showcase.Cleanup(ctx, now))
 }
 
 // gatewayPelicanGroupRouter selects through the same scheduler entry points as the

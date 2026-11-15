@@ -32,7 +32,14 @@ DSN="postgres://postgres:$PASSWORD@127.0.0.1:$PORT/$DB_NAME?sslmode=disable"
 go_test() {
   local logfile=$1 package=$2 pattern=$3
   printf 'Running %s\n' "$logfile"
-  if ! docker run --rm --name "$GO_NAME" --network host \
+  if [ -n "${RETENTION_GO_BIN:-}" ]; then
+    if ! (cd "$ROOT/backend" && RETENTION_TEST_POSTGRES_DSN="$DSN" "$RETENTION_GO_BIN" test \
+      -p 3 -tags=retentionintegration -count=1 -v -timeout=10m "$package" -run "$pattern") \
+      > "$ARTIFACTS/$logfile.log" 2>&1; then
+      tail -100 "$ARTIFACTS/$logfile.log"
+      return 1
+    fi
+  elif ! docker run --rm --name "$GO_NAME" --network host \
     -e RETENTION_TEST_POSTGRES_DSN="$DSN" \
     -e HTTP_PROXY= -e HTTPS_PROXY= -e ALL_PROXY= \
     -e http_proxy= -e https_proxy= -e all_proxy= \
@@ -58,7 +65,8 @@ dump_db() {
 }
 psql_file -Atc 'SELECT version()' > "$ARTIFACTS/postgres-version.txt"
 go_test migrations ./internal/repository '^TestRetentionPostgresMigrations$'
-go_test edge-cases ./internal/service '^TestRetentionPostgres(Boundaries|RollbackAndCancellation|Disabled|LeaderLock)$'
+go_test edge-cases ./internal/service '^TestRetentionPostgres(Boundaries|RollbackAndCancellation|Disabled|LeaderLock|TimingVolume|Partitions|PartialProgress)$'
+go_test history ./internal/repository '^TestRetentionPostgresHistoryBatches$'
 psql_file < "$ROOT/tools/retention-test/seed.sql" > "$ARTIFACTS/seed.log"
 snapshot_sizes before
 snapshot_indexes before

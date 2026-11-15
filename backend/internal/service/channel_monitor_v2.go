@@ -356,6 +356,7 @@ type ChannelMonitorV2Repository interface {
 	// passive aggregator (and bootstrap progress). Missing row → zero value, nil error.
 	GetAggregationWatermark(ctx context.Context) (*ChannelMonitorV2AggregationWatermark, error)
 	RecomputeRange(ctx context.Context, start, end time.Time) error
+	PruneRetention(ctx context.Context, now time.Time) error
 }
 
 // ChannelMonitorV2BootstrapProductWindow is the longest UI range that must be

@@ -82,7 +82,7 @@ func TestChannelMonitorV2CandyPersistenceAndClaims(t *testing.T) {
 	require.NotZero(t, next)
 	_, err = integrationDB.ExecContext(ctx, "UPDATE channel_monitor_v2_candy_results SET checked_at=$2 WHERE id=$1", next, now.Add(-4*time.Minute))
 	require.NoError(t, err)
-	require.NoError(t, repo.PruneCandyHistory(ctx, now))
+	require.NoError(t, repo.RecoverExpiredCandyClaims(ctx, now))
 	require.NoError(t, repo.FinishCandyProbe(ctx, service.ChannelMonitorV2CandyResult{ID: next, Verdict: "correct"}))
 	var verdict, reason string
 	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT verdict,reason FROM channel_monitor_v2_candy_results WHERE id=$1", next).Scan(&verdict, &reason))
@@ -93,7 +93,12 @@ func TestChannelMonitorV2CandyPersistenceAndClaims(t *testing.T) {
 	require.Zero(t, denied, "obsolete config cannot issue probes")
 	_, err = integrationDB.ExecContext(ctx, "UPDATE channel_monitor_v2_candy_results SET checked_at=$2 WHERE group_id=$1", group.ID, now.Add(-25*time.Hour))
 	require.NoError(t, err)
-	require.NoError(t, repo.PruneCandyHistory(ctx, now))
+	require.NoError(t, repo.RecoverExpiredCandyClaims(ctx, now))
+	var retained int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT count(*) FROM channel_monitor_v2_candy_results WHERE group_id=$1", group.ID).Scan(&retained))
+	require.Positive(t, retained, "lease recovery must not run history deletion")
+	_, err = deleteHistoryBatches(ctx, integrationDB, "channel_monitor_v2_candy_results", "checked_at", "", now.Add(-service.ChannelMonitorV2CandyRetention))
+	require.NoError(t, err)
 	items, err = repo.CandyHistory(ctx, []service.ChannelMonitorV2CandyScope{{GroupID: group.ID, ConfigKey: "test-key"}}, now.Add(-48*time.Hour), service.ChannelMonitorV2CandyHistoryDefault)
 	require.NoError(t, err)
 	require.Empty(t, items)

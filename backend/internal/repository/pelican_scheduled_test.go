@@ -41,7 +41,7 @@ func TestPelicanCleanupIncludesPausedPlansAndBoundsBatch(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
 	cutoff := time.Now().Add(-7 * 24 * time.Hour)
-	mock.ExpectExec(`(?s)DELETE FROM scheduled_test_results.*WHERE plans.pelican_config IS NOT NULL AND results.created_at < \$1\s+ORDER BY results.created_at LIMIT 1000`).WithArgs(cutoff).WillReturnResult(sqlmock.NewResult(0, 3))
+	mock.ExpectExec(`(?s)WITH batch AS.*scheduled_test_plans.*pelican_config IS NOT NULL.*LIMIT \$2.*DELETE FROM scheduled_test_results`).WithArgs(cutoff.UTC(), 5000).WillReturnResult(sqlmock.NewResult(0, 3))
 	require.NoError(t, NewScheduledTestResultRepository(db).PruneExpiredPelican(context.Background(), cutoff))
 	require.NoError(t, mock.ExpectationsWereMet())
 }

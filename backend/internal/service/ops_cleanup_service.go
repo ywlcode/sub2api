@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -11,8 +12,6 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
 	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 )
@@ -21,22 +20,15 @@ const (
 	opsCleanupJobName = "ops_cleanup"
 
 	opsCleanupLeaderLockKeyDefault = "ops:cleanup:leader"
-	opsCleanupLeaderLockTTLDefault = 30 * time.Minute
 )
 
 var opsCleanupCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
-
-var opsCleanupReleaseScript = redis.NewScript(`
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-  return redis.call("DEL", KEYS[1])
-end
-return 0
-`)
+var errRetentionBusy = errors.New("history aggregation is running")
 
 // OpsCleanupService periodically deletes old ops data to prevent unbounded DB growth.
 //
 // - Scheduling: 5-field cron spec (minute hour dom month dow).
-// - Multi-instance: best-effort Redis leader lock so only one node runs cleanup.
+// - Multi-instance: one database advisory lock for all cleanup steps.
 // - Safety: deletes in batches to avoid long transactions.
 //
 // 附带：在 runCleanupOnce 末尾调用 ChannelMonitorService.RunDailyMaintenance，
@@ -44,12 +36,18 @@ return 0
 type OpsCleanupService struct {
 	opsRepo           OpsRepository
 	db                *sql.DB
-	redisClient       *redis.Client
 	cfg               *config.Config
 	channelMonitorSvc *ChannelMonitorService
 	settingRepo       SettingRepository
 
-	instanceID string
+	dashboardSvc  *DashboardAggregationService
+	auditSvc      *AuditLogService
+	moderationSvc *ContentModerationService
+	maintenance   []opsCleanupMaintenance
+	runMu         sync.Mutex
+	cancelMu      sync.Mutex // cancellation must not wait for a settings DB read
+	cancelRun     context.CancelFunc
+	settingsErr   error
 
 	// mu 守护 cron 实例切换 + effective 配置切换。
 	// 这里不再用 startOnce/stopOnce，是因为 Reload 需要"停旧 cron 重启新 cron"，
@@ -59,8 +57,12 @@ type OpsCleanupService struct {
 	started   bool
 	stopped   bool
 	effective opsCleanupEffectiveConfig
+}
 
-	warnNoRedisOnce sync.Once
+// Extra histories reuse their existing policies but have no independent timer.
+type opsCleanupMaintenance struct {
+	name string
+	run  func(context.Context, time.Time) error
 }
 
 type opsCleanupEffectiveConfig struct {
@@ -77,7 +79,6 @@ type opsCleanupEffectiveConfig struct {
 func NewOpsCleanupService(
 	opsRepo OpsRepository,
 	db *sql.DB,
-	redisClient *redis.Client,
 	cfg *config.Config,
 	channelMonitorSvc *ChannelMonitorService,
 	settingRepo SettingRepository,
@@ -85,11 +86,9 @@ func NewOpsCleanupService(
 	return &OpsCleanupService{
 		opsRepo:           opsRepo,
 		db:                db,
-		redisClient:       redisClient,
 		cfg:               cfg,
 		channelMonitorSvc: channelMonitorSvc,
 		settingRepo:       settingRepo,
-		instanceID:        uuid.NewString(),
 	}
 }
 
@@ -99,9 +98,8 @@ func (s *OpsCleanupService) Start() {
 	if s == nil {
 		return
 	}
-	if s.cfg != nil && !s.cfg.Ops.Enabled {
-		return
-	}
+	// Cleanup now owns non-Ops histories too. Its own switch controls retention;
+	// disabling metrics collection must not silently disable audit/usage cleanup.
 	if s.opsRepo == nil || s.db == nil {
 		logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] not started (missing deps)")
 		return
@@ -118,41 +116,45 @@ func (s *OpsCleanupService) Start() {
 	}
 }
 
-// Stop 关闭 cron。幂等。
+// Stop cancels active deletion before waiting, without holding the settings lock.
 func (s *OpsCleanupService) Stop() {
 	if s == nil {
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.stopped {
-		return
+	s.cancelMu.Lock()
+	if s.cancelRun != nil {
+		s.cancelRun()
 	}
+	s.mu.Lock()
 	s.stopped = true
-	s.stopCronLocked()
+	c := s.cron
+	s.cron = nil
+	s.mu.Unlock()
+	s.cancelMu.Unlock()
+	if c != nil {
+		select {
+		case <-c.Stop().Done():
+		case <-time.After(opsCleanupCronStopTimeout):
+			logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] cron stop timed out")
+		}
+	}
 }
 
-// stopCronLocked 停掉当前 cron 实例（带 3s 超时）。调用方持锁。
+// Reload only replaces the schedule. The run mutex also covers an old cron job.
 func (s *OpsCleanupService) stopCronLocked() {
-	if s.cron == nil {
-		return
+	if s.cron != nil {
+		s.cron.Stop()
+		s.cron = nil
 	}
-	ctx := s.cron.Stop()
-	select {
-	case <-ctx.Done():
-	case <-time.After(opsCleanupCronStopTimeout):
-		logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] cron stop timed out")
-	}
-	s.cron = nil
 }
 
 // applyScheduleLocked 重新计算 effective 配置并按其 schedule 重建 cron。调用方持锁。
 // 若 effective.Enabled=false（用户在 UI 关闭清理），停旧 cron 后直接返回，不创建新 cron。
 func (s *OpsCleanupService) applyScheduleLocked(ctx context.Context) error {
 	s.computeEffectiveLocked(ctx)
-	s.stopCronLocked()
 
 	if !s.effective.Enabled {
+		s.stopCronLocked()
 		logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] cron disabled by settings")
 		return nil
 	}
@@ -173,6 +175,7 @@ func (s *OpsCleanupService) applyScheduleLocked(ctx context.Context) error {
 	if _, err := c.AddFunc(schedule, func() { s.runScheduled() }); err != nil {
 		return fmt.Errorf("invalid schedule %q: %w", schedule, err)
 	}
+	s.stopCronLocked()
 	c.Start()
 	s.cron = c
 	logger.LegacyPrintf("service.ops_cleanup",
@@ -200,6 +203,13 @@ func (s *OpsCleanupService) Reload(ctx context.Context) error {
 	if s == nil {
 		return nil
 	}
+	// A longer retention window or disabling cleanup must also stop a run
+	// already deleting with the old policy. Committed batches remain committed.
+	s.cancelMu.Lock()
+	if s.cancelRun != nil {
+		s.cancelRun()
+	}
+	s.cancelMu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.started || s.stopped {
@@ -216,8 +226,10 @@ func (s *OpsCleanupService) Reload(ctx context.Context) error {
 //   - *RetentionDays：settings >=0 时覆盖（包括 0=TRUNCATE），<0 沿用 cfg
 //
 // System log retention has a separate owner: settings.ops_runtime_log_config.retention_days.
-// Missing or invalid settings fall back independently instead of disabling all cleanup overlays.
+// Missing fields use compatible defaults. Read/parse failures are kept separately
+// so scheduling can recover, but runScheduled never deletes using a fallback.
 func (s *OpsCleanupService) computeEffectiveLocked(ctx context.Context) {
+	s.settingsErr = nil
 	defaults := defaultOpsAdvancedSettings().DataRetention
 	base := opsCleanupEffectiveConfig{
 		SystemLogRetentionDays:             defaultOpsRuntimeLogConfig(s.cfg).RetentionDays,
@@ -245,14 +257,16 @@ func (s *OpsCleanupService) computeEffectiveLocked(ctx context.Context) {
 	})
 	if err != nil {
 		logger.LegacyPrintf("service.ops_cleanup",
-			"[OpsCleanup] read cleanup settings failed, using defaults: %v", err)
+			"[OpsCleanup] read cleanup settings failed; deletion will be skipped: %v", err)
+		s.settingsErr = err
 		return
 	}
 	if raw, ok := values[SettingKeyOpsAdvancedSettings]; ok {
 		adv := defaultOpsAdvancedSettingsForConfig(s.cfg)
 		if err := json.Unmarshal([]byte(raw), adv); err != nil {
 			logger.LegacyPrintf("service.ops_cleanup",
-				"[OpsCleanup] parse advanced settings failed, using cfg: %v", err)
+				"[OpsCleanup] parse advanced settings failed; deletion will be skipped: %v", err)
+			s.settingsErr = errors.Join(s.settingsErr, err)
 		} else {
 			dr := adv.DataRetention
 			// The extended datasets do not support zero-day truncation. API writes
@@ -302,7 +316,8 @@ func (s *OpsCleanupService) computeEffectiveLocked(ctx context.Context) {
 		runtimeCfg := *defaults
 		if err := json.Unmarshal([]byte(raw), &runtimeCfg); err != nil {
 			logger.LegacyPrintf("service.ops_cleanup",
-				"[OpsCleanup] parse runtime log config failed, using default system-log retention: %v", err)
+				"[OpsCleanup] parse runtime log config failed; deletion will be skipped: %v", err)
+			s.settingsErr = errors.Join(s.settingsErr, err)
 		} else {
 			normalizeOpsRuntimeLogConfig(&runtimeCfg, defaults)
 			if runtimeCfg.RetentionDays >= 1 && runtimeCfg.RetentionDays <= 3650 {
@@ -313,32 +328,52 @@ func (s *OpsCleanupService) computeEffectiveLocked(ctx context.Context) {
 }
 
 // snapshotEffective 取一份 effective 副本（runCleanupOnce 等读路径使用）。
-func (s *OpsCleanupService) snapshotEffective() opsCleanupEffectiveConfig {
+func (s *OpsCleanupService) snapshotEffective() (opsCleanupEffectiveConfig, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.effective
+	return s.effective, s.settingsErr
 }
 
 // refreshEffectiveBeforeRun 在 cron 触发时刷新 effective，让 retention 改动当次即生效。
 // schedule 改动不影响当次（cron 调度由库管理，需要 Reload 才换 schedule）。
-func (s *OpsCleanupService) refreshEffectiveBeforeRun(ctx context.Context) {
+func (s *OpsCleanupService) refreshEffectiveBeforeRun(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.computeEffectiveLocked(ctx)
+	return s.settingsErr
 }
 
 func (s *OpsCleanupService) runScheduled() {
-	if s == nil || s.db == nil || s.opsRepo == nil {
+	if s == nil || s.db == nil || s.opsRepo == nil || !s.runMu.TryLock() {
 		return
 	}
-
+	defer s.runMu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), opsCleanupRunTimeout)
-	defer cancel()
+	s.cancelMu.Lock()
+	s.mu.Lock()
+	if s.stopped {
+		s.mu.Unlock()
+		s.cancelMu.Unlock()
+		cancel()
+		return
+	}
+	s.cancelRun = cancel
+	s.mu.Unlock()
+	s.cancelMu.Unlock()
+	defer func() { cancel(); s.cancelMu.Lock(); s.cancelRun = nil; s.cancelMu.Unlock() }()
 
 	// Recheck enabled as well as retention: another instance may have disabled
 	// cleanup while this instance still has the old cron schedule installed.
-	s.refreshEffectiveBeforeRun(ctx)
-	if !s.snapshotEffective().Enabled {
+	if err := s.refreshEffectiveBeforeRun(ctx); err != nil {
+		s.recordHeartbeatError(time.Now().UTC(), 0, fmt.Errorf("read cleanup settings: %w", err))
+		return
+	}
+	effective, err := s.snapshotEffective()
+	if err != nil {
+		s.recordHeartbeatError(time.Now().UTC(), 0, fmt.Errorf("read cleanup settings: %w", err))
+		return
+	}
+	if !effective.Enabled {
 		return
 	}
 
@@ -372,19 +407,13 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 		return out, nil
 	}
 
-	effective := s.snapshotEffective()
+	effective, err := s.snapshotEffective()
+	if err != nil {
+		return out, fmt.Errorf("read cleanup settings: %w", err)
+	}
 	if !effective.Enabled {
 		return out, nil
 	}
-	// Independent maintenance must still run when a retention setting or another
-	// cleanup step fails. Keep the original cleanup error for the heartbeat.
-	defer func() {
-		if s.channelMonitorSvc != nil && ctx.Err() == nil {
-			if err := s.channelMonitorSvc.RunDailyMaintenance(ctx); err != nil {
-				logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] channel monitor maintenance failed: %v", err)
-			}
-		}
-	}()
 
 	now := time.Now().UTC()
 
@@ -400,92 +429,107 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 		{effective.HourlyMetricsRetentionDays, "ops_metrics_daily", "bucket_date", true, &out.dailyPreagg},
 	}
 
-	for _, t := range targets {
-		cutoff, truncate, ok := opsCleanupPlan(now, t.retentionDays)
+	// Each step has a bounded budget. One locked/broken table must not starve
+	// unrelated retention, and all failures remain visible in the job heartbeat.
+	var failures []error
+	run := func(name string, fn func(context.Context) error) bool {
+		if ctx.Err() != nil {
+			return false
+		}
+		stepCtx, cancel := context.WithTimeout(ctx, opsCleanupStepTimeout)
+		err := fn(stepCtx)
+		// A daily task must not lose its only attempt merely because a minute
+		// aggregation started at the same time. Wait within this step's budget.
+		for errors.Is(err, errRetentionBusy) && stepCtx.Err() == nil {
+			timer := time.NewTimer(time.Second)
+			select {
+			case <-stepCtx.Done():
+				timer.Stop()
+				err = stepCtx.Err()
+			case <-timer.C:
+				err = fn(stepCtx)
+			}
+		}
+		if err == nil {
+			err = stepCtx.Err()
+		}
+		cancel()
+		if err != nil {
+			failures = append(failures, fmt.Errorf("%s: %w", name, err))
+			return false
+		}
+		return true
+	}
+	for _, target := range targets {
+		cutoff, truncate, ok := opsCleanupPlan(now, target.retentionDays)
 		if !ok {
 			continue
 		}
-		n, err := opsCleanupRunOne(ctx, s.db, truncate, cutoff, t.table, t.timeCol, t.castDate, opsCleanupBatchSize)
-		if err != nil {
-			return out, err
-		}
-		*t.counter = n
+		run(target.table, func(ctx context.Context) error {
+			n, err := opsCleanupRunOne(ctx, s.db, truncate, cutoff, target.table, target.timeCol, target.castDate, opsCleanupBatchSize)
+			*target.counter = n
+			return err
+		})
 	}
-
-	var err error
-	out.requestConnections, err = deleteOldRowsByCTID(ctx, s.db, "request_connection_traces", "started_at", now.AddDate(0, 0, -effective.RequestConnectionRetentionDays), "", opsCleanupBatchSize)
-	if err != nil {
-		return out, err
+	for _, target := range []struct {
+		table, column, predicate string
+		days                     int
+		count                    *int64
+	}{
+		{"request_connection_traces", "started_at", "", effective.RequestConnectionRetentionDays, &out.requestConnections},
+		{"request_timing_details", "created_at", "", effective.RequestTimingRetentionDays, &out.requestTimings},
+		{"usage_billing_events", "completed_at", "state IN ('complete','legacy')", effective.CompletedBillingEventRetentionDays, &out.billingEvents},
+		{"user_traffic_events", "started_at", "", effective.UserTrafficRetentionDays, &out.userTraffic},
+	} {
+		run(target.table, func(ctx context.Context) error {
+			n, err := deleteOldRowsByCTID(ctx, s.db, target.table, target.column, now.AddDate(0, 0, -target.days), target.predicate, opsCleanupBatchSize)
+			*target.count = n
+			return err
+		})
 	}
-	out.requestTimings, err = deleteOldRowsByCTID(ctx, s.db, "request_timing_details", "created_at", now.AddDate(0, 0, -effective.RequestTimingRetentionDays), "", opsCleanupBatchSize)
-	if err != nil {
-		return out, err
+	run("billing dedup archive", func(ctx context.Context) error {
+		var err error
+		out.billingDedupArchived, err = archiveOldUsageBillingDedup(ctx, s.db, now.AddDate(0, 0, -effective.BillingDedupHotRetentionDays), opsCleanupBatchSize)
+		return err
+	})
+	// Expiring idempotency claims must follow successful usage-history cleanup.
+	// Otherwise a failed usage sweep could leave old requests without protection.
+	usageCleaned := true
+	if s.dashboardSvc != nil {
+		usageCleaned = run("usage history", func(ctx context.Context) error { return s.dashboardSvc.RunRetention(ctx, now) })
 	}
-	out.billingEvents, err = deleteOldRowsByCTID(ctx, s.db, "usage_billing_events", "completed_at", now.AddDate(0, 0, -effective.CompletedBillingEventRetentionDays), "state IN ('complete','legacy')", opsCleanupBatchSize)
-	if err != nil {
-		return out, err
+	if usageCleaned {
+		run("billing dedup expiry", func(ctx context.Context) error {
+			days, err := s.billingDedupRetentionDays(ctx, effective)
+			if err != nil || days == 0 {
+				return err
+			}
+			out.billingDedupDeleted, err = deleteOldRowsByCTID(ctx, s.db, "usage_billing_dedup_archive", "created_at", now.AddDate(0, 0, -days), "", opsCleanupBatchSize)
+			return err
+		})
 	}
-	out.userTraffic, err = deleteOldRowsByCTID(ctx, s.db, "user_traffic_events", "started_at", now.AddDate(0, 0, -effective.UserTrafficRetentionDays), "", opsCleanupBatchSize)
-	if err != nil {
-		return out, err
+	if s.auditSvc != nil {
+		run("admin audit", func(ctx context.Context) error { return s.auditSvc.RunRetention(ctx, now) })
 	}
-	out.billingDedupArchived, err = archiveOldUsageBillingDedup(ctx, s.db, now.AddDate(0, 0, -effective.BillingDedupHotRetentionDays), opsCleanupBatchSize)
-	if err != nil {
-		return out, err
+	if s.moderationSvc != nil {
+		run("content moderation", func(ctx context.Context) error { return s.moderationSvc.RunRetention(ctx, now) })
 	}
-	dedupTotalDays, err := s.billingDedupRetentionDays(ctx, effective)
-	if err != nil {
-		return out, err // Never guess a shorter protection window on a settings failure.
+	if s.channelMonitorSvc != nil {
+		run("channel monitor", s.channelMonitorSvc.RunDailyMaintenance)
 	}
-	if dedupTotalDays > 0 {
-		out.billingDedupDeleted, err = deleteOldRowsByCTID(ctx, s.db, "usage_billing_dedup_archive", "created_at", now.AddDate(0, 0, -dedupTotalDays), "", opsCleanupBatchSize)
-		if err != nil {
-			return out, err
-		}
+	for _, task := range s.maintenance {
+		run(task.name, func(ctx context.Context) error { return task.run(ctx, now) })
 	}
-
-	return out, nil
+	return out, errors.Join(append(failures, ctx.Err())...)
 }
 
 func (s *OpsCleanupService) tryAcquireLeaderLock(ctx context.Context) (func(), bool) {
+	// A single lock domain prevents a Redis failure from admitting a second
+	// cleaner via the database while another instance still owns a Redis lease.
 	if s == nil {
 		return nil, false
 	}
-	// In simple run mode, assume single instance.
-	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
-		return nil, true
-	}
-
-	key := opsCleanupLeaderLockKeyDefault
-	ttl := opsCleanupLeaderLockTTLDefault
-
-	// Prefer Redis leader lock when available, but avoid stampeding the DB when Redis is flaky by
-	// falling back to a DB advisory lock.
-	if s.redisClient != nil {
-		ok, err := s.redisClient.SetNX(ctx, key, s.instanceID, ttl).Result()
-		if err == nil {
-			if !ok {
-				return nil, false
-			}
-			return func() {
-				_, _ = opsCleanupReleaseScript.Run(ctx, s.redisClient, []string{key}, s.instanceID).Result()
-			}, true
-		}
-		// Redis error: fall back to DB advisory lock.
-		s.warnNoRedisOnce.Do(func() {
-			logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] leader lock SetNX failed; falling back to DB advisory lock: %v", err)
-		})
-	} else {
-		s.warnNoRedisOnce.Do(func() {
-			logger.LegacyPrintf("service.ops_cleanup", "[OpsCleanup] redis not configured; using DB advisory lock")
-		})
-	}
-
-	release, ok := tryAcquireDBAdvisoryLock(ctx, s.db, hashAdvisoryLockID(key))
-	if !ok {
-		return nil, false
-	}
-	return release, true
+	return tryAcquireDBAdvisoryLock(ctx, s.db, hashAdvisoryLockID(opsCleanupLeaderLockKeyDefault))
 }
 
 func (s *OpsCleanupService) recordHeartbeatSuccess(runAt time.Time, duration time.Duration, counts opsCleanupDeletedCounts) {

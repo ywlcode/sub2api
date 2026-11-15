@@ -69,12 +69,13 @@ func (r *channelMonitorV2Repository) CandyHistory(ctx context.Context, scopes []
 	return out, rows.Err()
 }
 
-func (r *channelMonitorV2Repository) PruneCandyHistory(ctx context.Context, now time.Time) error {
+func (r *channelMonitorV2Repository) RecoverExpiredCandyClaims(ctx context.Context, now time.Time) error {
 	// A crashed worker's claim must never block that probe indefinitely. The lease
 	// is longer than the 90-second probe timeout; old workers cannot overwrite it.
 	if _, err := r.db.ExecContext(ctx, `UPDATE channel_monitor_v2_candy_results SET verdict='error',reason='interrupted',finished_at=NOW() WHERE verdict='running' AND checked_at<$1`, now.Add(-3*time.Minute)); err != nil {
 		return err
 	}
-	_, err := r.db.ExecContext(ctx, `DELETE FROM channel_monitor_v2_candy_results WHERE id IN (SELECT id FROM channel_monitor_v2_candy_results WHERE checked_at<$1 LIMIT 10000)`, now.Add(-service.ChannelMonitorV2CandyRetention))
-	return err
+	// Expired history is deleted by OpsCleanupService. This hot-path method
+	// only recovers leases so interrupted probes can be rescheduled promptly.
+	return nil
 }

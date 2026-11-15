@@ -13,6 +13,7 @@ const (
 	opsCleanupBatchSize        = 5000
 	opsCleanupCronStopTimeout  = 3 * time.Second
 	opsCleanupRunTimeout       = 30 * time.Minute
+	opsCleanupStepTimeout      = 2 * time.Minute
 	opsCleanupHeartbeatTimeout = 2 * time.Second
 )
 
@@ -75,9 +76,9 @@ func deleteOldRowsByCTID(ctx context.Context, db *sql.DB, table, timeColumn stri
 		where += " AND (" + extraPredicate + ")"
 	}
 	query := fmt.Sprintf(`WITH batch AS (
-  SELECT ctid FROM %s WHERE %s LIMIT $2
+  SELECT tableoid,ctid FROM %s WHERE %s ORDER BY %s LIMIT $2
 )
-DELETE FROM %s WHERE ctid IN (SELECT ctid FROM batch)`, table, where, table)
+DELETE FROM %s WHERE (tableoid,ctid) IN (SELECT tableoid,ctid FROM batch)`, table, where, timeColumn, table)
 	var total int64
 	for {
 		result, err := db.ExecContext(ctx, query, cutoff, batchSize)
@@ -188,12 +189,12 @@ func deleteOldRowsByID(
 WITH batch AS (
   SELECT id FROM %s
   WHERE %s
-  ORDER BY id
+  ORDER BY %s, id
   LIMIT $2
 )
 DELETE FROM %s
 WHERE id IN (SELECT id FROM batch)
-`, table, where, table)
+`, table, where, timeColumn, table)
 
 	var total int64
 	for {

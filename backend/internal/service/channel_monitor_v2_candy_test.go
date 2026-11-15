@@ -50,7 +50,10 @@ func (r *candyRepoFake) CandyHistory(_ context.Context, scopes []ChannelMonitorV
 	r.historyLimit = limit
 	return r.history, nil
 }
-func (r *candyRepoFake) PruneCandyHistory(context.Context, time.Time) error { r.prunes++; return nil }
+func (r *candyRepoFake) RecoverExpiredCandyClaims(context.Context, time.Time) error {
+	r.prunes++
+	return nil
+}
 
 func candyProbeFixture() ChannelMonitorV2CandyProbe {
 	return ChannelMonitorV2CandyProbe{GroupID: 4, Enabled: true, Model: "gpt-test", ReasoningEffort: "medium", IntervalMinutes: 1}

@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,9 +17,7 @@ const (
 	auditLogBatchSize     = 100
 	auditLogFlushInterval = time.Second
 
-	auditRetentionCheckInterval = 24 * time.Hour
-	auditRetentionStartupDelay  = 5 * time.Minute
-	auditRetentionBatchSize     = 5000
+	auditRetentionBatchSize = 5000
 )
 
 // AuditLogService 管理面操作审计日志服务。
@@ -28,11 +29,10 @@ type AuditLogService struct {
 
 	queue chan *AuditLog
 
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	writerOnce    sync.Once
-	retentionOnce sync.Once
+	ctx        context.Context
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	writerOnce sync.Once
 
 	droppedCount uint64
 	writeFailed  uint64
@@ -50,10 +50,9 @@ func NewAuditLogService(repo AuditLogRepository, settingService *SettingService)
 	}
 }
 
-// Start 启动异步写入与保留期清理协程。
+// Start starts the local writer. OpsCleanupService owns shared retention.
 func (s *AuditLogService) Start() {
 	s.StartWriter()
-	s.StartRetentionCleanup()
 }
 
 // StartWriter drains this process's audit queue, including on gateway replicas.
@@ -64,17 +63,6 @@ func (s *AuditLogService) StartWriter() {
 	s.writerOnce.Do(func() {
 		s.wg.Add(1)
 		go s.runWriter()
-	})
-}
-
-// StartRetentionCleanup maintains the shared audit table; only full nodes start it.
-func (s *AuditLogService) StartRetentionCleanup() {
-	if s == nil || s.repo == nil {
-		return
-	}
-	s.retentionOnce.Do(func() {
-		s.wg.Add(1)
-		go s.runRetentionLoop()
 	})
 }
 
@@ -204,54 +192,33 @@ func (s *AuditLogService) runWriter() {
 	}
 }
 
-// runRetentionLoop 按保留期定期删除过期审计日志。
-// 删除操作幂等，多实例并发执行无害，因此无需选主。
-func (s *AuditLogService) runRetentionLoop() {
-	defer s.wg.Done()
-
-	startupTimer := time.NewTimer(auditRetentionStartupDelay)
-	defer startupTimer.Stop()
-	select {
-	case <-s.ctx.Done():
-		return
-	case <-startupTimer.C:
+// RunRetention is invoked by OpsCleanupService under its shared schedule/lock.
+func (s *AuditLogService) RunRetention(ctx context.Context, now time.Time) error {
+	if s == nil || s.repo == nil || s.settingService == nil || s.settingService.settingRepo == nil {
+		return nil
 	}
-
-	ticker := time.NewTicker(auditRetentionCheckInterval)
-	defer ticker.Stop()
-
-	s.runRetentionOnce()
-	for {
-		select {
-		case <-s.ctx.Done():
-			return
-		case <-ticker.C:
-			s.runRetentionOnce()
+	raw, err := s.settingService.settingRepo.GetValue(ctx, SettingKeyAuditLogRetentionDays)
+	if err != nil && !errors.Is(err, ErrSettingNotFound) {
+		return fmt.Errorf("read audit retention: %w", err)
+	}
+	days := defaultAuditLogRetentionDays
+	if raw = strings.TrimSpace(raw); raw != "" {
+		days, err = strconv.Atoi(raw)
+		if err != nil {
+			return fmt.Errorf("parse audit retention: %w", err)
 		}
 	}
-}
-
-func (s *AuditLogService) runRetentionOnce() {
-	ctx, cancel := context.WithTimeout(s.ctx, 10*time.Minute)
-	defer cancel()
-
-	days := 0
-	if s.settingService != nil {
-		days = s.settingService.GetAuditLogRetentionDays(ctx)
-	}
 	if days <= 0 {
-		return // 0 或负值表示永久保留，仅支持手动清空
+		return nil // Explicit permanent retention.
 	}
-	cutoff := time.Now().UTC().AddDate(0, 0, -days)
+	cutoff := now.UTC().AddDate(0, 0, -days)
 	for {
 		deleted, err := s.repo.DeleteBefore(ctx, cutoff, auditRetentionBatchSize)
 		if err != nil {
-			_, _ = fmt.Fprintf(os.Stderr, "time=%s level=WARN msg=\"audit log retention cleanup failed\" err=%v\n",
-				time.Now().Format(time.RFC3339Nano), err)
-			return
+			return err
 		}
-		if deleted == 0 {
-			return
+		if deleted < auditRetentionBatchSize {
+			return nil
 		}
 	}
 }

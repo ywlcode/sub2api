@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -17,7 +18,7 @@ const channelMonitorV2ModelSQL = `COALESCE(NULLIF(TRIM(ul.requested_model), ''),
 //	5m/1h/12h/1d rollups → longer, aligned to 90m / 24h / 7d / 30d(+audit)
 //
 // Backfill may still write short-lived 1m rows for old windows so rollups can be
-// built; prune at end of each recompute drops them past their TTL while rollups remain.
+// built; the daily cleanup drops them past their TTL after backfill completes.
 const (
 	channelMonitorV2RetentionUser1m      = 3 * 24 * time.Hour
 	channelMonitorV2RetentionMetrics1m   = 7 * 24 * time.Hour
@@ -70,26 +71,30 @@ var channelMonitorV2RetentionRules = []channelMonitorV2RetentionRule{
 	{table: "channel_monitor_v2_latency_histograms_rollup", retention: channelMonitorV2RetentionRollup1d, bucketSeconds: 86400},
 }
 
-func (r *channelMonitorV2Repository) pruneChannelMonitorV2Retention(ctx context.Context, tx *sql.Tx, now time.Time) error {
+// PruneRetention runs under the aggregator's lock, acquired by the common
+// cleanup worker. Recomputing a window never independently deletes history.
+func (r *channelMonitorV2Repository) PruneRetention(ctx context.Context, now time.Time) error {
 	// During historical bootstrap, retain all 1m facts until the cursor reaches
 	// the oldest rollup boundary. Otherwise adjacent chunks would rebuild the
 	// same daily bucket from source rows already pruned by the prior chunk.
-	var backfillCursor time.Time
-	if err := tx.QueryRowContext(ctx, `SELECT backfill_cursor FROM channel_monitor_v2_watermarks WHERE id = 1`).Scan(&backfillCursor); err == nil && backfillCursor.After(channelMonitorV2RetentionCutoff(now, channelMonitorV2RetentionMax)) {
+	var backfillCursor sql.NullTime
+	err := r.db.QueryRowContext(ctx, `SELECT backfill_cursor FROM channel_monitor_v2_watermarks WHERE id = 1`).Scan(&backfillCursor)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read monitor backfill cursor: %w", err)
+	}
+	if !backfillCursor.Valid || backfillCursor.Time.After(channelMonitorV2RetentionCutoff(now, channelMonitorV2RetentionMax)) {
 		return nil
 	}
 	for _, rule := range channelMonitorV2RetentionRules {
 		cutoff := channelMonitorV2RetentionCutoff(now, rule.retention)
-		var err error
-		if rule.bucketSeconds == 0 {
-			_, err = tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE bucket_start < $1`, rule.table), cutoff)
-		} else {
-			_, err = tx.ExecContext(ctx,
-				fmt.Sprintf(`DELETE FROM %s WHERE bucket_seconds = $1 AND bucket_start < $2`, rule.table),
-				rule.bucketSeconds, cutoff,
-			)
+		predicate := ""
+		if rule.bucketSeconds != 0 {
+			predicate = fmt.Sprintf("AND bucket_seconds = %d", rule.bucketSeconds)
 		}
-		if err != nil {
+		if _, err := deleteHistoryBatches(ctx, r.db, rule.table, "bucket_start", predicate, cutoff); err != nil {
 			return fmt.Errorf("prune %s (bucket_seconds=%d): %w", rule.table, rule.bucketSeconds, err)
 		}
 	}
@@ -147,11 +152,6 @@ func (r *channelMonitorV2Repository) RecomputeRange(ctx context.Context, start, 
 		return fmt.Errorf("aggregate channel monitor v2 errors: %w", err)
 	}
 	if err = r.recomputeFixedRollups(ctx, tx, start, end); err != nil {
-		return err
-	}
-	// Drop rows past per-tier TTL (1m short, coarse rollups long). Safe after rollup
-	// so a backfill chunk can build 1d rollups from temporary 1m rows then discard 1m.
-	if err = r.pruneChannelMonitorV2Retention(ctx, tx, now); err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, channelMonitorV2WatermarkSQL, start, end); err != nil {

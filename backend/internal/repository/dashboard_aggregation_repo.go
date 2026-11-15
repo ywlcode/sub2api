@@ -213,19 +213,18 @@ func (r *dashboardAggregationRepository) UpdateAggregationWatermark(ctx context.
 }
 
 func (r *dashboardAggregationRepository) CleanupAggregates(ctx context.Context, hourlyCutoff, dailyCutoff time.Time) error {
-	hourlyCutoffUTC := hourlyCutoff.UTC()
-	dailyCutoffUTC := dailyCutoff.UTC()
-	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_hourly WHERE bucket_start < $1", hourlyCutoffUTC); err != nil {
-		return err
-	}
-	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_hourly_users WHERE bucket_start < $1", hourlyCutoffUTC); err != nil {
-		return err
-	}
-	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_daily WHERE bucket_date < $1::date", dailyCutoffUTC); err != nil {
-		return err
-	}
-	if _, err := r.sql.ExecContext(ctx, "DELETE FROM usage_dashboard_daily_users WHERE bucket_date < $1::date", dailyCutoffUTC); err != nil {
-		return err
+	for _, target := range []struct {
+		table, column string
+		cutoff        time.Time
+	}{
+		{"usage_dashboard_hourly", "bucket_start", hourlyCutoff},
+		{"usage_dashboard_hourly_users", "bucket_start", hourlyCutoff},
+		{"usage_dashboard_daily", "bucket_date", dailyCutoff},
+		{"usage_dashboard_daily_users", "bucket_date", dailyCutoff},
+	} {
+		if _, err := deleteHistoryBatches(ctx, r.sql, target.table, target.column, "", target.cutoff); err != nil {
+			return fmt.Errorf("%s: %w", target.table, err)
+		}
 	}
 	return nil
 }

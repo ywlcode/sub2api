@@ -96,10 +96,6 @@ const (
 	maxContentModerationModelFilterModels        = 1000
 	maxContentModerationModelFilterRunes         = 200
 
-	contentModerationCleanupInterval = 24 * time.Hour
-	contentModerationCleanupTimeout  = 30 * time.Minute
-	contentModerationCleanupDelay    = 5 * time.Minute
-
 	contentModerationRuntimeCacheTTL       = time.Second
 	contentModerationRuntimeRefreshTimeout = 5 * time.Second
 )
@@ -644,7 +640,6 @@ func NewContentModerationService(
 		for i := 0; i < svc.workerCount; i++ {
 			go svc.worker(i)
 		}
-		go svc.cleanupWorker()
 	}
 	return svc
 }
@@ -1586,41 +1581,26 @@ func (s *ContentModerationService) GetStatus(ctx context.Context) (*ContentModer
 	}, nil
 }
 
-func (s *ContentModerationService) cleanupWorker() {
-	timer := time.NewTimer(contentModerationCleanupDelay)
-	defer timer.Stop()
-	for {
-		<-timer.C
-		s.runCleanupOnce()
-		timer.Reset(contentModerationCleanupInterval)
-	}
-}
-
-func (s *ContentModerationService) runCleanupOnce() {
+// RunRetention shares the daily cleanup schedule; moderation workers only
+// process requests and never run a second history-deletion loop.
+func (s *ContentModerationService) RunRetention(ctx context.Context, now time.Time) error {
 	if s == nil || s.repo == nil || s.settingRepo == nil {
-		return
+		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), contentModerationCleanupTimeout)
-	defer cancel()
 	cfg, err := s.loadConfig(ctx)
 	if err != nil {
-		slog.Warn("content_moderation.cleanup_load_config_failed", "error", err)
-		return
+		return err
 	}
-	now := time.Now()
-	hitBefore := now.AddDate(0, 0, -cfg.HitRetentionDays)
-	nonHitBefore := now.AddDate(0, 0, -cfg.NonHitRetentionDays)
-	result, err := s.repo.CleanupExpiredLogs(ctx, hitBefore, nonHitBefore)
+	result, err := s.repo.CleanupExpiredLogs(ctx, now.AddDate(0, 0, -cfg.HitRetentionDays), now.AddDate(0, 0, -cfg.NonHitRetentionDays))
 	if err != nil {
-		slog.Warn("content_moderation.cleanup_failed", "error", err)
-		return
+		return err
 	}
-	if result == nil {
-		return
+	if result != nil {
+		s.lastCleanupUnix.Store(result.FinishedAt.Unix())
+		s.lastCleanupDeletedHit.Store(result.DeletedHit)
+		s.lastCleanupDeletedNonHit.Store(result.DeletedNonHit)
 	}
-	s.lastCleanupUnix.Store(result.FinishedAt.Unix())
-	s.lastCleanupDeletedHit.Store(result.DeletedHit)
-	s.lastCleanupDeletedNonHit.Store(result.DeletedNonHit)
+	return nil
 }
 
 func (s *ContentModerationService) loadConfig(ctx context.Context) (*ContentModerationConfig, error) {
