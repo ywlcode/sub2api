@@ -38,7 +38,9 @@ type peerSnapshot struct {
 type Manager struct {
 	cfg              Config
 	store            Store
-	client           *http.Client
+	syncClient       *http.Client
+	deliveryClient   *http.Client
+	forwardTransport *http.Transport
 	proxy            *httputil.ReverseProxy
 	maxBody          int64
 	BodyLimit        func() int64
@@ -73,11 +75,17 @@ func New(cfg Config, store Store, maxBody int64) (*Manager, error) {
 	transport.MaxIdleConnsPerHost = 128
 	transport.ResponseHeaderTimeout = 0 // long thinking/streams use request cancellation
 	m := &Manager{cfg: cfg, store: store, maxBody: maxBody, now: time.Now, peers: map[string]*peerSnapshot{}}
-	m.client = &http.Client{Transport: transport, Timeout: 0, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	// Separate transports own separate connection pools, including HTTP/2
+	// sessions. Large uploads and model streams must not share a connection
+	// with policy renewal. Request contexts still own control-plane deadlines.
+	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	m.syncClient = &http.Client{Transport: transport, Timeout: 0, CheckRedirect: noRedirect}
+	m.deliveryClient = &http.Client{Transport: transport.Clone(), Timeout: 0, CheckRedirect: noRedirect}
 	for _, p := range cfg.Peers {
 		m.peers[p.ID] = &peerSnapshot{}
 	}
 	if cfg.EffectiveMode() == Secondary {
+		m.forwardTransport = transport.Clone()
 		target, _ := url.Parse(cfg.PrimaryURL)
 		m.proxy = &httputil.ReverseProxy{
 			Rewrite: func(r *httputil.ProxyRequest) {
@@ -88,7 +96,7 @@ func New(cfg Config, store Store, maxBody int64) (*Manager, error) {
 					r.Out.Header.Set("X-Request-ID", id)
 				}
 			},
-			Transport: transport, FlushInterval: -1,
+			Transport: m.forwardTransport, FlushInterval: -1,
 			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 				slog.Warn("site primary forwarding failed", "error", err)
 				w.Header().Set("Content-Type", "application/json")
@@ -120,8 +128,13 @@ func (m *Manager) Stop() {
 	}
 	m.wg.Wait()
 	m.current.Store(nil)
-	if m.client != nil {
-		m.client.CloseIdleConnections()
+	for _, client := range []*http.Client{m.syncClient, m.deliveryClient} {
+		if client != nil {
+			client.CloseIdleConnections()
+		}
+	}
+	if m.forwardTransport != nil {
+		m.forwardTransport.CloseIdleConnections()
 	}
 }
 
@@ -181,7 +194,7 @@ func (m *Manager) syncOnce(parent context.Context) error {
 	var stats SyncStats
 	for {
 		var page SyncResponse
-		transfer, e := m.postSite(ctx, SyncPath, &input, &page)
+		transfer, e := m.postSite(ctx, m.syncClient, SyncPath, &input, &page)
 		if e != nil {
 			return e
 		}
