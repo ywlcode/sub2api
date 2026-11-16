@@ -129,6 +129,8 @@ scripts
 #openspec/
 code-reviews/
 AGENTS.md
+# Keep the repository-wide branch and site upgrade instructions versioned.
+!/AGENTS.md
 backend/cmd/server/server
 deploy/docker-compose.override.yml
 .gocache/
