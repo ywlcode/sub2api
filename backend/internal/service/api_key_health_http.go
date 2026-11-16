@@ -202,23 +202,26 @@ func apiKeyHealthUpstreamTimeout(ctx context.Context) bool {
 // payloads still count; only structural error fields and SSE framing are read.
 type apiKeyHealthBody struct {
 	io.ReadCloser
-	mu            sync.Mutex
-	observation   *apiKeyHealthObservation
-	status        int
-	stream        bool
-	json          bool
-	buf           []byte
-	oversized     bool
-	unknownStream bool
-	failed        bool
-	terminal      bool
-	neutral       bool
-	clientError   bool
-	errorEvent    bool
-	eof           bool
-	readErr       error
-	closeOnce     sync.Once
-	closeErr      error
+	mu             sync.Mutex
+	observation    *apiKeyHealthObservation
+	status         int
+	stream         bool
+	json           bool
+	buf            []byte
+	oversized      bool
+	unknownStream  bool
+	failed         bool
+	terminal       bool
+	neutral        bool
+	clientError    bool
+	errorEvent     bool
+	eventData      []byte
+	hasEventData   bool
+	eventOversized bool
+	eof            bool
+	readErr        error
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 func (b *apiKeyHealthBody) Read(p []byte) (int, error) {
@@ -231,11 +234,7 @@ func (b *apiKeyHealthBody) Read(p []byte) (int, error) {
 			b.buf = append(b.buf, part[:min(len(part), remaining)]...)
 			b.oversized = b.oversized || len(part) > remaining
 			if bytes.HasSuffix(part, []byte{'\n'}) {
-				if b.oversized {
-					b.observeOversizedLine(b.buf)
-				} else {
-					b.observeLine(b.buf)
-				}
+				b.observeLine(b.buf, b.oversized)
 				b.buf = b.buf[:0]
 				b.oversized = false
 			}
@@ -247,12 +246,11 @@ func (b *apiKeyHealthBody) Read(p []byte) (int, error) {
 	}
 	if err == io.EOF {
 		b.eof = true
-		if b.stream && len(b.buf) > 0 {
-			if b.oversized {
-				b.observeOversizedLine(b.buf)
-			} else {
-				b.observeLine(b.buf)
+		if b.stream && b.status < 400 {
+			if len(b.buf) > 0 {
+				b.observeLine(b.buf, b.oversized)
 			}
+			b.observeEvent()
 		}
 	} else if err != nil {
 		b.readErr = err
@@ -273,15 +271,59 @@ func apiKeyHealthErrorJSON(data []byte) bool {
 	return gjson.GetBytes(data, "status").String() == "failed" || gjson.GetBytes(data, "response.status").String() == "failed"
 }
 
-func (b *apiKeyHealthBody) observeLine(line []byte) {
+func (b *apiKeyHealthBody) observeLine(line []byte, oversized bool) {
 	line = bytes.TrimSpace(line)
-	if bytes.Equal(line, []byte("event: error")) {
-		b.errorEvent = true
-	}
-	if !bytes.HasPrefix(line, []byte("data:")) {
+	if len(line) == 0 && !oversized {
+		b.observeEvent()
 		return
 	}
-	data := bytes.TrimSpace(bytes.TrimPrefix(line, []byte("data:")))
+	if bytes.HasPrefix(line, []byte("event:")) {
+		b.errorEvent = bytes.Equal(bytes.TrimSpace(line[len("event:"):]), []byte("error"))
+		return
+	}
+	if !bytes.HasPrefix(line, []byte("data:")) && !bytes.Equal(line, []byte("data")) {
+		return
+	}
+	// Classify complete events, not individual data lines. Retain only a
+	// bounded prefix even if an event contains arbitrarily many short lines.
+	data := bytes.TrimPrefix(line, []byte("data"))
+	data = bytes.TrimPrefix(data, []byte(":"))
+	data = bytes.TrimPrefix(data, []byte(" "))
+	if b.hasEventData && len(b.eventData) < priorityAttemptInspectBytes {
+		b.eventData = append(b.eventData, '\n')
+	}
+	remaining := priorityAttemptInspectBytes - len(b.eventData)
+	b.eventData = append(b.eventData, data[:min(len(data), remaining)]...)
+	b.eventOversized = b.eventOversized || oversized || len(data) > remaining
+	b.hasEventData = true
+}
+
+func (b *apiKeyHealthBody) observeEvent() {
+	defer func() {
+		b.eventData = b.eventData[:0]
+		b.hasEventData, b.eventOversized, b.errorEvent = false, false, false
+	}()
+	if !b.hasEventData {
+		return
+	}
+	data := bytes.TrimSpace(b.eventData)
+	if b.eventOversized {
+		b.observeOversizedEvent(data)
+		return
+	}
+	// Match the gateway's compatibility fallback for providers that omit the
+	// blank separator between complete JSON records. Valid multiline JSON is
+	// always classified as a single event first.
+	if !gjson.ValidBytes(data) && bytes.ContainsRune(data, '\n') {
+		for _, line := range bytes.Split(data, []byte{'\n'}) {
+			b.observePayload(bytes.TrimSpace(line))
+		}
+		return
+	}
+	b.observePayload(data)
+}
+
+func (b *apiKeyHealthBody) observePayload(data []byte) {
 	if bytes.Equal(data, []byte("[DONE]")) {
 		b.terminal = true
 		return
@@ -333,13 +375,12 @@ func apiKeyHealthNeutralTerminal(data []byte) bool {
 	return false
 }
 
-func (b *apiKeyHealthBody) observeOversizedLine(prefix []byte) {
+func (b *apiKeyHealthBody) observeOversizedEvent(data []byte) {
 	// Response completion events can contain the entire generated output. Keep
 	// the bounded prefix and inspect only structural fields present before it.
 	b.unknownStream = true
-	data := bytes.TrimSpace(bytes.TrimPrefix(bytes.TrimSpace(prefix), []byte("data:")))
 	typ := gjson.GetBytes(data, "type").String()
-	b.failed = b.failed || typ == "error" || typ == "response.failed" || apiKeyHealthErrorJSON(data)
+	b.failed = b.failed || b.errorEvent || typ == "error" || typ == "response.failed" || apiKeyHealthErrorJSON(data)
 	// The reason/error may lie beyond the bounded prefix. Do not turn an
 	// uninspectable incomplete terminal into a healthy sample.
 	if typ == "response.incomplete" || gjson.GetBytes(data, "response.status").String() == "incomplete" || apiKeyHealthNeutralTerminal(data) {
@@ -410,6 +451,8 @@ func (b *apiKeyHealthBody) Close() error {
 	return b.closeErr
 }
 
+const apiKeyHealthErrorBodyTimeout = 10 * time.Second
+
 // Only failures are prefetched, bounded in size and time. Their classification
 // must not depend on whether a caller reads the error body or just closes it.
 func inspectAPIKeyHealthHTTPFailure(resp *http.Response, o *apiKeyHealthObservation) {
@@ -418,9 +461,12 @@ func inspectAPIKeyHealthHTTPFailure(resp *http.Response, o *apiKeyHealthObservat
 		return
 	}
 	body := &apiKeyHealthReplayBody{source: resp.Body, ready: make(chan struct{}), observation: o, status: resp.StatusCode}
-	// One reader owns the upstream until prefetch completes. When inspection
-	// times out, ownership passes to the real consumer without closing its body.
-	// Closing the response still interrupts the pending HTTP read.
+	// The soft prefetch wait below must not move an unbounded read to the
+	// caller. Cover both prefetch and subsequent reads with a separate deadline
+	// for error bodies only; retain received bytes when a stalled body is closed.
+	body.deadline = time.AfterFunc(apiKeyHealthErrorBodyTimeout, body.closeSource)
+	// One reader owns the upstream until prefetch completes. The consumer can
+	// still receive a late error code after the soft wait, up to the deadline.
 	go func() {
 		body.prefix, body.readErr = io.ReadAll(io.LimitReader(body.source, int64(priorityAttemptInspectBytes)))
 		close(body.ready)
@@ -436,16 +482,18 @@ func inspectAPIKeyHealthHTTPFailure(resp *http.Response, o *apiKeyHealthObservat
 }
 
 type apiKeyHealthReplayBody struct {
-	source      io.ReadCloser
-	ready       chan struct{}
-	prefix      []byte
-	readErr     error
-	reader      *bytes.Reader
-	observation *apiKeyHealthObservation
-	status      int
-	initOnce    sync.Once
-	closeOnce   sync.Once
-	closeErr    error
+	source          io.ReadCloser
+	ready           chan struct{}
+	prefix          []byte
+	readErr         error
+	reader          *bytes.Reader
+	observation     *apiKeyHealthObservation
+	status          int
+	initOnce        sync.Once
+	closeOnce       sync.Once
+	sourceCloseOnce sync.Once
+	deadline        *time.Timer
+	closeErr        error
 }
 
 func (b *apiKeyHealthReplayBody) initialize() {
@@ -466,14 +514,24 @@ func (b *apiKeyHealthReplayBody) Read(p []byte) (int, error) {
 		return b.reader.Read(p)
 	}
 	if b.readErr != nil {
+		b.deadline.Stop()
 		return 0, b.readErr
 	}
-	return b.source.Read(p)
+	n, err := b.source.Read(p)
+	if err != nil {
+		b.deadline.Stop()
+	}
+	return n, err
+}
+
+func (b *apiKeyHealthReplayBody) closeSource() {
+	b.sourceCloseOnce.Do(func() { b.closeErr = b.source.Close() })
 }
 
 func (b *apiKeyHealthReplayBody) Close() error {
 	b.closeOnce.Do(func() {
-		b.closeErr = b.source.Close()
+		b.deadline.Stop()
+		b.closeSource()
 		b.initialize()
 	})
 	return b.closeErr
