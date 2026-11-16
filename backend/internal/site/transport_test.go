@@ -59,10 +59,16 @@ func newSitePoolFixture(t *testing.T, http2 bool, model http.HandlerFunc) *siteP
 	f.manager, err = New(Config{Mode: Secondary, ID: "office", PrimaryURL: server.URL, Token: token}, f.local, 1<<20)
 	require.NoError(t, err)
 	t.Cleanup(f.manager.Stop)
-	trust := server.Client().Transport.(*http.Transport).TLSClientConfig
+	serverTransport, ok := server.Client().Transport.(*http.Transport)
+	require.True(t, ok)
+	trust := serverTransport.TLSClientConfig
+	syncTransport, ok := f.manager.syncClient.Transport.(*http.Transport)
+	require.True(t, ok)
+	deliveryTransport, ok := f.manager.deliveryClient.Transport.(*http.Transport)
+	require.True(t, ok)
 	for _, transport := range []*http.Transport{
-		f.manager.syncClient.Transport.(*http.Transport),
-		f.manager.deliveryClient.Transport.(*http.Transport),
+		syncTransport,
+		deliveryTransport,
 		f.manager.forwardTransport,
 	} {
 		if transport.TLSClientConfig == nil {

@@ -3,7 +3,7 @@ package service
 // SiteSettingKeys is the closed request-policy contract shared by export,
 // install and cache refresh. Login, payments, background jobs and node-local
 // network/storage configuration are deliberately not part of this contract.
-var SiteSettingKeys = []string{
+var SiteSettingKeys = append([]string{
 	"account_performance_window_minutes",
 	"account_scheduling_thresholds",
 	"allow_ungrouped_key_scheduling",
@@ -76,6 +76,18 @@ var SiteSettingKeys = []string{
 	"smart_ops_oauth_auto_config",
 	"stream_timeout_settings",
 	"web_search_emulation_config",
+}, SiteOptionalSettingKeys...)
+
+// New OpenAI recovery toggles are optional and default off on old replicas.
+var SiteOptionalSettingKeys = []string{"openai_400_omit_encrypted_history_enabled", "openai_409_omit_encrypted_history_enabled"}
+
+func IsSiteOptionalSetting(key string) bool {
+	for _, k := range SiteOptionalSettingKeys {
+		if key == k {
+			return true
+		}
+	}
+	return false
 }
 
 func IsSiteSetting(key string) bool {

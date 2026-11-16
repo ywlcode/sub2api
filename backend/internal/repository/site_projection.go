@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/Wei-Shaw/sub2api/internal/site"
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -53,16 +55,18 @@ func (s *SiteStore) registerProjectionOn(ctx context.Context, executor interface
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }, p site.Peer) error {
 	raw, _ := json.Marshal(struct {
-		Schema, Token string
-		Bases         map[int64]string
-	}{s.schema, p.Token, p.BaseURLs})
+		Schema, Revision, Token string
+		Bases                   map[int64]string
+		Fields                  map[string][]siteColumn
+		Settings                []string
+	}{s.projectionSchema(p), siteProjectionRevision, p.Token, p.BaseURLs, siteContractColumns, service.SiteSettingKeys})
 	sum := sha256.Sum256(raw)
 	_, err := executor.ExecContext(ctx, `INSERT INTO site_export_nodes(node_id,fingerprint,epoch) SELECT $1,$2,$3 WHERE NOT EXISTS(SELECT 1 FROM site_export_nodes WHERE node_id=$1 AND fingerprint=$2) ON CONFLICT(node_id) DO UPDATE SET fingerprint=EXCLUDED.fingerprint,epoch=EXCLUDED.epoch,initialized=false WHERE site_export_nodes.fingerprint<>EXCLUDED.fingerprint`, p.ID, hex.EncodeToString(sum[:]), uuid.NewString())
 	return err
 }
 
 func (s *SiteStore) ExportPage(ctx context.Context, p site.Peer, input site.SyncRequest) (site.Snapshot, error) {
-	p.ReplicaID = input.ReplicaID
+	p.ReplicaID, p.ConfigSchema = input.ReplicaID, input.Schema
 	return s.exportRetry(ctx, p, input, nil, true)
 }
 func (s *SiteStore) Export(ctx context.Context, p site.Peer, events []site.Event, ids []int64) (site.Snapshot, error) {
@@ -127,7 +131,7 @@ func (s *SiteStore) exportRetry(ctx context.Context, p site.Peer, input site.Syn
 }
 
 func (s *SiteStore) exportProjection(ctx context.Context, conn *sql.Conn, p site.Peer, input site.SyncRequest, paged bool) (site.Snapshot, error) {
-	out := site.Snapshot{Schema: s.schema, ReceiptDigests: map[int64]string{}}
+	out := site.Snapshot{Schema: s.projectionSchema(p), ReceiptDigests: map[int64]string{}}
 	tx, err := conn.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
 	if err != nil {
 		return out, err
@@ -145,6 +149,11 @@ func (s *SiteStore) exportProjection(ctx context.Context, conn *sql.Conn, p site
 	}
 	var observed []siteChangeGeneration
 	if input.Cursor == "" {
+		if !initialized {
+			if _, err = tx.ExecContext(ctx, `DELETE FROM site_export_rows WHERE node_id=$1`, p.ID); err != nil {
+				return out, err
+			}
+		}
 		// Grants survive revocation for requests already in flight.
 		if _, err = tx.ExecContext(ctx, `INSERT INTO site_account_grants(node_id,account_id) SELECT $1,id FROM accounts WHERE `+siteAccountGrantSQL+` ON CONFLICT DO NOTHING`, p.ID); err != nil {
 			return out, err
@@ -286,6 +295,23 @@ func (s *SiteStore) refreshProjection(ctx context.Context, tx *sql.Tx, p site.Pe
 	var err error
 	var rows *sql.Rows
 	full = full || dirty["$scope"] != nil
+	legacy := siteLegacySchemas[s.projectionSchema(p)]
+	var legacyPricingUnsupported bool
+	if legacy {
+		// Old replicas cannot apply 12-hour cache-write prices. While mixed
+		// versions run, keep OpenAI billing on the primary if those prices are enabled.
+		// The four small configuration tables are independent of usage volume.
+		var predicates []string
+		for _, table := range []string{"channel_model_pricing", "channel_pricing_intervals", "channel_account_stats_model_pricing", "channel_account_stats_pricing_intervals"} {
+			predicates = append(predicates, `EXISTS(SELECT 1 FROM `+table+` WHERE cache_write_12h_price IS NOT NULL)`)
+			if dirty[table] != nil {
+				dirty["accounts"] = map[string]bool{"*": true}
+			}
+		}
+		if err = tx.QueryRowContext(ctx, `SELECT `+strings.Join(predicates, ` OR `)).Scan(&legacyPricingUnsupported); err != nil {
+			return false, err
+		}
+	}
 	if dirty["account_performance_monitors"] != nil || dirty["ai_ops_controls"] != nil {
 		dirty["accounts"] = map[string]bool{"*": true}
 	}
@@ -298,12 +324,20 @@ func (s *SiteStore) refreshProjection(ctx context.Context, tx *sql.Tx, p site.Pe
 	}
 	changed := false
 	for _, t := range s.tables {
+		if siteLegacySchemas[s.projectionSchema(p)] && t.name == "account_performance_monitors" {
+			continue
+		}
 		keys := dirty[t.name]
 		if !full && len(keys) == 0 {
 			continue
 		}
 		all := full || keys["*"]
 		where := s.siteFilter(t)
+		if t.name == "settings" && siteLegacySchemas[s.projectionSchema(p)] {
+			for _, key := range service.SiteOptionalSettingKeys {
+				where += " AND key<>" + pq.QuoteLiteral(key)
+			}
+		}
 		var ids []string
 		if !all {
 			for key := range keys {
@@ -312,9 +346,17 @@ func (s *SiteStore) refreshProjection(ctx context.Context, tx *sql.Tx, p site.Pe
 			// Numeric comparisons preserve the primary-key index on large tables.
 			where += ` AND t."` + t.keys[0] + `"=ANY($1::bigint[])`
 		}
-		projection := "to_jsonb(t)"
+		projection := siteProjectionSQL(t.name, legacy)
+		if t.name == "api_keys" && legacy {
+			// Old replicas cannot enforce this new permission. Disable only the
+			// limited key on that replica until it upgrades; primary stays usable.
+			projection += ` || jsonb_build_object('status',CASE WHEN t.context_token_limit>0 THEN 'inactive' ELSE t.status END)`
+		}
 		if t.name == "accounts" {
 			projection += ` || jsonb_build_object('schedulable',t.schedulable AND NOT EXISTS(SELECT 1 FROM account_performance_monitors m WHERE m.account_id=t.id AND m.paused) AND NOT EXISTS(SELECT 1 FROM ai_ops_controls a WHERE a.account_id=t.id AND a.ai_paused))`
+			if legacyPricingUnsupported {
+				projection += ` || CASE WHEN t.platform='openai' THEN jsonb_build_object('schedulable',false,'extra',COALESCE(t.extra,'{}'::jsonb)||'{"site_secondary_enabled":false}'::jsonb) ELSE '{}'::jsonb END`
+			}
 		}
 		args := []any{}
 		if !all {
@@ -384,6 +426,9 @@ func (s *SiteStore) refreshProjection(ctx context.Context, tx *sql.Tx, p site.Pe
 			continue
 		}
 		raw, e := export()
+		if e == nil && name == "$policy" && siteLegacySchemas[s.projectionSchema(p)] {
+			raw, e = config.LegacySiteRequestPolicy(raw)
+		}
 		if e != nil {
 			return false, e
 		}
@@ -413,7 +458,12 @@ func (s *SiteStore) refreshProjection(ctx context.Context, tx *sql.Tx, p site.Pe
 	if err != nil {
 		return false, err
 	}
-	quality, err := exportSiteQuality(ctx, tx, accounts)
+	var quality []site.Row
+	if siteLegacySchemas[s.projectionSchema(p)] {
+		quality, err = exportSiteQuality(ctx, tx, accounts)
+	} else {
+		quality, err = exportSiteCurrentQuality(ctx, tx, accounts)
+	}
 	if err != nil {
 		return false, err
 	}

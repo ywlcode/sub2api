@@ -60,7 +60,7 @@ func (m *Manager) DeliveryHandler(c *gin.Context) {
 		return
 	}
 	var input SyncRequest
-	if err := decodeSiteRequest(c, &input); err != nil || input.Protocol != ProtocolVersion || input.NodeID != peer.ID || input.Schema != m.store.Schema() || len(input.Events) > DeliveryBatch || !ValidReplicaID(input.ReplicaID) {
+	if err := decodeSiteRequest(c, &input); err != nil || input.Protocol != ProtocolVersion || input.NodeID != peer.ID || !acceptsEvents(m.store, input.Schema) || len(input.Events) > DeliveryBatch || !ValidReplicaID(input.ReplicaID) {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
@@ -192,6 +192,9 @@ func (m *Manager) deliverOnce(parent context.Context) (bool, error) {
 		return true, nil
 	}
 	input := SyncRequest{Protocol: ProtocolVersion, NodeID: m.cfg.ID, Schema: m.store.Schema(), Events: events}
+	if contracts, ok := m.store.(ContractStore); ok {
+		input.Schema = contracts.EventSchema()
+	}
 	if receipts, ok := m.store.(ReceiptStore); ok {
 		input.ReplicaID = receipts.ReplicaID()
 	}

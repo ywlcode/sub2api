@@ -1,5 +1,11 @@
 package config
 
+// Additive policy, absent only while upgrading. Network/memory limits remain local.
+var siteOptionalGatewayPolicyFields = map[string]string{
+	"disable_encrypted_agent_owner_binding":              "false",
+	"openai_scheduler.strict_session_affinity_group_ids": "[]",
+}
+
 // Request semantics only. Connections, proxies, paths and worker budgets remain local.
 var siteGatewayPolicyFields = []string{
 	"antigravity_fallback_cooldown_minutes",

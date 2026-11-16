@@ -58,6 +58,9 @@ func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, ev
 	var billing *service.UsageBillingEvent
 	switch event.Kind {
 	case "billing":
+		if err := validateSiteBillingFields(event.Payload); err != nil {
+			return nil, invalidSiteEvent(err)
+		}
 		var e service.UsageBillingEvent
 		if err = json.Unmarshal(event.Payload, &e); err != nil {
 			return nil, invalidSiteEvent(err)
@@ -165,6 +168,30 @@ func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, ev
 		}
 	}
 	return billing, nil
+}
+
+// An old producer may omit new optional diagnostics, never the immutable
+// identity or quoted debit. A missing amount must not silently decode to zero.
+func validateSiteBillingFields(raw []byte) error {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return err
+	}
+	for _, name := range []string{"version", "command", "usage"} {
+		if len(envelope[name]) == 0 || string(envelope[name]) == "null" {
+			return fmt.Errorf("missing site billing %s", name)
+		}
+	}
+	var command map[string]json.RawMessage
+	if err := json.Unmarshal(envelope["command"], &command); err != nil {
+		return err
+	}
+	for _, name := range []string{"RequestID", "RequestFingerprint", "APIKeyID", "UserID", "AccountID", "BalanceCost", "SubscriptionCost", "APIKeyQuotaCost", "APIKeyRateLimitCost", "AccountQuotaCost", "PlatformQuotaCost"} {
+		if len(command[name]) == 0 || string(command[name]) == "null" {
+			return fmt.Errorf("missing site billing command.%s", name)
+		}
+	}
+	return nil
 }
 
 // Replay both installs the local pending overlay and settles the same immutable
@@ -286,8 +313,14 @@ func (s *SiteStore) importLog(ctx context.Context, tx *sql.Tx, node, table strin
 		detail["latency"], _ = json.Marshal(requesttiming.DeriveLatency(timing))
 		obj["detail"], _ = json.Marshal(detail)
 	}
-	// Column names were loaded once from the trusted local schema at startup.
-	columns := s.logColumns[table]
+	// Only reviewed and present diagnostic fields are written. Missing optional
+	// fields use SQL defaults on insert and preserve newer values on update.
+	var columns []string
+	for _, col := range s.logColumns[table] {
+		if _, present := obj[col]; present {
+			columns = append(columns, col)
+		}
+	}
 	if len(columns) == 0 {
 		return errors.New("missing site diagnostic schema")
 	}

@@ -12,6 +12,15 @@ import (
 // Installation touches changed identities and owners of unsettled bills, never
 // every user/key simply because one bill is awaiting its authoritative receipt.
 func (s *SiteStore) prepareSiteInstall(ctx context.Context, tx *sql.Tx, response site.SyncResponse) (map[string]bool, map[string]bool, []byte, bool, error) {
+	// Settings outside our reviewed policy are additive metadata, never installed.
+	rowsToInstall := make([]site.Row, 0, len(response.Rows))
+	for _, row := range response.Rows {
+		if row.Table == "settings" && !service.IsSiteSetting(row.Key) {
+			continue
+		}
+		rowsToInstall = append(rowsToInstall, row)
+	}
+	response.Rows = rowsToInstall
 	dirty, changed := map[string]bool{}, map[string]bool{"$full": response.Full}
 	allowed := map[string]siteTable{}
 	for _, t := range s.tables {
@@ -21,7 +30,7 @@ func (s *SiteStore) prepareSiteInstall(ctx context.Context, tx *sql.Tx, response
 		}
 	}
 	seen := map[string]bool{}
-	for _, r := range response.Rows {
+	for i, r := range response.Rows {
 		if seen[r.Identity()] {
 			return nil, nil, nil, false, errors.New("duplicate replica row")
 		}
@@ -46,7 +55,12 @@ func (s *SiteStore) prepareSiteInstall(ctx context.Context, tx *sql.Tx, response
 			return nil, nil, nil, false, errors.New("setting outside site request policy")
 		}
 		if len(r.Value) > 0 {
-			key, err := siteRowKey(t, r.Value)
+			value, err := normalizeSiteContractRow(r.Table, r.Value)
+			if err != nil {
+				return nil, nil, nil, false, err
+			}
+			response.Rows[i].Value = value
+			key, err := siteRowKey(t, value)
 			if err != nil || key != r.Key {
 				return nil, nil, nil, false, errors.New("invalid replica row key")
 			}

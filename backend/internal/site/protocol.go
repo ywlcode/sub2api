@@ -182,5 +182,25 @@ type DeliveryStore interface {
 	ExportPage(context.Context, Peer, SyncRequest) (Snapshot, error)
 }
 
+type ContractStore interface {
+	AcceptConfigSchema(string) bool
+	AcceptEventSchema(string) bool
+	EventSchema() string
+}
+
+func acceptsConfig(store Store, schema string) bool {
+	if contracts, ok := store.(ContractStore); ok {
+		return contracts.AcceptConfigSchema(schema)
+	}
+	return schema == store.Schema()
+}
+
+func acceptsEvents(store Store, schema string) bool {
+	if contracts, ok := store.(ContractStore); ok {
+		return contracts.AcceptEventSchema(schema)
+	}
+	return schema == store.Schema()
+}
+
 const MaxPendingBills = 4096
 const DeliveryBatch = 512

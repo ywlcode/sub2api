@@ -9,6 +9,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	adminhandler "github.com/Wei-Shaw/sub2api/internal/handler/admin"
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/repository"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -102,6 +103,7 @@ func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db 
 			})
 		}
 		sites.BodyLimit = func() int64 { return cfg.RequestGateway().MaxBodySize }
+		sites.BodyBudget = pkghttputil.NewBodyMemoryBudget(cfg.Gateway.RequestBodyMemoryBudgetBytes)
 		// Router initialization registers settings callbacks. Do not let the
 		// first synchronization race with those callback assignments.
 		start = sites.Start
