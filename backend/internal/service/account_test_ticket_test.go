@@ -187,7 +187,9 @@ func TestAccountTestStoredTicketResponseLifecycle(t *testing.T) {
 				}
 				h := http.Header{}
 				if outcome == "reissued" {
-					h.Set(openAICodexTurnStateHeader, mint780State(time.Now().Add(-time.Second)))
+					reissued := mint780State(ticket.IssuedAt.Add(-time.Second))
+					require.NotEqual(t, ticket.State, reissued)
+					h.Set(openAICodexTurnStateHeader, reissued)
 				}
 				if outcome == "strict" {
 					h.Set(openAICodexTurnStateHeader, "malformed")
