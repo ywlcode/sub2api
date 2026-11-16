@@ -15,6 +15,10 @@ import (
 // Anthropic Messages response. Reasoning output items are mapped to thinking
 // blocks; function_call items become tool_use blocks.
 func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicResponse {
+	return ResponsesToAnthropicWithOptions(resp, model, ResponseOutputOptions{})
+}
+
+func ResponsesToAnthropicWithOptions(resp *ResponsesResponse, model string, opts ResponseOutputOptions) *AnthropicResponse {
 	out := &AnthropicResponse{
 		ID:    resp.ID,
 		Type:  "message",
@@ -28,7 +32,7 @@ func ResponsesToAnthropic(resp *ResponsesResponse, model string) *AnthropicRespo
 	for _, item := range resp.Output {
 		switch item.Type {
 		case "reasoning":
-			reasoningText := responsesReasoningText(item)
+			reasoningText := responseOutputReasoning(item, opts)
 			// Always surface encrypted_content as thinking.signature so Claude
 			// Code / multi-turn clients can send it back. Signature-only
 			// thinking blocks are valid when the model omits a visible summary.

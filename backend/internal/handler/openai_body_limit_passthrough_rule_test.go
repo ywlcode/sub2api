@@ -75,6 +75,7 @@ func TestOpenAIBodyLimitFailoverExhausted_PassthroughRuleOverridesBuiltInMapping
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+	setOpsSelectedAccount(c, 1, service.PlatformOpenAI)
 
 	h := newBodyLimitPassthroughHandler(t, newBodyLimitPassthroughRule(http.StatusBadRequest, "Request body exceeds the upstream limit"))
 
@@ -96,6 +97,7 @@ func TestOpenAIBodyLimitFailoverExhausted_PassthroughRuleAppliesToStartedStream(
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+	setOpsSelectedAccount(c, 1, service.PlatformOpenAI)
 
 	h := newBodyLimitPassthroughHandler(t, newBodyLimitPassthroughRule(http.StatusBadRequest, "Request body exceeds the upstream limit"))
 
@@ -112,6 +114,7 @@ func TestOpenAIBodyLimitFailoverExhausted_NoRuleKeepsBuiltIn413(t *testing.T) {
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+	setOpsSelectedAccount(c, 1, service.PlatformOpenAI)
 
 	h := newBodyLimitPassthroughHandler(t, nil)
 
@@ -127,6 +130,7 @@ func TestOpenAIBodyLimitFailoverExhausted_NonMatchingRuleKeepsBuiltIn413(t *test
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+	setOpsSelectedAccount(c, 1, service.PlatformOpenAI)
 
 	rule := newBodyLimitPassthroughRule(http.StatusBadRequest, "Request body exceeds the upstream limit")
 	rule.ErrorCodes = []int{http.StatusServiceUnavailable}
@@ -144,6 +148,7 @@ func TestOpenAIBodyLimitFailoverExhausted_PassthroughRuleSkipMonitoring(t *testi
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
+	setOpsSelectedAccount(c, 1, service.PlatformOpenAI)
 
 	rule := newBodyLimitPassthroughRule(http.StatusBadRequest, "Request body exceeds the upstream limit")
 	rule.SkipMonitoring = true

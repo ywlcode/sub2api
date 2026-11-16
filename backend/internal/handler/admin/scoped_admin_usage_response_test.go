@@ -106,7 +106,7 @@ func TestFreeFastCustomerCostScopedAdmin(t *testing.T) {
 	for _, scoped := range []bool{true, false} {
 		t.Run(map[bool]string{true: "restricted", false: "full"}[scoped], func(t *testing.T) {
 			repo := &scopedUsageResponseRepo{records: []service.UsageLog{row}}
-			h := NewUsageHandler(service.NewUsageService(repo, nil, nil, nil), nil, nil, nil)
+			h := NewUsageHandler(service.NewUsageService(repo, nil, nil, nil), nil, nil, nil, nil)
 			r := gin.New()
 			r.Use(func(c *gin.Context) {
 				if scoped {

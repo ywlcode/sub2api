@@ -23,13 +23,6 @@ func chatCompletionsToResponsesForAccount(cfg *config.Config, account *Account, 
 	})
 }
 
-func anthropicToResponsesForAccount(cfg *config.Config, account *Account, req *apicompat.AnthropicRequest) (*apicompat.ResponsesRequest, error) {
-	return apicompat.AnthropicToResponsesWithOptions(req, apicompat.ResponsesConversionOptions{
-		MinOutputTokens:          configuredMinOutputTokens(cfg),
-		PreserveReasoningContent: shouldPreserveDeepSeekReasoning(account),
-	})
-}
-
 func responsesToAnthropicForAccount(account *Account, req *apicompat.ResponsesRequest) (*apicompat.AnthropicRequest, error) {
 	return apicompat.ResponsesToAnthropicRequestWithOptions(req, apicompat.ResponsesConversionOptions{
 		PreserveReasoningContent: shouldPreserveDeepSeekReasoning(account),

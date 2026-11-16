@@ -737,7 +737,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 	// accumulated delta events so the client receives the full content.
 	acc.SupplementResponseOutput(finalResponse)
 
-	anthropicResp := apicompat.ResponsesToAnthropic(finalResponse, compositeClientModel(c.Request.Context(), originalModel))
+	anthropicResp := apicompat.ResponsesToAnthropicWithOptions(finalResponse, compositeClientModel(c.Request.Context(), originalModel), apicompat.ResponseOutputOptions{PreferRawReasoning: account.Platform == PlatformDeepseek})
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

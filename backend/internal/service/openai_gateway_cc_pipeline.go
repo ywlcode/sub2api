@@ -378,6 +378,18 @@ func (s *OpenAIGatewayService) scanCCStream(
 			}
 			payload = pendingData.String()
 			if gjson.Valid(payload) && gjson.Get(payload, "error").IsObject() {
+				if u := extractCCStreamUsage(payload); u != nil {
+					mergeOpenAIProtectionUsageEvidence(st.Usage, u)
+					st.Usage = *u
+				}
+				markOpenAICyberPolicyEvent(c, []byte(payload), resp.StatusCode, &st.Usage)
+				if clientPayload, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, []byte(payload), 0); matched {
+					if writePassthroughError != nil {
+						writePassthroughError(clientPayload, status)
+					}
+					st.Err = errOpenAIErrorPassthroughForwarded
+					return st
+				}
 				st.SemanticFailure = []byte(payload)
 				st.Err = errors.New("upstream semantic stream failure")
 				return st
@@ -415,7 +427,9 @@ func (s *OpenAIGatewayService) scanCCStream(
 		}
 		markOpenAICyberPolicyEvent(c, []byte(payload), resp.StatusCode, &st.Usage)
 		if clientPayload, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, []byte(payload), 0); matched {
-			writePassthroughError(clientPayload, status)
+			if writePassthroughError != nil {
+				writePassthroughError(clientPayload, status)
+			}
 			st.Err = errOpenAIErrorPassthroughForwarded
 			return st
 		}

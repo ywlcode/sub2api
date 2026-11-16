@@ -169,7 +169,7 @@ func TestVolcengineNativeMessagesStreamFailure(t *testing.T) {
 	for _, tc := range []struct{ name, tail, wantError string }{
 		{"eof", "", "missing terminal event"},
 		{"partial_stop", "event: message_stop\ndata: {\"type\":\"message_stop\"}", "missing terminal event"},
-		{"upstream_error", "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n", "returned an error"},
+		{"upstream_error", "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n", "upstream semantic stream failure"},
 		{"complete", "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":4}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

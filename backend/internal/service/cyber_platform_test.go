@@ -86,6 +86,7 @@ func TestCyberNativeAnthropicUpstreamAllClientProtocols(t *testing.T) {
 					header := http.Header{"Content-Type": {"application/json"}}
 					// Converted clients always consume Anthropic SSE, even when buffered.
 					if status == 200 && (stream || protocol != APIProtocolAnthropic) {
+						payload = strings.Replace(payload, `,"error":`, ",\ndata: \"error\":", 1)
 						payload = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":9,\"output_tokens\":1}}}\n\nevent: error\ndata: " + payload + "\n\n"
 						header.Set("Content-Type", "text/event-stream")
 					}

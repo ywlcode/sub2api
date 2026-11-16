@@ -496,7 +496,7 @@ describe('user KeysView column settings', () => {
     if (multiple) {
       expect(wrapper.get('[role="dialog"]').exists()).toBe(true)
       expect(wrapper.getComponent('[data-tour="key-form-group"]').props('modelValue')).toBe(group.id)
-      expect(wrapper.get<HTMLInputElement>(`[data-testid="key-additional-groups"] input[value="${additionalGroup.id}"]`).element.checked).toBe(true)
+      expect(wrapper.findAll('[data-testid="key-group-priority"] [data-group-id]').map(row => Number(row.attributes('data-group-id')))).toEqual([group.id, additionalGroup.id])
     } else {
       expect(wrapper.get('input[placeholder="keys.searchGroup"]').exists()).toBe(true)
     }

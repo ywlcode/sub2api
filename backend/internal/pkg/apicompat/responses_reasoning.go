@@ -2,6 +2,17 @@ package apicompat
 
 import "strings"
 
+// ResponseOutputOptions selects a provider's output semantics explicitly.
+// OpenAI keeps visible summaries; DeepSeek can retain full plaintext reasoning.
+type ResponseOutputOptions struct{ PreferRawReasoning bool }
+
+func responseOutputReasoning(item ResponsesOutput, opts ResponseOutputOptions) string {
+	if opts.PreferRawReasoning {
+		return responsesOutputReasoningText(item)
+	}
+	return responsesReasoningText(item)
+}
+
 // responsesReasoningText prefers the visible summary, falling back to raw
 // reasoning text from compatible upstreams that leave the summary empty.
 func responsesReasoningText(item ResponsesOutput) string {

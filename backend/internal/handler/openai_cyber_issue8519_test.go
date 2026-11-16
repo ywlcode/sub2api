@@ -51,7 +51,7 @@ func TestRejectIfCyberSessionBlocked_Issue8519LongHistory(t *testing.T) {
 	// An old instance may have left an active source scope during an upgrade.
 	scope := sha256.Sum256([]byte("cyber-scope:v1|api_key=77|ip=" + clientIP + "|ua=" + service.NormalizeSessionUserAgent(userAgent)))
 	legacyScope := hex.EncodeToString(scope[:])
-	require.NoError(t, store.SetCyberSessionBlocked(context.Background(), legacyScope, []string{blockedKey}, time.Minute))
+	require.NoError(t, store.SetCyberSessionBlocked(context.Background(), service.PlatformOpenAI, legacyScope, []string{blockedKey}, time.Minute))
 	active, err := store.IsCyberSessionScopeActive(context.Background(), legacyScope)
 	require.NoError(t, err)
 	require.True(t, active)
@@ -89,7 +89,7 @@ func TestRejectIfCyberSessionBlocked_Issue8519LongHistory(t *testing.T) {
 			t.Run("anonymous exact retry remains blocked", func(t *testing.T) {
 				c, _ := request(body, "")
 				identity := service.ResolveCyberSessionIdentity(apiKey.ID, c, body)
-				h.gatewayService.MarkCyberSessionBlockedForRequest(context.Background(), apiKey.ID, identity, body)
+				h.gatewayService.MarkCyberSessionBlockedForRequest(context.Background(), service.PlatformOpenAI, apiKey.ID, identity, body)
 				for _, session := range []string{"", "added-session"} {
 					c, recorder := request(body, session)
 					require.True(t, h.rejectIfCyberSessionBlocked(c, apiKey, body, "gpt-5", cyberBlockFormatResponses))

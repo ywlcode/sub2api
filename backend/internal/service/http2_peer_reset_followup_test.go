@@ -145,7 +145,7 @@ func TestHTTP2CCOrdinaryChunksEmitBeforeDelimiter(t *testing.T) {
 	go func() {
 		finished <- (&OpenAIGatewayService{cfg: rawChatCompletionsTestConfig()}).scanCCStream(c, resp, rawChatCompletionsTestAccount(), "test", "synthetic", time.Now(), func(chunk *apicompat.ChatCompletionsChunk) {
 			emitted <- chunk.ID
-		})
+		}, nil)
 	}()
 	// Neither ordinary chunk waits for the event delimiter, and a usage-only
 	// chunk retains exactly the same fast path and cumulative usage.
@@ -183,7 +183,7 @@ func TestHTTP2CCMultilineEventBufferBounded(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	state := (&OpenAIGatewayService{cfg: rawChatCompletionsTestConfig()}).scanCCStream(c,
-		&http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(source)}, rawChatCompletionsTestAccount(), "test", "synthetic", time.Now(), func(*apicompat.ChatCompletionsChunk) { t.Error("fragments must not emit chunks") })
+		&http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(source)}, rawChatCompletionsTestAccount(), "test", "synthetic", time.Now(), func(*apicompat.ChatCompletionsChunk) { t.Error("fragments must not emit chunks") }, nil)
 	require.EqualError(t, state.Err, "upstream error event exceeds size limit")
 	_, marked := GetOpsStreamError(c)
 	require.False(t, marked)
