@@ -70,8 +70,11 @@ func TestSiteDeliveryTimeoutDiscardsStalledConnection(t *testing.T) {
 			manager, err := New(Config{Mode: Secondary, ID: "office", PrimaryURL: server.URL, Token: strings.Repeat("p", 32)}, local, 1<<20)
 			require.NoError(t, err)
 			defer manager.Stop()
-			transport := manager.deliveryClient.Transport.(*http.Transport)
-			transport.TLSClientConfig.RootCAs = server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+			transport, ok := manager.deliveryClient.Transport.(*http.Transport)
+			require.True(t, ok)
+			serverTransport, ok := server.Client().Transport.(*http.Transport)
+			require.True(t, ok)
+			transport.TLSClientConfig.RootCAs = serverTransport.TLSClientConfig.RootCAs
 			transport.MaxConnsPerHost = 1
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			_, err = manager.deliverOnce(ctx)
