@@ -48,9 +48,6 @@ describe('settings feature search', () => {
         for (const child of childRoot.children) visit(child, tab)
       }
       for (const child of node.children) visit(child, tab)
-      if (node.tag === 'SmartOpsSidebarSettings') {
-        for (const child of parse(smartOpsSource).descriptor.template!.ast!.children) visit(child, tab)
-      }
     }
     for (const child of root.children) visit(child)
     for (const section of SETTINGS_SECTIONS) expect(anchors.get(`settings-section-${section.id}`), section.id).toBe(section.tab)

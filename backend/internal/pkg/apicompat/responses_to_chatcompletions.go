@@ -18,6 +18,10 @@ import (
 // choices[0].message.content, refusal parts into choices[0].message.refusal;
 // function_call items become tool_calls.
 func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatCompletionsResponse {
+	return ResponsesToChatCompletionsWithOptions(resp, model, ResponseOutputOptions{})
+}
+
+func ResponsesToChatCompletionsWithOptions(resp *ResponsesResponse, model string, opts ResponseOutputOptions) *ChatCompletionsResponse {
 	id := resp.ID
 	if id == "" {
 		id = generateChatCmplID()
@@ -57,7 +61,7 @@ func ResponsesToChatCompletions(resp *ResponsesResponse, model string) *ChatComp
 				},
 			})
 		case "reasoning":
-			reasoningText += responsesReasoningText(item)
+			reasoningText += responseOutputReasoning(item, opts)
 		case "web_search_call":
 			// silently consumed — results already incorporated into text output
 		}

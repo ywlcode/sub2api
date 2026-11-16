@@ -411,6 +411,20 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			}
 			payload := strings.Join(pendingErrorData, "\n")
 			if gjson.Valid(payload) && (gjson.Get(payload, "error").IsObject() || gjson.Get(payload, "type").String() == "error") {
+				if u := extractCCStreamUsage(payload); u != nil {
+					mergeOpenAIProtectionUsageEvidence(usage, u)
+					usage = *u
+				}
+				markOpenAICyberPolicyEvent(c, []byte(payload), resp.StatusCode, &usage)
+				if clientPayload, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, []byte(payload), 0); matched {
+					if !c.Writer.Written() {
+						writeOpenAIErrorPassthroughClientError(c, status, clientPayload)
+					} else if !clientDisconnected {
+						_, _ = fmt.Fprintf(c.Writer, "data: %s\n\ndata: [DONE]\n\n", clientPayload)
+						c.Writer.Flush()
+					}
+					return nil, errOpenAIErrorPassthroughForwarded
+				}
 				writeStreamHeaders()
 				for _, pending := range pendingLines {
 					if _, writeErr := c.Writer.WriteString(pending + "\n"); writeErr != nil {

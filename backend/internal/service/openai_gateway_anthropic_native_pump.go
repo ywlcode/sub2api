@@ -19,6 +19,7 @@ import (
 	"bufio"
 	"errors"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -81,6 +82,40 @@ func newAnthropicNativeLinePump(scanner *bufio.Scanner, interval time.Duration) 
 // 优先交付该行，调用方处理事件期间上游送达的数据不会被判为上游空闲。
 func (p *anthropicNativeLinePump) next() (string, error) {
 	return p.nextOrClientGone(nil)
+}
+
+// nextData joins every data field in one SSE event before protocol conversion
+// and policy inspection. Looking at only the line after event: can silently
+// discard a multiline error (including Cyber), then emit a false completion.
+func (p *anthropicNativeLinePump) nextData(maxBytes int) (string, error) {
+	var data strings.Builder
+	for {
+		line, err := p.next()
+		if err != nil {
+			if errors.Is(err, io.EOF) && data.Len() > 0 {
+				return data.String(), nil
+			}
+			return "", err
+		}
+		if line == "" && data.Len() > 0 {
+			return data.String(), nil
+		}
+		field, ok := extractOpenAISSEDataLine(line)
+		if !ok {
+			continue
+		}
+		separator := 0
+		if data.Len() > 0 {
+			separator = 1
+		}
+		if maxBytes > 0 && len(field)+data.Len()+separator > maxBytes {
+			return "", bufio.ErrTooLong
+		}
+		if separator > 0 {
+			_ = data.WriteByte('\n')
+		}
+		_, _ = data.WriteString(field)
+	}
 }
 
 // nextOrClientGone 与 next 相同，另在等待期间 clientGone 关闭时返回

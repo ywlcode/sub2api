@@ -23,12 +23,12 @@ import (
 const codexPageContextInput = `{"type":"function_call_output","namespace":"agent","name":"codex_apps_open_page","id":"context-open","output":"{\"page_id\":null}","internal_chat_message_metadata_passthrough":{"create_time":1,"turn_id":"test-turn"}},` +
 	`{"type":"function_call_output","namespace":"agent","name":"codex_apps_selected_page_part_1_of_1","id":"context-snapshot","output":"Companion Page snapshot part 1 of 1:\n{\"page_id\":null,\"document_view\":null}"}`
 
-type codexPageContextUpstream struct {
+type codexPageContextUpstreamOriginal struct {
 	service.HTTPUpstream
 	body []byte
 }
 
-func (u *codexPageContextUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+func (u *codexPageContextUpstreamOriginal) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
 	var err error
 	u.body, err = io.ReadAll(req.Body)
 	if err != nil {
@@ -57,7 +57,7 @@ func TestOpenAIResponsesCodexPageContextReachesUpstream(t *testing.T) {
 				if accountType == service.AccountTypeOAuth {
 					model = "gpt-5.6-luna"
 				}
-				upstream := &codexPageContextUpstream{}
+				upstream := &codexPageContextUpstreamOriginal{}
 				h := newOpenAIResponsesFailoverTestHandler(t, upstream, service.Account{
 					ID: 1, Platform: service.PlatformOpenAI, Type: accountType, Status: service.StatusActive, Schedulable: true,
 					Credentials: map[string]any{"api_key": "synthetic", "access_token": "synthetic"},
@@ -79,8 +79,8 @@ func TestOpenAIResponsesCodexPageContextReachesUpstream(t *testing.T) {
 				require.Equal(t, http.StatusOK, w.Code, "%s; upstream error: %s", w.Body.String(), c.GetString(service.OpsUpstreamErrorMessageKey))
 				require.NotEmpty(t, upstream.body)
 				require.Equal(t, "user", gjson.GetBytes(upstream.body, "input.0.role").String())
-				require.Equal(t, "<external_codex_apps_open_page>\n"+`{"page_id":null}`+"\n</external_codex_apps_open_page>", gjson.GetBytes(upstream.body, "input.0.content.0.text").String())
-				require.Equal(t, "<external_codex_apps_selected_page_part_1_of_1>\nCompanion Page snapshot part 1 of 1:\n{\"page_id\":null,\"document_view\":null}\n</external_codex_apps_selected_page_part_1_of_1>", gjson.GetBytes(upstream.body, "input.1.content.0.text").String())
+				require.Equal(t, `{"page_id":null}`, gjson.GetBytes(upstream.body, "input.0.content.1.text").String())
+				require.Equal(t, "Companion Page snapshot part 1 of 1:\n{\"page_id\":null,\"document_view\":null}", gjson.GetBytes(upstream.body, "input.1.content.1.text").String())
 				require.False(t, gjson.GetBytes(upstream.body, `input.#(type=="function_call_output")`).Exists())
 				require.Contains(t, w.Body.String(), "resp_page_context")
 			})
@@ -92,7 +92,7 @@ func TestNormalizeCodexPageContextPreservesHistoryAndOrder(t *testing.T) {
 	const history = `{"type":"function_call","name":"lookup","call_id":"call-1","arguments":"{}"},{"type":"function_call_output","call_id":"call-1","output":"done"},{"type":"item_reference","id":"item-1"}`
 	body := []byte(`{"model":"gpt-5.5","previous_response_id":"resp-1","metadata":{"integer":9007199254740993},"input":[{"role":"developer","content":"before"},` + codexPageContextInput + `,` + history + `,{"role":"user","content":"after"}]}`)
 	got, changed := normalizeCodexPageContext(body)
-	require.True(t, changed)
+	require.NotEmpty(t, changed)
 	require.Equal(t, "resp-1", gjson.GetBytes(got, "previous_response_id").String())
 	require.Equal(t, "9007199254740993", gjson.GetBytes(got, "metadata.integer").Raw)
 	require.Equal(t, 7, len(gjson.GetBytes(got, "input").Array()))
@@ -104,15 +104,16 @@ func TestNormalizeCodexPageContextPreservesHistoryAndOrder(t *testing.T) {
 		require.Equal(t, "message", item.Get("type").String())
 		require.Equal(t, "user", item.Get("role").String())
 		require.Equal(t, "input_text", item.Get("content.0.type").String())
-		require.Equal(t, "<external_"+gjson.GetBytes(body, "input."+index+".name").String()+">\n"+gjson.GetBytes(body, "input."+index+".output").String()+"\n</external_"+gjson.GetBytes(body, "input."+index+".name").String()+">", item.Get("content.0.text").String())
+		require.Equal(t, gjson.GetBytes(body, "input."+index+".output").String(), item.Get("content.1.text").String())
 		require.False(t, item.Get("id").Exists())
 		require.False(t, item.Get("internal_chat_message_metadata_passthrough").Exists())
 	}
 	again, changedAgain := normalizeCodexPageContext(got)
-	require.False(t, changedAgain)
+	require.Empty(t, changedAgain)
 	require.Equal(t, got, again)
 }
 
+// Page text remains inert user reference data, including plain-text snapshots.
 func TestNormalizeCodexPageContextRecognizesOnlyKnownEnvelopes(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -126,16 +127,16 @@ func TestNormalizeCodexPageContextRecognizesOnlyKnownEnvelopes(t *testing.T) {
 		{name: "first chunk", tool: "codex_apps_selected_page_part_1_of_2", output: "Companion Page snapshot part 1 of 2:\n{\"document_view\":\"Example", change: true},
 		{name: "second chunk", tool: "codex_apps_selected_page_part_2_of_2", output: "Companion Page snapshot part 2 of 2:\n content\"}", change: true},
 		{name: "other tool", tool: "codex_apps_other", output: `{"page_id":null}`},
-		{name: "invalid open JSON", tool: "codex_apps_open_page", output: `{"page_id":null`},
-		{name: "missing page id", tool: "codex_apps_open_page", output: `{}`},
-		{name: "empty page id", tool: "codex_apps_open_page", output: `{"page_id":" "}`},
-		{name: "invalid page id", tool: "codex_apps_open_page", output: `{"page_id":42}`},
-		{name: "duplicate page id", tool: "codex_apps_open_page", output: `{"page_id":"page-test","page_id":null}`},
+		{name: "invalid open JSON", tool: "codex_apps_open_page", output: `{"page_id":null`, change: true},
+		{name: "missing page id", tool: "codex_apps_open_page", output: `{}`, change: true},
+		{name: "empty page id", tool: "codex_apps_open_page", output: `{"page_id":" "}`, change: true},
+		{name: "invalid page id", tool: "codex_apps_open_page", output: `{"page_id":42}`, change: true},
+		{name: "duplicate page id", tool: "codex_apps_open_page", output: `{"page_id":"page-test","page_id":null}`, change: true},
 		{name: "non string output", tool: "codex_apps_open_page", output: map[string]any{"page_id": nil}},
 		{name: "null output", tool: "codex_apps_open_page"},
-		{name: "mismatched snapshot header", tool: "codex_apps_selected_page_part_1_of_2", output: "Companion Page snapshot part 2 of 2:\n{}"},
-		{name: "empty snapshot", tool: "codex_apps_selected_page_part_1_of_1", output: "Companion Page snapshot part 1 of 1:\n "},
-		{name: "ordinary snapshot tool result", tool: "codex_apps_selected_page_part_1_of_1", output: "done"},
+		{name: "mismatched snapshot header", tool: "codex_apps_selected_page_part_1_of_2", output: "Companion Page snapshot part 2 of 2:\n{}", change: true},
+		{name: "empty snapshot", tool: "codex_apps_selected_page_part_1_of_1", output: "Companion Page snapshot part 1 of 1:\n ", change: true},
+		{name: "ordinary snapshot tool result", tool: "codex_apps_selected_page_part_1_of_1", output: "done", change: true},
 		{name: "zero part", tool: "codex_apps_selected_page_part_0_of_1", output: "Companion Page snapshot part 0 of 1:\n{}"},
 		{name: "part out of range", tool: "codex_apps_selected_page_part_2_of_1", output: "Companion Page snapshot part 2 of 1:\n{}"},
 		{name: "noncanonical part", tool: "codex_apps_selected_page_part_01_of_1", output: "Companion Page snapshot part 01 of 1:\n{}"},
@@ -148,9 +149,9 @@ func TestNormalizeCodexPageContextRecognizesOnlyKnownEnvelopes(t *testing.T) {
 			}}})
 			require.NoError(t, err)
 			got, changed := normalizeCodexPageContext(body)
-			require.Equal(t, tt.change, changed)
-			if changed {
-				require.Equal(t, "<external_"+tt.tool+">\n"+tt.output.(string)+"\n</external_"+tt.tool+">", gjson.GetBytes(got, "input.0.content.0.text").String())
+			require.Equal(t, tt.change, len(changed) > 0)
+			if len(changed) > 0 {
+				require.Equal(t, tt.output.(string), gjson.GetBytes(got, "input.0.content.1.text").String())
 			} else {
 				require.Equal(t, body, got)
 			}
@@ -160,18 +161,18 @@ func TestNormalizeCodexPageContextRecognizesOnlyKnownEnvelopes(t *testing.T) {
 
 func TestNormalizeCodexPageContextPreservesCallIdentities(t *testing.T) {
 	for _, field := range []string{"call_id", "tool_call_id"} {
-		for _, id := range []any{"call-real", 42, nil, false} {
+		for _, id := range []any{"call-real", 42, false} {
 			body, err := sjson.SetBytes([]byte(`{"input":[`+codexPageContextInput+`]}`), "input.0."+field, id)
 			require.NoError(t, err)
 			got, changed := normalizeCodexPageContext(body)
-			require.True(t, changed, "the independent snapshot still normalizes")
+			require.NotEmpty(t, changed, "the independent snapshot still normalizes")
 			require.JSONEq(t, gjson.GetBytes(body, "input.0").Raw, gjson.GetBytes(got, "input.0").Raw)
 		}
 		for _, id := range []string{"", "  "} {
 			body, err := sjson.SetBytes([]byte(`{"input":[`+codexPageContextInput+`]}`), "input.0."+field, id)
 			require.NoError(t, err)
 			got, changed := normalizeCodexPageContext(body)
-			require.True(t, changed)
+			require.NotEmpty(t, changed)
 			require.Equal(t, "message", gjson.GetBytes(got, "input.0.type").String())
 		}
 	}
@@ -189,7 +190,7 @@ func TestNormalizeCodexPageContextLeavesUnrecognizedRequestsUnchanged(t *testing
 		body + `trailing`,
 	} {
 		got, changed := normalizeCodexPageContext([]byte(invalid))
-		require.False(t, changed, invalid)
+		require.Empty(t, changed, invalid)
 		require.Equal(t, invalid, string(got))
 	}
 }
@@ -198,7 +199,7 @@ func TestNormalizeCodexPageContextDoesNotBypassToolOutputValidation(t *testing.T
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"input":[` + codexPageContextInput + `,{"type":"function_call_output","name":"ordinary_tool","output":"done"}]}`)
 	got, changed := normalizeCodexPageContext(body)
-	require.True(t, changed)
+	require.NotEmpty(t, changed)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	require.False(t, (&OpenAIGatewayHandler{}).validateFunctionCallOutputRequest(c, got, zap.NewNop()))
@@ -215,9 +216,9 @@ func TestNormalizeCodexPageContextCoexistsWithBootstrapMessages(t *testing.T) {
 		{`{"type":"function_call_output","namespace":"codex_app","name":"automation_update","output":"<heartbeat><automation_id>test</automation_id></heartbeat>"}`, normalizeCodexAutomationBootstrap},
 	} {
 		got, changed := normalizeCodexPageContext([]byte(`{"input":[` + codexPageContextInput + `,` + bootstrap.item + `]}`))
-		require.True(t, changed)
-		got, changed = bootstrap.normalize(got)
-		require.True(t, changed)
+		require.NotEmpty(t, changed)
+		got, bootChanged := bootstrap.normalize(got)
+		require.True(t, bootChanged)
 		require.False(t, gjson.GetBytes(got, `input.#(type=="function_call_output")`).Exists())
 	}
 }

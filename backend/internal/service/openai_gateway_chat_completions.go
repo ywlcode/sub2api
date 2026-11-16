@@ -796,7 +796,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 	// accumulated delta events so the client receives the full content.
 	acc.SupplementResponseOutput(finalResponse)
 
-	chatResp := apicompat.ResponsesToChatCompletions(finalResponse, originalModel)
+	chatResp := apicompat.ResponsesToChatCompletionsWithOptions(finalResponse, originalModel, apicompat.ResponseOutputOptions{PreferRawReasoning: account.Platform == PlatformDeepseek})
 
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

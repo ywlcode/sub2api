@@ -22,10 +22,10 @@ func TestResponsesReasoningSurvivesNonStreamingBridges(t *testing.T) {
 				tc.item,
 				{Type: "function_call", CallID: "call_1", Name: "lookup", Arguments: "{}"},
 			}}
-			chat := ResponsesToChatCompletions(response, "deepseek-flash")
+			chat := ResponsesToChatCompletionsWithOptions(response, "deepseek-flash", ResponseOutputOptions{PreferRawReasoning: true})
 			require.Equal(t, tc.want, chat.Choices[0].Message.ReasoningContent)
 			require.Equal(t, "call_1", chat.Choices[0].Message.ToolCalls[0].ID)
-			anthropic := ResponsesToAnthropic(response, "deepseek-flash")
+			anthropic := ResponsesToAnthropicWithOptions(response, "deepseek-flash", ResponseOutputOptions{PreferRawReasoning: true})
 			require.Equal(t, "thinking", anthropic.Content[0].Type)
 			require.Equal(t, tc.want, anthropic.Content[0].Thinking)
 			require.Equal(t, tc.item.EncryptedContent, anthropic.Content[0].Signature)

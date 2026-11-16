@@ -319,15 +319,15 @@ func TestMultiGroupModelsUnionOrderPricesAndBilling(t *testing.T) {
 	r = f.router(t, "", nil, nil)
 	w := unionRequest(r, "POST", "/union-auth")
 	require.Equal(t, 200, w.Code, w.Body.String())
-	require.JSONEq(t, `{"group_id":1,"rate":0.001}`, w.Body.String())
+	require.JSONEq(t, `{"group_id":2,"rate":100}`, w.Body.String())
 }
 
 func TestMultiGroupModelsUnionExplicitQueryAndSingleGroupCompatibility(t *testing.T) {
 	f := newUnionFixture()
 	r := f.router(t, "", nil, nil)
 	require.Equal(t, []string{"shared-model", "text-model"}, unionIDs(t, unionRequest(r, "GET", "/v1/models?model=text-model")), "explicit query keeps model-based group selection")
-	require.Equal(t, []string{"image-model", "shared-model"}, unionIDs(t, unionRequest(r, "GET", "/v1/models?model=")), "present empty query keeps legacy selection")
-	require.Positive(t, f.probe.calls)
+	require.Equal(t, []string{"shared-model", "text-model"}, unionIDs(t, unionRequest(r, "GET", "/v1/models?model=")), "present empty query selects the first configured group")
+	require.Zero(t, f.probe.calls)
 	f.key.GroupIDs = []int64{1}
 	r = f.router(t, "", nil, nil)
 	require.Equal(t, []string{"shared-model", "text-model"}, unionIDs(t, unionRequest(r, "GET", "/v1/models")))
@@ -515,7 +515,7 @@ func TestMultiGroupModelsUnionCodexAndClientRestrictions(t *testing.T) {
 	require.Contains(t, w.Body.String(), `"models"`)
 	require.NotContains(t, w.Body.String(), `"data"`)
 	require.Positive(t, u.codexCalls)
-	require.Positive(t, f.probe.calls, "Codex must retain existing selected-group path")
+	require.Zero(t, f.probe.calls, "catalog lookup selects its group without probing request schedulability")
 }
 
 func TestMultiGroupModelsUnionKeyExpiryAndQuota(t *testing.T) {

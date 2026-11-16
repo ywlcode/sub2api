@@ -99,7 +99,7 @@ func TestResponsesWebSocketCyberHandshakeStillRecordsAuditAndBlock(t *testing.T)
 	require.Empty(t, harness.handler.gatewayService.FindCyberSessionBlockedForIdentityAndBody(ctx, service.PlatformDeepseek, harness.apiKey.ID, identity, body))
 }
 
-func TestResponsesWebSocketLaterRetryCyberHandshakeKeepsCurrentSessionIdentity(t *testing.T) {
+func TestResponsesWebSocketLaterReconnectCyberHandshakeKeepsCurrentSessionIdentity(t *testing.T) {
 	var connections atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if connections.Add(1) > 1 {
@@ -124,8 +124,10 @@ func TestResponsesWebSocketLaterRetryCyberHandshakeKeepsCurrentSessionIdentity(t
 		if _, _, err = conn.Read(ctx); err != nil {
 			return
 		}
-		_ = conn.Write(ctx, coderws.MessageText, []byte(`{"type":"error","error":{"code":"rate_limit_exceeded","message":"Rate limit reached"}}`))
-		_, _, _ = conn.Read(ctx)
+		// Native WS no longer migrates an already-started conversation to a
+		// different account on 429. Exercise the supported same-account reconnect
+		// before any output in this turn, then reject its handshake with Cyber.
+		_ = conn.CloseNow()
 	}))
 	defer upstream.Close()
 	harness := newOpenAIWSPassthroughHandlerHarnessWithOptions(t, upstream.URL, nil, map[string]string{service.SettingKeyCyberSessionIdentityStrictEnabled: "true"}, func(a *service.Account, cfg *config.Config, _ *service.HTTPUpstream, repo *service.AccountRepository) {

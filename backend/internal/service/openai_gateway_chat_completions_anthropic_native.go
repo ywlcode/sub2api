@@ -213,7 +213,7 @@ func (s *OpenAIGatewayService) handleCCBufferedFromNativeAnthropic(
 	}
 
 	for {
-		line, rerr := pump.next()
+		payload, rerr := pump.nextData(maxLineSize)
 		if rerr != nil {
 			if errors.Is(rerr, errAnthropicNativeStreamIdle) {
 				return onIdle()
@@ -224,32 +224,11 @@ func (s *OpenAIGatewayService) handleCCBufferedFromNativeAnthropic(
 					return resultWithUsage(), resetErr
 				}
 			}
-			break
-		}
-		// SSE 规范允许 `event:xxx`（冒号后无空格）：Kimi 等 Anthropic 兼容上游
-		// 返回紧凑格式，严格匹配 "event: " 会丢弃全部事件（#4653 同根因）。
-		if _, ok := extractOpenAISSEEventLine(line); !ok {
-			continue
-		}
-
-		dataLine, rerr := pump.next()
-		if rerr != nil {
-			if errors.Is(rerr, errAnthropicNativeStreamIdle) {
-				return onIdle()
-			}
-			logReadErr(rerr)
-			if !terminalSeen {
-				if resetErr, handled := handleOpenAIHTTP2PeerReset(c, account, requestID, rerr); handled {
-					return resultWithUsage(), resetErr
-				}
+			if errors.Is(rerr, bufio.ErrTooLong) {
+				return resultWithUsage(), rerr
 			}
 			break
 		}
-		payload, ok := extractOpenAISSEDataLine(dataLine)
-		if !ok {
-			continue
-		}
-
 		cyberUsage := claudeUsageToOpenAIUsage(&usage)
 		if writeNativeCyberPolicyError(c, APIProtocolChatCompletions, []byte(payload), resp.StatusCode, &cyberUsage) {
 			return nil, errOpenAIErrorPassthroughForwarded
@@ -490,7 +469,7 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 	}
 
 	for {
-		line, rerr := pump.next()
+		payload, rerr := pump.nextData(maxLineSize)
 		if rerr != nil {
 			if errors.Is(rerr, errAnthropicNativeStreamIdle) {
 				return onIdle()
@@ -501,31 +480,11 @@ func (s *OpenAIGatewayService) handleCCStreamingFromNativeAnthropic(
 					return resultWithUsage(), resetErr
 				}
 			}
-			break
-		}
-		if _, ok := extractOpenAISSEEventLine(line); !ok {
-			continue
-		}
-
-		dataLine, rerr := pump.next()
-		if rerr != nil {
-			if errors.Is(rerr, errAnthropicNativeStreamIdle) {
-				return onIdle()
-			}
-			// EOF / 读错误：事件行后流终止，进入 finalize。
-			logReadErr(rerr)
-			if !terminalSeen && !clientDisconnected {
-				if resetErr, handled := handleOpenAIHTTP2PeerReset(c, account, requestID, rerr); handled {
-					return resultWithUsage(), resetErr
-				}
+			if errors.Is(rerr, bufio.ErrTooLong) {
+				return resultWithUsage(), rerr
 			}
 			break
 		}
-		payload, ok := extractOpenAISSEDataLine(dataLine)
-		if !ok {
-			continue
-		}
-
 		cyberUsage := claudeUsageToOpenAIUsage(&usage)
 		if writeNativeCyberPolicyError(c, APIProtocolChatCompletions, []byte(payload), resp.StatusCode, &cyberUsage) {
 			return nil, errOpenAIErrorPassthroughForwarded
