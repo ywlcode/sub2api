@@ -1236,7 +1236,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		// 从不可变的 canonical forwardBody 派生本次尝试 body 并整块剔除上游私有的加密
 		// reasoning item（含耦合的 id/summary），避免非透传上游 400 拒绝 Kiro reasoning 形态。
 		attemptBody := h.deriveOpenAIForwardAttemptBody(reqLog, forwardBody, account, &passthroughFailoverState)
-		if h.cfg != nil && h.cfg.Gateway.DisableEncryptedAgentOwnerBinding {
+		if h.cfg != nil && h.cfg.RequestGateway().DisableEncryptedAgentOwnerBinding {
 			// Account-specific builders/retries never own the frozen source slice.
 			attemptBody = append([]byte(nil), attemptBody...)
 		}

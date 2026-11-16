@@ -47,8 +47,29 @@ func (s *SiteStore) projectSiteSetting(raw []byte, install bool) ([]byte, error)
 			clearSiteProxyReferences(obj)
 		case "ops_advanced_settings":
 			for k := range obj {
-				if !strings.HasPrefix(k, "ignore_") {
+				if k != "data_retention" && !strings.HasPrefix(k, "ignore_") {
 					delete(obj, k)
+				}
+			}
+			if value := obj["data_retention"]; value != nil {
+				retention, ok := value.(map[string]any)
+				if !ok {
+					return nil, fmt.Errorf("invalid site retention policy")
+				}
+				// Preserve absence: synthesizing zero values could turn an older
+				// partial setting into a zero-day deletion policy on the replica.
+				allowed := map[string]bool{
+					"cleanup_enabled": true, "cleanup_schedule": true,
+					"error_log_retention_days": true, "minute_metrics_retention_days": true,
+					"hourly_metrics_retention_days": true, "request_connection_retention_days": true,
+					"request_timing_retention_days": true, "completed_billing_event_retention_days": true,
+					"billing_dedup_hot_retention_days": true, "billing_dedup_archive_retention_days": true,
+					"user_traffic_retention_days": true,
+				}
+				for name := range retention {
+					if !allowed[name] {
+						delete(retention, name)
+					}
 				}
 			}
 		}

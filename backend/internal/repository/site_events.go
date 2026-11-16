@@ -56,6 +56,8 @@ func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, ev
 		return nil, nil // A committed receipt survives deleted owners and old timestamps.
 	}
 	var billing *service.UsageBillingEvent
+	var diagnosticAt *time.Time
+	var diagnosticKind *string
 	switch event.Kind {
 	case "billing":
 		if err := validateSiteBillingFields(event.Payload); err != nil {
@@ -154,15 +156,33 @@ func (s *SiteStore) importEvent(ctx context.Context, tx *sql.Tx, p site.Peer, ev
 		}
 	case "ops_error_logs", "request_connection_traces":
 		if !duplicate {
+			at, err := siteDiagnosticTimestamp(event.Kind, event.Payload)
+			if err != nil {
+				return nil, invalidSiteEvent(err)
+			}
+			var expired bool
+			// The shared row lock lets concurrent imports proceed, while a daily
+			// floor update waits for earlier imports before reclaiming their data.
+			if !at.IsZero() {
+				if err := tx.QueryRowContext(ctx, `SELECT $2::timestamptz < discarded_before FROM site_diagnostic_retention WHERE table_name=$1 FOR SHARE`, event.Kind, at).Scan(&expired); err != nil {
+					return nil, err
+				}
+			}
+			if expired {
+				return nil, nil // acknowledge stale diagnostics without resurrecting them
+			}
 			if err = s.importLog(ctx, tx, p.ID, event.Kind, event.Payload); err != nil {
 				return nil, err
+			}
+			if !at.IsZero() {
+				diagnosticAt, diagnosticKind = &at, &event.Kind
 			}
 		}
 	default:
 		return nil, invalidSiteEvent(errors.New("unknown site event kind"))
 	}
 	if !duplicate {
-		_, err = tx.ExecContext(ctx, `INSERT INTO site_receipts(node_id,event_id,digest) VALUES($1,$2,$3)`, p.ID, event.ID, digest)
+		_, err = tx.ExecContext(ctx, `INSERT INTO site_receipts(node_id,event_id,digest,diagnostic_kind,diagnostic_at) VALUES($1,$2,$3,$4,$5)`, p.ID, event.ID, digest, diagnosticKind, diagnosticAt)
 		if err != nil {
 			return nil, err
 		}

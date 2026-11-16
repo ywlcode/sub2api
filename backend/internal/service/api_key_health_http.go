@@ -417,21 +417,66 @@ func inspectAPIKeyHealthHTTPFailure(resp *http.Response, o *apiKeyHealthObservat
 		o.record(false, resp.StatusCode, fmtAPIKeyHealthStatus(resp.StatusCode))
 		return
 	}
-	source := resp.Body
-	stop := time.AfterFunc(2*time.Second, func() { _ = source.Close() })
-	prefix, _ := io.ReadAll(io.LimitReader(source, int64(priorityAttemptInspectBytes)))
-	stop.Stop()
-	resp.Body = &apiKeyHealthReplayBody{Reader: io.MultiReader(bytes.NewReader(prefix), source), Closer: source}
-	if explicitAPIKeyHealthClientError(prefix) {
-		o.once.Do(func() {})
-		return
+	body := &apiKeyHealthReplayBody{source: resp.Body, ready: make(chan struct{}), observation: o, status: resp.StatusCode}
+	// One reader owns the upstream until prefetch completes. When inspection
+	// times out, ownership passes to the real consumer without closing its body.
+	// Closing the response still interrupts the pending HTTP read.
+	go func() {
+		body.prefix, body.readErr = io.ReadAll(io.LimitReader(body.source, int64(priorityAttemptInspectBytes)))
+		close(body.ready)
+	}()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-body.ready:
+		body.initialize()
+	case <-timer.C:
 	}
-	o.record(false, resp.StatusCode, fmtAPIKeyHealthStatus(resp.StatusCode))
+	resp.Body = body
 }
 
 type apiKeyHealthReplayBody struct {
-	io.Reader
-	io.Closer
+	source      io.ReadCloser
+	ready       chan struct{}
+	prefix      []byte
+	readErr     error
+	reader      *bytes.Reader
+	observation *apiKeyHealthObservation
+	status      int
+	initOnce    sync.Once
+	closeOnce   sync.Once
+	closeErr    error
+}
+
+func (b *apiKeyHealthReplayBody) initialize() {
+	b.initOnce.Do(func() {
+		<-b.ready
+		b.reader = bytes.NewReader(b.prefix)
+		if explicitAPIKeyHealthClientError(b.prefix) {
+			b.observation.once.Do(func() {})
+		} else {
+			b.observation.record(false, b.status, fmtAPIKeyHealthStatus(b.status))
+		}
+	})
+}
+
+func (b *apiKeyHealthReplayBody) Read(p []byte) (int, error) {
+	b.initialize()
+	if b.reader.Len() > 0 {
+		return b.reader.Read(p)
+	}
+	if b.readErr != nil {
+		return 0, b.readErr
+	}
+	return b.source.Read(p)
+}
+
+func (b *apiKeyHealthReplayBody) Close() error {
+	b.closeOnce.Do(func() {
+		b.closeErr = b.source.Close()
+		b.initialize()
+	})
+	return b.closeErr
 }
 
 func isUpstreamQuotaError(data []byte) bool {

@@ -19,7 +19,7 @@ import (
 
 // Keep site wiring separate from the main router so upstream router changes do
 // not share an implementation block with the independent-site control plane.
-func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db *sql.DB, apiKeyService *service.APIKeyService, billingCache *service.BillingCacheService, channels *service.ChannelService, pricing *service.PricingService, errorPassthrough *service.ErrorPassthroughService, settingService *service.SettingService, ops *service.OpsService, handlers *handler.Handlers) (gin.HandlerFunc, middleware2.ConnectionTraceRecorder, func()) {
+func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db *sql.DB, apiKeyService *service.APIKeyService, billingCache *service.BillingCacheService, channels *service.ChannelService, pricing *service.PricingService, errorPassthrough *service.ErrorPassthroughService, settingService *service.SettingService, ops *service.OpsService, handlers *handler.Handlers, cleanup *service.OpsCleanupService) (gin.HandlerFunc, middleware2.ConnectionTraceRecorder, func()) {
 	var siteIngress gin.HandlerFunc
 	var siteRecorder middleware2.ConnectionTraceRecorder
 	start := func() {}
@@ -37,6 +37,9 @@ func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db 
 		if err != nil {
 			panic(fmt.Errorf("initialize site storage: %w", err))
 		}
+		if cleanup != nil {
+			cleanup.SetSiteHistoryRetention(store)
+		}
 		store.AfterImport = func(ctx context.Context, events []service.UsageBillingEvent) error {
 			return billingCache.InvalidateSiteUsage(ctx, events, apiKeyService)
 		}
@@ -48,6 +51,11 @@ func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db 
 		store.AfterInstall = func(ctx context.Context) error { apiKeyService.InvalidateSiteReplica(); return nil }
 		store.BeforeAuthCommit = apiKeyService.BeginSiteAuthInstall
 		store.AfterPolicyInstall = func(ctx context.Context, changed map[string]bool) error {
+			if cleanup != nil && (changed["$full"] || changed["settings"]) {
+				if err := cleanup.Reload(ctx); err != nil {
+					return err
+				}
+			}
 			if changed["$full"] || changed["settings"] || changed["$policy"] {
 				if err := settingService.RefreshSiteReplica(ctx); err != nil {
 					return err
@@ -106,7 +114,14 @@ func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db 
 		sites.BodyBudget = pkghttputil.NewBodyMemoryBudget(cfg.Gateway.RequestBodyMemoryBudgetBytes)
 		// Router initialization registers settings callbacks. Do not let the
 		// first synchronization race with those callback assignments.
-		start = sites.Start
+		start = func() {
+			sites.Start()
+			if cfg.IsSecondary() && cleanup != nil {
+				// Dedicated local histories share the daily scheduler. No global
+				// aggregation, security audit or account maintenance runs here.
+				cleanup.Start()
+			}
+		}
 		lifecycle.onDrain = append(lifecycle.onDrain, sites.Stop)
 	}
 	return siteIngress, siteRecorder, start

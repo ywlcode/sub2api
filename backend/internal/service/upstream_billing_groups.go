@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+// Remote declarations follow the upstream protocol limit, independent of our
+// local Key binding policy.
+const maxUpstreamBillingGroups = 20
+
 // Whitelist every group field just as strictly as a v1 declaration. Extra
 // upstream fields, including credentials, must never enter account snapshots.
 func parseMultiGroupUpstreamBillingResponse(body []byte) (map[string]any, error) {
@@ -22,7 +26,7 @@ func parseMultiGroupUpstreamBillingResponse(body []byte) (map[string]any, error)
 	if err := json.Unmarshal(body, &response); err != nil {
 		return nil, err
 	}
-	if response.Object != "sub2api.key_billing" || response.SchemaVersion != 2 || response.BillingScope != "token" || response.BillingMode != "multi_group" || len(response.Groups) == 0 || len(response.Groups) > maxAPIKeyGroups {
+	if response.Object != "sub2api.key_billing" || response.SchemaVersion != 2 || response.BillingScope != "token" || response.BillingMode != "multi_group" || len(response.Groups) == 0 || len(response.Groups) > maxUpstreamBillingGroups {
 		return nil, fmt.Errorf("invalid multi-group billing declaration")
 	}
 	observedAt, err := time.Parse(time.RFC3339Nano, response.ObservedAt)

@@ -28,11 +28,12 @@ func (s *SiteStore) Deliver(ctx context.Context, p site.Peer, events []site.Even
 	}
 	// Commit money independently: a broken diagnostic cannot roll back bills.
 	for _, batch := range [][]site.Event{billing, diagnostics} {
-		if len(batch) == 0 {
-			continue
-		}
-		if err := s.deliverBatch(ctx, p, batch, &out); err != nil {
-			return out, err
+		// Short transactions release user/key locks and preserve progress when
+		// a later event hits the HTTP deadline. Lost ACKs replay through receipts.
+		for start := 0; start < len(batch); start += 64 {
+			if err := s.deliverBatch(ctx, p, batch[start:min(start+64, len(batch))], &out); err != nil {
+				return out, err
+			}
 		}
 	}
 	return out, nil
@@ -47,12 +48,18 @@ func (s *SiteStore) deliverBatch(ctx context.Context, p site.Peer, events []site
 	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('site-delivery:'||$1,0))`, p.ID); err != nil {
 		return err
 	}
-	imported, err := s.importEvents(ctx, tx, p, events, out)
+	committed := site.DeliveryResponse{ReceiptDigests: map[int64]string{}}
+	imported, err := s.importEvents(ctx, tx, p, events, &committed)
 	if err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return err
+	}
+	out.Acknowledged = append(out.Acknowledged, committed.Acknowledged...)
+	out.Rejected = append(out.Rejected, committed.Rejected...)
+	for id, digest := range committed.ReceiptDigests {
+		out.ReceiptDigests[id] = digest
 	}
 	s.afterSiteImport(ctx, imported)
 	return nil

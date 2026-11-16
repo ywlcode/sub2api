@@ -44,6 +44,7 @@ type OpsCleanupService struct {
 	auditSvc      *AuditLogService
 	moderationSvc *ContentModerationService
 	maintenance   []opsCleanupMaintenance
+	siteHistory   SiteHistoryRetention
 	runMu         sync.Mutex
 	cancelMu      sync.Mutex // cancellation must not wait for a settings DB read
 	cancelRun     context.CancelFunc
@@ -416,6 +417,19 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 	}
 
 	now := time.Now().UTC()
+	s.mu.Lock()
+	siteHistory := s.siteHistory
+	s.mu.Unlock()
+	if s.cfg.IsSecondary() {
+		if siteHistory == nil {
+			return out, errors.New("secondary history retention is not initialized")
+		}
+		policy, err := s.siteHistoryPolicy(ctx, now, effective)
+		if err != nil {
+			return out, err
+		}
+		return out, siteHistory.PruneSiteHistory(ctx, policy)
+	}
 
 	targets := []opsCleanupTarget{
 		{effective.ErrorLogRetentionDays, "ops_error_logs", "created_at", false, &out.errorLogs},
@@ -519,6 +533,15 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 	}
 	for _, task := range s.maintenance {
 		run(task.name, func(ctx context.Context) error { return task.run(ctx, now) })
+	}
+	if siteHistory != nil {
+		run("site replication history", func(ctx context.Context) error {
+			policy, err := s.siteHistoryPolicy(ctx, now, effective)
+			if err != nil {
+				return err
+			}
+			return siteHistory.PruneSiteHistory(ctx, policy)
+		})
 	}
 	return out, errors.Join(append(failures, ctx.Err())...)
 }

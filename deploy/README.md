@@ -6,6 +6,8 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 
 自用分支同步上游、构建镜像和更新服务器的流程见 [dev-ywlcode 分支维护与 Docker 发布](DEV_YWLCODE.md)。每次 rebase 必须完成 [主从字段兼容审查](DEV_YWLCODE.md#主从站的字段兼容要求) 和 [升级前后性能对照](DEV_YWLCODE.md#升级前后的性能对照)，仓库约定见 [AGENTS.md](../AGENTS.md)。
 
+**本机测试网络必须避让公司 `node*`／`open*` 网段。** 新建测试网络不得自动分配地址，须显式配置经核对的 IPAM，避开 `172.16.0.0/12`、`172.38.8.0/22` 及其他实际内网网段；测试结束移除容器和专属网络，不能只停止容器。详见 [本机 Docker 测试网络约束](DEV_YWLCODE.md#本机-docker-测试网络约束)。
+
 本机连接 Wi-Fi 时可使用 `10800` 代理加速上传；Wi-Fi 断开时跳过该代理，直接通过 SSH／SCP 继续部署。代理不可用不代表 SSH 不可用，详见 [传输路径选择](DEV_YWLCODE.md#按-wi-fi-状态选择代理或直连-ssh)。
 
 **发布镜像不得携带开发机代理默认值。** 构建或上传使用的 `127.0.0.1:10800` 不能写入镜像的运行环境；复用旧镜像或从容器生成镜像时尤其要检查。导出前、双机导入后均须检查 `Config.Env`，并在切换前用候选镜像实际执行健康探测，详见 [镜像代理检查与修复](DEV_YWLCODE.md#发布镜像禁止携带本机代理)。

@@ -15,7 +15,7 @@ import (
 // additions keep this value; the projection revision forces existing cursors
 // to receive newly reviewed fields after an upgrade.
 const siteConfigSchema = "sub2api.site.config.v1"
-const siteProjectionRevision = "2026-11-16.1"
+const siteProjectionRevision = "2026-11-16.2"
 const siteEventSchema = "sub2api.site.events.v1"
 
 type siteColumn struct {

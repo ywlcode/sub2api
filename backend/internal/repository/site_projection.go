@@ -47,10 +47,6 @@ func (s *SiteStore) initializeProjection(ctx context.Context) error {
 	}
 	return tx.Commit()
 }
-func (s *SiteStore) registerProjection(ctx context.Context, p site.Peer) error {
-	return s.registerProjectionOn(ctx, s.db, p)
-}
-
 func (s *SiteStore) registerProjectionOn(ctx context.Context, executor interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }, p site.Peer) error {
@@ -61,7 +57,7 @@ func (s *SiteStore) registerProjectionOn(ctx context.Context, executor interface
 		Settings                []string
 	}{s.projectionSchema(p), siteProjectionRevision, p.Token, p.BaseURLs, siteContractColumns, service.SiteSettingKeys})
 	sum := sha256.Sum256(raw)
-	_, err := executor.ExecContext(ctx, `INSERT INTO site_export_nodes(node_id,fingerprint,epoch) SELECT $1,$2,$3 WHERE NOT EXISTS(SELECT 1 FROM site_export_nodes WHERE node_id=$1 AND fingerprint=$2) ON CONFLICT(node_id) DO UPDATE SET fingerprint=EXCLUDED.fingerprint,epoch=EXCLUDED.epoch,initialized=false WHERE site_export_nodes.fingerprint<>EXCLUDED.fingerprint`, p.ID, hex.EncodeToString(sum[:]), uuid.NewString())
+	_, err := executor.ExecContext(ctx, `INSERT INTO site_export_nodes(node_id,fingerprint,epoch) SELECT $1,$2,$3 WHERE NOT EXISTS(SELECT 1 FROM site_export_nodes WHERE node_id=$1 AND fingerprint=$2) ON CONFLICT(node_id) DO UPDATE SET fingerprint=EXCLUDED.fingerprint,epoch=EXCLUDED.epoch,initialized=false,retained_revision=0 WHERE site_export_nodes.fingerprint<>EXCLUDED.fingerprint`, p.ID, hex.EncodeToString(sum[:]), uuid.NewString())
 	return err
 }
 
@@ -137,10 +133,10 @@ func (s *SiteStore) exportProjection(ctx context.Context, conn *sql.Conn, p site
 		return out, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var revision int64
+	var revision, retained int64
 	var epoch string
 	var initialized bool
-	if err = tx.QueryRowContext(ctx, `SELECT epoch,revision,initialized FROM site_export_nodes WHERE node_id=$1`, p.ID).Scan(&epoch, &revision, &initialized); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT epoch,revision,initialized,retained_revision FROM site_export_nodes WHERE node_id=$1`, p.ID).Scan(&epoch, &revision, &initialized, &retained); err != nil {
 		return out, err
 	}
 	current := epoch + ":" + strconv.FormatInt(revision, 10)
@@ -179,7 +175,10 @@ func (s *SiteStore) exportProjection(ctx context.Context, conn *sql.Conn, p site
 	if strings.HasPrefix(input.Version, epoch+":") {
 		base, _ = strconv.ParseInt(strings.TrimPrefix(input.Version, epoch+":"), 10, 64)
 	}
-	out.Full = base <= 0 || base > revision
+	if input.Cursor != "" && base > 0 && base < retained {
+		return out, errors.New("site delta history expired; restart paging")
+	}
+	out.Full = base <= 0 || base > revision || base < retained
 	if out.Full {
 		base = 0
 	}
@@ -348,9 +347,9 @@ func (s *SiteStore) refreshProjection(ctx context.Context, tx *sql.Tx, p site.Pe
 		}
 		projection := siteProjectionSQL(t.name, legacy)
 		if t.name == "api_keys" && legacy {
-			// Old replicas cannot enforce this new permission. Disable only the
-			// limited key on that replica until it upgrades; primary stays usable.
-			projection += ` || jsonb_build_object('status',CASE WHEN t.context_token_limit>0 THEN 'inactive' ELSE t.status END)`
+			// Redaction uses this permission to remove the legacy routing hint.
+			// It is stripped before transmission to replicas that cannot enforce it.
+			projection += ` || jsonb_build_object('context_token_limit',t.context_token_limit)`
 		}
 		if t.name == "accounts" {
 			projection += ` || jsonb_build_object('schedulable',t.schedulable AND NOT EXISTS(SELECT 1 FROM account_performance_monitors m WHERE m.account_id=t.id AND m.paused) AND NOT EXISTS(SELECT 1 FROM ai_ops_controls a WHERE a.account_id=t.id AND a.ai_paused))`

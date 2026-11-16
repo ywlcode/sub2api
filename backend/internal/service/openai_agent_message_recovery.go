@@ -106,7 +106,7 @@ type openAIAgentRecoveryRequest struct {
 // Ordinary sticky writes, HTTP 200 and reasoning are not proof.
 func (s *OpenAIGatewayService) WithOpenAIAgentMessageRecovery(ctx context.Context, c *gin.Context, body []byte, sessionHash, model string) context.Context {
 	request := &openAIAgentRecoveryRequest{groupID: getOpenAIGroupIDFromContext(c), model: model, session: sessionHash}
-	request.disableOwnerBinding = s != nil && s.cfg != nil && s.cfg.Gateway.DisableEncryptedAgentOwnerBinding
+	request.disableOwnerBinding = s != nil && s.cfg != nil && s.cfg.RequestGateway().DisableEncryptedAgentOwnerBinding
 	if request.disableOwnerBinding || (openAI409HasProviderState(body) && s != nil && s.settingService != nil && s.settingService.IsOpenAI409OmitEncryptedHistoryEnabled(ctx)) || openAIAgentRecoveryHTTPUser(c, getAPIKeyIDFromContext(c)) > 0 {
 		// An authenticated HTTP response pointer must remain on its actual
 		// producer even with Beta off and without any encrypted-agent owner.
@@ -261,7 +261,7 @@ func openAIAgentRecoveryInputDigest(body []byte) [32]byte {
 }
 
 func (s *OpenAIGatewayService) preserveOpenAIAgentHistory(body []byte) bool {
-	return s != nil && s.cfg != nil && s.cfg.Gateway.DisableEncryptedAgentOwnerBinding && len(openAIAgentRecoveryItemDigests(body)) > 0
+	return s != nil && s.cfg != nil && s.cfg.RequestGateway().DisableEncryptedAgentOwnerBinding && len(openAIAgentRecoveryItemDigests(body)) > 0
 }
 
 func openAIAgentRecoveryItemDigests(body []byte) [][32]byte {

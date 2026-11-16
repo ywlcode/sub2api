@@ -724,7 +724,7 @@ func ProvideOpsCleanupService(
 		}},
 	}
 	startBackgroundService(cfg, svc)
-	if opsService != nil && cfg.RunsBackgroundJobs() {
+	if opsService != nil && (cfg.RunsBackgroundJobs() || cfg.IsSecondary()) {
 		opsService.SetCleanupReloader(svc)
 	}
 	return svc

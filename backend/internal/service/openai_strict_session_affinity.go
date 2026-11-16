@@ -10,7 +10,7 @@ func (s *OpenAIGatewayService) strictOpenAISessionAffinity(groupID *int64, platf
 	if s == nil || s.cfg == nil || groupID == nil || (platform != PlatformOpenAI && platform != PlatformQwen) || imageCapability != "" {
 		return false
 	}
-	for _, id := range s.cfg.Gateway.OpenAIScheduler.StrictSessionAffinityGroupIDs {
+	for _, id := range s.cfg.RequestGateway().OpenAIScheduler.StrictSessionAffinityGroupIDs {
 		if id == *groupID {
 			return true
 		}
