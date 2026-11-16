@@ -83,8 +83,7 @@ type siteTransfer struct {
 	downloadJSON, downloadWire int64
 }
 
-func (m *Manager) postSite(ctx context.Context, client *http.Client, path string, input *SyncRequest, output any) (siteTransfer, error) {
-	var stats siteTransfer
+func (m *Manager) postSite(ctx context.Context, client *http.Client, path string, input *SyncRequest, output any) (stats siteTransfer, err error) {
 	raw, err := marshalSyncRequest(input, maxSyncBody)
 	if err != nil {
 		return stats, err
@@ -102,6 +101,11 @@ func (m *Manager) postSite(ctx context.Context, client *http.Client, path string
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
 	req.Header.Set("Accept-Encoding", "gzip")
+	if path == DeliveryPath {
+		var finish func(error)
+		req, finish = traceEventUpload(req, len(input.Events), len(packed))
+		defer func() { finish(err) }()
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return stats, err

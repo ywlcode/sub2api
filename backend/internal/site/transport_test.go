@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,82 @@ import (
 type sitePoolRequest struct {
 	path, connection string
 	protocol         int
+}
+
+// Keep the first connection unusable even after its request is canceled. A
+// retry must use another TCP connection, rather than another stream on the same
+// HTTP/2 session. Exercise both missing headers and a partially received receipt.
+func TestSiteDeliveryTimeoutDiscardsStalledConnection(t *testing.T) {
+	for _, phase := range []string{"headers", "receipt_body"} {
+		t.Run(phase, func(t *testing.T) {
+			var mu sync.Mutex
+			var stalled string
+			var received []SyncRequest
+			connections := make(chan string, 4)
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				c, _ := gin.CreateTestContext(w)
+				c.Request = r
+				var input SyncRequest
+				if err := decodeSiteRequest(c, &input); err != nil {
+					t.Errorf("decode event upload: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				mu.Lock()
+				if stalled == "" {
+					stalled = r.RemoteAddr
+				}
+				blocked := r.RemoteAddr == stalled
+				received = append(received, input)
+				mu.Unlock()
+				connections <- r.RemoteAddr
+				if blocked {
+					if phase == "receipt_body" {
+						_, _ = io.WriteString(w, `{"protocol":`)
+						_ = http.NewResponseController(w).Flush()
+					}
+					<-r.Context().Done()
+					return
+				}
+				out := DeliveryResponse{Protocol: ProtocolVersion, NodeID: input.NodeID}
+				for _, e := range input.Events {
+					out.Acknowledged = append(out.Acknowledged, e.ID)
+				}
+				_ = json.NewEncoder(w).Encode(out)
+			}))
+			server.EnableHTTP2 = true
+			server.StartTLS()
+			defer server.Close()
+			local := &deliveryTestStore{pending: []Event{{ID: 7, Kind: "billing", Payload: json.RawMessage(`{"amount":0.125}`)}}}
+			manager, err := New(Config{Mode: Secondary, ID: "office", PrimaryURL: server.URL, Token: strings.Repeat("p", 32)}, local, 1<<20)
+			require.NoError(t, err)
+			defer manager.Stop()
+			transport := manager.deliveryClient.Transport.(*http.Transport)
+			transport.TLSClientConfig.RootCAs = server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+			transport.MaxConnsPerHost = 1
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			_, err = manager.deliverOnce(ctx)
+			cancel()
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			pending, err := local.Pending(t.Context(), DeliveryBatch)
+			require.NoError(t, err)
+			require.Len(t, pending, 1, "lost acknowledgement must preserve the outbox")
+			retryCtx, cancelRetry := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancelRetry()
+			active, err := manager.deliverOnce(retryCtx)
+			require.NoError(t, err, "retry must escape the failed connection")
+			require.True(t, active)
+			require.NotEqual(t, <-connections, <-connections)
+			mu.Lock()
+			attempts := append([]SyncRequest(nil), received...)
+			mu.Unlock()
+			require.Len(t, attempts, 2)
+			require.Equal(t, attempts[0], attempts[1], "reconnect must preserve original event identity and payload")
+			pending, err = local.Pending(t.Context(), DeliveryBatch)
+			require.NoError(t, err)
+			require.Empty(t, pending)
+		})
+	}
 }
 
 type sitePoolFixture struct {
@@ -122,7 +199,11 @@ func TestSitePoolsReuseOnlyWithinTrafficClassAndCloseOnStop(t *testing.T) {
 				for j := 0; j < 3; j++ {
 					select {
 					case observed := <-f.requests:
-						require.Equal(t, protocol.major, observed.protocol)
+						wantProtocol := protocol.major
+						if observed.path == DeliveryPath {
+							wantProtocol = 1
+						}
+						require.Equal(t, wantProtocol, observed.protocol)
 						if previous, ok := connections[observed.path]; ok {
 							require.Equal(t, previous, observed.connection, "each traffic class should reuse its connection")
 						}

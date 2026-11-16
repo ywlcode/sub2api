@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,7 +82,19 @@ func New(cfg Config, store Store, maxBody int64) (*Manager, error) {
 	// with policy renewal. Request contexts still own control-plane deadlines.
 	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	m.syncClient = &http.Client{Transport: transport, Timeout: 0, CheckRedirect: noRedirect}
-	m.deliveryClient = &http.Client{Transport: transport.Clone(), Timeout: 0, CheckRedirect: noRedirect}
+	deliveryTransport := transport.Clone()
+	// Uploads are serial. HTTP/1 cancellation closes the underlying connection,
+	// so a timed-out batch cannot keep retrying on a stalled HTTP/2 session.
+	// Successful batches still use keep-alive; other pools keep HTTP/2 support.
+	deliveryTransport.Protocols = new(http.Protocols)
+	deliveryTransport.Protocols.SetHTTP1(true)
+	// Clone initializes the source transport and can copy its HTTP/2 ALPN
+	// advertisement. Keep the TLS negotiation consistent with Protocols too.
+	if deliveryTransport.TLSClientConfig == nil {
+		deliveryTransport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+	deliveryTransport.TLSClientConfig.NextProtos = []string{"http/1.1"}
+	m.deliveryClient = &http.Client{Transport: deliveryTransport, Timeout: 0, CheckRedirect: noRedirect}
 	for _, p := range cfg.Peers {
 		m.peers[p.ID] = &peerSnapshot{}
 	}
