@@ -58,6 +58,7 @@ func ProvideRouter(
 	channels *service.ChannelService,
 	pricing *service.PricingService,
 	errorPassthrough *service.ErrorPassthroughService,
+	opsCleanup *service.OpsCleanupService,
 ) *gin.Engine {
 	if cfg.Server.Mode == "release" {
 		gin.SetMode(gin.ReleaseMode)
@@ -115,14 +116,8 @@ func ProvideRouter(
 	settingService.Serverless = manager
 	settingService.IPRisk = iprisk.New(settingService.IPRiskStore(), redisClient, serverless.NewGeoJSResolver(redisClient), strings.EqualFold(os.Getenv("IP_RISK_DISABLED"), "true"))
 	settingService.IPRisk.Start()
-	if cfg.Runtime.Role != config.RuntimeRoleGateway && handlers.Admin != nil && handlers.Admin.Setting != nil {
-		handlers.Admin.Setting.SetKeyRiskAPIKeys(apiKeyService)
-		stop, err := handlers.Admin.Setting.StartKeyRisk(cfg.Database.DSN())
-		if err != nil {
-			slog.Warn("key risk initialization failed")
-		} else {
-			lifecycle.onDrain = append(lifecycle.onDrain, stop)
-		}
+	if handlers.Admin != nil && handlers.Admin.Setting != nil {
+		configureKeyRisk(cfg, handlers.Admin.Setting, apiKeyService, lifecycle)
 	}
 	if handlers.Admin != nil && handlers.Admin.Setting != nil {
 		if handlers.Admin.PromptAudit != nil {
@@ -149,7 +144,7 @@ func ProvideRouter(
 		}
 	}
 	r.GET("/internal/serverless/probe", manager.ProbeHandler)
-	siteIngress, siteRecorder, startSites := configureSites(r, cfg, lifecycle, db, apiKeyService, billingCache, channels, pricing, errorPassthrough, settingService, opsService, handlers)
+	siteIngress, siteRecorder, startSites := configureSites(r, cfg, lifecycle, db, apiKeyService, billingCache, channels, pricing, errorPassthrough, settingService, opsService, handlers, opsCleanup)
 	router := SetupRouter(r, handlers, jwtAuth, optionalJWTAuth, adminAuth, apiKeyAuth, auditLog, stepUpAuth, apiKeyService, subscriptionService, opsService, settingService, compositeResolver, cfg, redisClient, siteIngress, siteRecorder)
 	startSites()
 	return router

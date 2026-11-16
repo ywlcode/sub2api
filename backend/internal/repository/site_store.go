@@ -128,13 +128,8 @@ func NewSiteStore(db *sql.DB, cfg *config.Config) (*SiteStore, error) {
 		if err := s.initializeProjection(ctx); err != nil {
 			return nil, err
 		}
-		// Register configured peers before the primary starts serving writes;
-		// their first export already has an active transactional dirty set.
-		for _, peer := range cfg.Site.Peers {
-			if err := s.registerProjection(ctx, peer); err != nil {
-				return nil, err
-			}
-		}
+		// A peer is registered under its negotiated schema and database identity
+		// before its first export snapshot. Startup must not replace that state.
 	}
 	return s, nil
 }
@@ -234,6 +229,20 @@ func redactSiteRow(table string, raw []byte, p site.Peer) (json.RawMessage, erro
 			return nil, err
 		}
 		set("key", site.KeyDigest(p.Token, key))
+		if siteLegacySchemas[p.ConfigSchema] {
+			var limit int64
+			if raw, ok := obj["context_token_limit"]; ok {
+				if err := json.Unmarshal(raw, &limit); err != nil {
+					return nil, err
+				}
+			}
+			if limit > 0 {
+				// This is a final, deliberately non-HMAC digest. Never hash this
+				// predictable sentinel as a credential: no client key may match it.
+				set("key", "!site-legacy-unsupported:"+string(obj["id"]))
+			}
+			delete(obj, "context_token_limit")
+		}
 	case "accounts":
 		var id int64
 		_ = json.Unmarshal(obj["id"], &id)

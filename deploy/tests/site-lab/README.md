@@ -2,11 +2,14 @@
 
 此目录默认操作名为 `sub2api-site-lab` 的 Docker Compose 实验项目，使用两套独立 PostgreSQL/Redis、模拟模型上游、故障中继。Docker 网络设为 `internal`，模型请求不访问真实上游。测试密钥随机生成，生成的配置、数据库卷和证据不要提交。
 
+**启动前必须完成 [本机 Docker 测试网络检查](../../DEV_YWLCODE.md#本机-docker-测试网络约束)。** `prepare.py` 当前只生成 `internal` 网络，不自动检查公司路由，也不指定 IPAM；生成后须在 `compose.json` 的 `networks.default.ipam.config[].subnet` 中填入已核对的独立小网段，再执行 `up`。本机新测试网络禁止使用 `172.16.0.0/12`、公司接入网段 `172.38.8.0/22` 或覆盖其他 LAN、Wi-Fi、VPN、SSH 目标网段；尤其不能影响 `node*` 的 `172.19.*` 与 `open*` 的 `172.28.*`。`internal` 不能阻止网桥路由抢占。
+
 需要 Docker Compose、Python 3，以及可用的 Sub2API 运行时基础镜像。示例使用本地已有的 `sub2api-ywlcode:4e0339570`。工具镜像 `sub2api-oauth-lab-tun:0.1` 需要 Python 3、`ip`、`tc`；也可用 Alpine 安装 `python3 iproute2 iproute2-tc` 后构建同名本地镜像。准备脚本中的 PostgreSQL/Redis 镜像也需预先存在或可以拉取。
 
 ```sh
 lab_dir="$HOME/.cache/sub2api-audit/site-lab-local"
 python3 deploy/tests/site-lab/prepare.py "$lab_dir"
+# 必须先核对内网/SSH/Docker 网段，并为生成的 compose.json 显式配置 IPAM；完成前不要 up。
 # 先在 frontend 中运行 pnpm build（产物直接写入 backend/internal/web/dist），再编译后端。
 cd backend
 CGO_ENABLED=0 go build -tags embed -o "$lab_dir/build/sub2api" ./cmd/server
@@ -40,7 +43,7 @@ docker compose -f "$lab_dir/compose.json" restart link
 docker compose -f "$lab_dir/compose.json" start primary secondary
 ```
 
-停止而保留测试数据库：`docker compose -f "$lab_dir/compose.json" stop`。`down` 保留命名卷；只有确认不再需要实验数据时才使用 `down -v`。同一主机一次只运行一套同名实验项目；`prepare.py --project NAME --image IMAGE` 可准备独立命名的项目，目录和数据卷也必须独立。
+实验结束后执行 `docker compose -f "$lab_dir/compose.json" down`，移除测试容器和网络并保留命名卷。仅 `stop` 会留下网桥和路由，不能作为最终清理；只有确认不再需要实验数据时才使用 `down -v`。随后核对 `node033`、`node036`、`open06` 的路由与 TCP 22 连通性，不能误删正式从站网络。同一主机一次只运行一套同名实验项目；`prepare.py --project NAME --image IMAGE` 可准备独立命名的项目，目录和数据卷也必须独立。再次运行 `prepare.py` 会重写配置，须重新检查 IPAM。
 
 配置补齐和传输大小实验（全新 mock 项目 seed 后运行；不用于真实账号实验库）：
 

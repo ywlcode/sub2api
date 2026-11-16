@@ -143,7 +143,8 @@ func TestSiteContractLegacyProjectionUpgradeAndNewPermission(t *testing.T) {
 			var value map[string]any
 			require.NoError(t, json.Unmarshal(row.Value, &value))
 			require.NotContains(t, value, "context_token_limit")
-			require.Equal(t, "inactive", value["status"])
+			require.Equal(t, "active", value["status"])
+			require.Equal(t, "!site-legacy-unsupported:"+strconv.FormatInt(p.key, 10), value["key"])
 		}
 	}
 	var status string

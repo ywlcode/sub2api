@@ -16,7 +16,7 @@ import (
 // idempotent transforms; any other late task or controls mutation is refused.
 func (s *OpenAIGatewayService) projectOpenAI409ImageControls(ctx context.Context, c *gin.Context, account *Account, body []byte) ([]byte, error) {
 	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) ||
-		(s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
+		(s.cfg != nil && s.cfg.RequestGateway().ForceCodexCLI)
 	strip := isCodexCLI && account.CodexImageGenerationExplicitToolPolicy() == codexImageGenerationExplicitToolPolicyStrip
 	apiKey := getAPIKeyFromContext(c)
 	allowed := GroupAllowsImageGenerationLatest(c.Request.Context(), apiKeyGroup(apiKey))
