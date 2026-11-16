@@ -129,4 +129,5 @@ class Handler(BaseHTTPRequestHandler):
                 f.write(json.dumps(value) + "\n")
 
 
+ThreadingHTTPServer.request_queue_size = 1024
 ThreadingHTTPServer(("0.0.0.0", 8091), Handler).serve_forever()

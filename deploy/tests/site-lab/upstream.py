@@ -72,6 +72,12 @@ class Handler(BaseHTTPRequestHandler):
         rid = "resp_" + uuid.uuid4().hex
         text = "lab answer"
         usage = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+        if "LAB_BENCH " in label:
+            # Reproducible application overhead, not a model tokenization or
+            # inference benchmark. The caller records this simulated usage.
+            text = "benchmark " * 3000
+            usage = {"input_tokens": 100000, "output_tokens": 3000, "total_tokens": 103000}
+            time.sleep(1.5)
         output = [{"id": "msg_" + rid, "type": "message", "role": "assistant", "status": "completed",
                    "content": [{"type": "output_text", "text": text, "annotations": []}]}]
         response = {"id": rid, "object": "response", "model": body["model"], "status": "completed", "output": output, "usage": usage}
@@ -119,4 +125,5 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
 
+ThreadingHTTPServer.request_queue_size = 1024
 ThreadingHTTPServer(("0.0.0.0", 8090), Handler).serve_forever()

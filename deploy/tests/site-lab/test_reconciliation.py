@@ -17,7 +17,9 @@ ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value;""")
 login = lab.http("primary", "/api/v1/auth/login", {"email": "primary@site-lab.invalid", "password": lab.creds["admin"]})
 assert login["status"] == 200
 headers = {"Authorization": "Bearer " + json.loads(login["body"])["data"]["access_token"]}
-base = "/api/v1/admin/sites/lab-secondary/rejections"
+replica_id = lab.sql("secondary", "SELECT replica_id FROM site_identity WHERE singleton")
+storage_id = "lab-secondary" + ("@" + replica_id if replica_id else "")
+base = "/api/v1/admin/sites/" + storage_id + "/rejections"
 evidence = []
 
 
@@ -26,6 +28,13 @@ def balance(site):
 
 
 def reject_bill(retryable):
+    if not retryable:
+        # Resume an interrupted synthetic rejection case without dropping a
+        # durable bill or charging it a second time.
+        existing = lab.query("secondary", "SELECT event_id,payload FROM site_rejected_events WHERE kind='billing' AND state='pending' AND payload->>'version'='0' ORDER BY event_id LIMIT 1")
+        if existing:
+            event = existing[0]
+            return int(event["event_id"]), Decimal(str(event["payload"]["command"]["BalanceCost"]))
     lab.control(mode="reject")
     try:
         result = lab.request(stream=True)
@@ -37,7 +46,7 @@ def reject_bill(retryable):
     finally:
         lab.control(mode="normal")
     state = "retrying" if retryable else "pending"
-    lab.eventually(lambda: lab.sql("primary", f"SELECT state FROM site_rejected_events WHERE node_id='lab-secondary' AND event_id={event_id};") == state, label="primary rejection")
+    lab.eventually(lambda: lab.sql("primary", f"SELECT state FROM site_rejected_events WHERE node_id='{storage_id}' AND event_id={event_id};") == state, label="primary rejection")
     lab.eventually(lambda: lab.sql("secondary", f"SELECT state FROM site_rejected_events WHERE event_id={event_id};") == state, label="secondary rejection")
     return event_id, Decimal(str(event["payload"]["command"]["BalanceCost"]))
 

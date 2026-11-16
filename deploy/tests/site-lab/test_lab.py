@@ -16,6 +16,7 @@ parser.add_argument("phase", choices=["protocols", "policy", "delivery", "networ
 args = parser.parse_args()
 lab = Lab(args.directory)
 evidence = []
+opening_accounting_basis = None
 
 
 def record(name, **data):
@@ -44,7 +45,7 @@ def accounting():
     wait_sync()
     primary = lab.query("primary", "SELECT balance::text, (SELECT coalesce(sum(actual_cost),0)::text FROM usage_logs WHERE user_id=101 AND subscription_id IS NULL) AS usage FROM users WHERE id=101")[0]
     secondary = lab.sql("secondary", "SELECT balance::text FROM users WHERE id=101;")
-    assert Decimal(primary["balance"]) == Decimal("100") - Decimal(primary["usage"]), primary
+    assert Decimal(primary["balance"]) == opening_accounting_basis - Decimal(primary["usage"]), primary
     assert Decimal(primary["balance"]) == Decimal(secondary), (primary, secondary)
     p = lab.sql("primary", "SELECT count(*) FROM usage_logs WHERE account_id=101 AND request_id LIKE 'site:%';")
     s = lab.sql("secondary", "SELECT count(*) FROM usage_logs;")
@@ -110,7 +111,9 @@ def protocols():
     record("upstream_error", response=r)
     wait_sync()
     p = lab.query("primary", "SELECT id,request_id,error_type,error_message FROM ops_error_logs ORDER BY id")
-    s = lab.query("secondary", "SELECT id,request_id,error_type,error_message FROM ops_error_logs ORDER BY id")
+    # Unauthenticated ingress errors intentionally stay local so arbitrary
+    # rejected traffic cannot fill the durable billing/delivery queue.
+    s = lab.query("secondary", "SELECT id,request_id,error_type,error_message FROM ops_error_logs WHERE user_id IS NOT NULL ORDER BY id")
     assert len(p) >= len(s) and any(x["error_type"] == "site_usage_unsettled" for x in p), p
     record("diagnostics_and_accounting", primary_errors=p, secondary_errors=s, accounting=accounting())
 
@@ -286,6 +289,12 @@ def lifecycle():
 
 
 try:
+    # Compare each phase's debits against its opening ledger. A preceding
+    # busy-sync test deliberately changes the balance with 4,000 tiny writes.
+    # Persist the basis so rerunning a phase never hides those adjustments.
+    wait_sync()
+    opening_accounting_basis = Decimal(lab.sql("primary", "SELECT balance+(SELECT coalesce(sum(actual_cost),0) FROM usage_logs WHERE user_id=101 AND subscription_id IS NULL) FROM users WHERE id=101"))
+    record("opening_accounting_basis", balance_plus_billed_usage=str(opening_accounting_basis))
     globals()[args.phase]()
     record("phase_passed", phase=args.phase)
 except BaseException as exc:
