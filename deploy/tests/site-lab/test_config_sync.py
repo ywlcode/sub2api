@@ -12,7 +12,8 @@ results=json.loads((lab.root/'evidence/config-sync.json').read_text()) if (lab.r
 def record(name, rows):
     samples=[]
     for x in rows:
-        sample={k:x.get(k) for k in ('at','full','rows','wire_bytes','raw_bytes','download_wire_bytes','download_json_bytes')}
+        sample={k:x.get(k) for k in ('at','kind','full','rows','wire_bytes','raw_bytes','download_wire_bytes','download_json_bytes')}
+        sample['events']=len(x.get('events',[]))
         sample['table_counts']=dict(collections.Counter(x.get('tables',[])))
         samples.append(sample)
     if any(x["case"]==name for x in results): return
@@ -20,8 +21,8 @@ def record(name, rows):
     (lab.root/'evidence/config-sync.json').write_text(json.dumps(results,indent=2))
     print(json.dumps(results[-1]),flush=True)
 
-def since(at, **match):
-    return [x for x in lab.records() if x['at']>=at and x['kind']=='sync' and x.get('status')==200 and all(x.get(k)==v for k,v in match.items())]
+def since(at, kind='sync', **match):
+    return [x for x in lab.records() if x['at']>=at and x['kind']==kind and x.get('status')==200 and all(x.get(k)==v for k,v in match.items())]
 
 def changed(name, sql, ready):
     if any(x["case"]==name for x in results): return
@@ -44,12 +45,21 @@ for protocol in ('responses','chat/completions','messages'):
     assert reply['status']==200 and 'lab answer' in reply['body'] and 'response.failed' not in reply['body'],(protocol,reply)
 lab.eventually(lab.settled)
 # Primary's effective defaults must take precedence over deliberately different local boot settings.
-p=lab.root/'config/primary.json';config=json.loads(p.read_text());config['gateway']['max_body_size']=262144;p.write_text(json.dumps(config,indent=2))
-at=time.time();lab.command('restart','primary')
-lab.eventually(lambda:lab.sql('secondary',"SELECT value->'gateway'->>'max_body_size' FROM site_replica_rows WHERE table_name='$policy'")=='262144' and lab.ready(),timeout=40,label='live primary body limit')
-assert lab.request(text='x'*300000)['status']==413
-record('effective_gateway_defaults_reload',since(at,full=True))
-assert lab.sql('secondary',"SELECT value->'gateway'->>'text_max_body_size' FROM site_replica_rows WHERE table_name='$policy'")=='262144'
+p=lab.root/'config/primary.json'
+original_config=p.read_text()
+original_limit=lab.sql('secondary',"SELECT value->'gateway'->>'max_body_size' FROM site_replica_rows WHERE table_name='$policy'")
+config=json.loads(original_config)
+config.setdefault('gateway',{}).update(max_body_size=262144,text_max_body_size=262144)
+try:
+    p.write_text(json.dumps(config,indent=2))
+    at=time.time();lab.command('restart','primary')
+    lab.eventually(lambda:lab.sql('secondary',"SELECT value->'gateway'->>'max_body_size' FROM site_replica_rows WHERE table_name='$policy'")=='262144' and lab.ready(),timeout=40,label='live primary body limit')
+    assert lab.request(text='x'*300000)['status']==413
+    record('effective_gateway_defaults_reload',since(at,full=True))
+    assert lab.sql('secondary',"SELECT value->'gateway'->>'text_max_body_size' FROM site_replica_rows WHERE table_name='$policy'")=='262144'
+finally:
+    p.write_text(original_config);lab.command('restart','primary')
+    lab.eventually(lambda:lab.sql('secondary',"SELECT value->'gateway'->>'max_body_size' FROM site_replica_rows WHERE table_name='$policy'")==original_limit and lab.ready(),timeout=40,label='restore body limit')
 changed('account_pause',"INSERT INTO account_performance_monitors(account_id,paused) VALUES(101,true) ON CONFLICT(account_id) DO UPDATE SET paused=true",lambda:lab.sql('secondary','SELECT schedulable FROM accounts WHERE id=101')=='f')
 assert lab.sql('primary','SELECT schedulable FROM accounts WHERE id=101')=='t'
 changed('account_resume',"UPDATE account_performance_monitors SET paused=false WHERE account_id=101",lambda:lab.sql('secondary','SELECT schedulable FROM accounts WHERE id=101')=='t')
@@ -68,14 +78,14 @@ with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
     replies=list(pool.map(lambda _:lab.request(stream=True),range(5)))
 assert all(x['status']==200 and 'response.completed' in x['body'] for x in replies)
 lab.eventually(lab.settled,timeout=30)
-lab.eventually(lambda:any(x.get('events') for x in since(at)),timeout=15)
-record('five_requests_billing_and_traces', [x for x in since(at) if x.get('events')])
+lab.eventually(lambda:any(x.get('events') for x in since(at,kind='delivery')),timeout=15)
+record('five_requests_billing', [x for x in since(at,kind='delivery') if x.get('events')])
 at=time.time();reply=lab.request(text='LAB_HTTP_ERROR');assert reply['status']>=400
-lab.eventually(lab.settled,timeout=30);lab.eventually(lambda:any(x.get('events') for x in since(at)),timeout=15)
-record('one_error_request', [x for x in since(at) if x.get('events')])
+lab.eventually(lab.settled,timeout=30);lab.eventually(lambda:any(x.get('events') for x in since(at,kind='delivery')),timeout=15)
+record('one_error_request', [x for x in since(at,kind='delivery') if x.get('events')])
 changed('large_fixture_added',"""INSERT INTO users(id,email,password_hash,balance,concurrency)
 SELECT n,'scale-'||n||'@site-lab.invalid','disabled',100,5 FROM generate_series(1000,1999) n ON CONFLICT(id) DO NOTHING;
-INSERT INTO api_keys(id,user_id,key,name,group_id) SELECT n,n,'sk-fixture-'||md5(n::text),'scale',101 FROM generate_series(1000,1999) n ON CONFLICT(id) DO NOTHING;""",lambda:lab.sql('secondary','SELECT count(*) FROM api_keys WHERE id>=1000')=='1000')
+INSERT INTO api_keys(id,user_id,key,name,group_id) SELECT n,n,'sk-fixture-'||md5(n::text),'scale',101 FROM generate_series(1000,1999) n ON CONFLICT(id) DO NOTHING;""",lambda:lab.sql('secondary','SELECT count(*) FROM api_keys WHERE id BETWEEN 1000 AND 1999')=='1000')
 at=time.time();lab.command('restart','secondary');lab.eventually(lab.ready,timeout=35)
 lab.eventually(lambda:since(at,full=True),timeout=15);record('full_with_1000_extra_users_keys',since(at,full=True))
 changed('one_concurrency_after_scale','UPDATE users SET concurrency=8 WHERE id=101',lambda:lab.sql('secondary','SELECT concurrency FROM users WHERE id=101')=='8')

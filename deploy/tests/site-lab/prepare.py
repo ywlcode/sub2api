@@ -35,6 +35,7 @@ for name in ("primary", "secondary"):
     else:
         site.update(primary_url="http://link:8091", token=creds["token"], allow_http=True)
     config = {"site": site, "runtime": {"role": "full"},
+              "database": {"max_open_conns": 64, "max_idle_conns": 32},
               "security": {"url_allowlist": {"enabled": False, "allow_private_hosts": True, "allow_insecure_http": True}},
               "pricing": {"remote_url": "", "hash_url": "", "fallback_file": "/lab/prices.json", "data_dir": "/app/data"},
               "server": {"host": "0.0.0.0", "port": 8080, "mode": "release"},
