@@ -58,3 +58,37 @@ func exportSiteQuality(ctx context.Context, tx *sql.Tx, accounts []int64) ([]sit
 	}
 	return out, rows.Err()
 }
+
+// Current replicas use the same account-wide round semantics as the primary.
+// Network timing and request error samples remain local to each node.
+func exportSiteCurrentQuality(ctx context.Context, tx *sql.Tx, accounts []int64) ([]site.Row, error) {
+	minutes, err := readAccountPerformanceWindowMinutes(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	rows, err := tx.QueryContext(ctx, `SELECT to_jsonb(q)||'{"version":1}'::jsonb FROM (`+performanceQualityRoundsSQL+`) q`, pq.Array(accounts), now.Add(-time.Duration(minutes)*time.Minute), now)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []site.Row
+	for rows.Next() {
+		var raw []byte
+		if err = rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var id struct {
+			Account int64  `json:"account_id"`
+			Plan    int64  `json:"id"`
+			Round   string `json:"quality_round_id"`
+		}
+		if err = json.Unmarshal(raw, &id); err != nil {
+			return nil, err
+		}
+		identity, _ := json.Marshal(id)
+		key := sha256.Sum256(identity)
+		out = append(out, site.Row{Table: "$quality", Key: hex.EncodeToString(key[:]), Value: raw})
+	}
+	return out, rows.Err()
+}

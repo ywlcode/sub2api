@@ -61,6 +61,29 @@ func (c *Config) ExportSiteRequestPolicy() ([]byte, error) {
 			return nil, err
 		}
 	}
+	for path := range siteOptionalGatewayPolicyFields {
+		field, err := sitePolicyField(reflect.ValueOf(c.Gateway), path)
+		if err != nil {
+			return nil, err
+		}
+		p.Gateway[path], err = json.Marshal(field.Interface())
+		if err != nil {
+			return nil, err
+		}
+	}
+	return json.Marshal(p)
+}
+
+// v6 peers validate the exact gateway field count. Serve their frozen policy,
+// rather than assuming an old binary can learn to ignore new fields.
+func LegacySiteRequestPolicy(raw []byte) ([]byte, error) {
+	var p SiteRequestPolicy
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	for path := range siteOptionalGatewayPolicyFields {
+		delete(p.Gateway, path)
+	}
 	return json.Marshal(p)
 }
 
@@ -72,21 +95,38 @@ func (c *Config) InstallSiteRequestPolicy(raw []byte) error {
 	if err := json.Unmarshal(raw, &p); err != nil {
 		return err
 	}
-	if len(p.Gateway) != len(siteGatewayPolicyFields) {
-		return fmt.Errorf("incomplete site request policy")
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	for _, field := range []string{"gateway", "instructions", "minimum_balance_reserve", "inflight_reservation", "overload_cooldown_minutes", "gemini_quota", "ops_enabled"} {
+		if len(fields[field]) == 0 || string(fields[field]) == "null" {
+			return fmt.Errorf("missing site request policy %s", field)
+		}
 	}
 	if p.MinimumBalanceReserve < 0 || p.InflightReservation.TTLSeconds < 0 || p.InflightReservation.DefaultMaxTokens < 0 || p.InflightReservation.MaxInputTokens < 0 || p.InflightReservation.MaxOutputTokens < 0 || p.InflightReservation.MaxReservationUSD < 0 {
 		return fmt.Errorf("invalid site billing defaults")
 	}
 	r := &siteRequestRuntime{gateway: c.Gateway, billing: c.Billing, rateLimit: c.RateLimit, gemini: c.Gemini, opsEnabled: p.OpsEnabled}
-	for _, path := range siteGatewayPolicyFields {
+	paths := append([]string(nil), siteGatewayPolicyFields...)
+	for path := range siteOptionalGatewayPolicyFields {
+		paths = append(paths, path)
+	}
+	for _, path := range paths {
 		rawValue, ok := p.Gateway[path]
 		if !ok {
-			return fmt.Errorf("missing site request policy %s", path)
+			fallback, optional := siteOptionalGatewayPolicyFields[path]
+			if !optional {
+				return fmt.Errorf("missing site request policy %s", path)
+			}
+			rawValue = json.RawMessage(fallback)
 		}
 		field, err := sitePolicyField(reflect.ValueOf(&r.gateway).Elem(), path)
 		if err != nil {
 			return err
+		}
+		if string(rawValue) == "null" && field.Kind() != reflect.Slice && field.Kind() != reflect.Map {
+			return fmt.Errorf("null site request policy %s", path)
 		}
 		// Decode into fresh storage: never mutate maps/slices shared with the
 		// immutable boot config or a prior request snapshot.

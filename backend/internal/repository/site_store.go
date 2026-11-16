@@ -2,9 +2,7 @@ package repository
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,6 +59,7 @@ func siteTables() []siteTable {
 		{name: "channel_account_stats_pricing_intervals", keys: []string{"id"}},
 		{name: "tls_fingerprint_profiles", keys: []string{"id"}, filter: "id IN (SELECT (extra->>'tls_fingerprint_profile_id')::bigint FROM accounts WHERE id IN (%[1]s) AND extra->>'tls_fingerprint_profile_id' ~ '^[0-9]+$') OR EXISTS(SELECT 1 FROM accounts WHERE id IN (%[1]s) AND extra->>'tls_fingerprint_profile_id'='-1')"},
 		{name: "accounts", keys: []string{"id"}, filter: "id IN (%s)"},
+		{name: "account_performance_monitors", keys: []string{"account_id"}, filter: "account_id IN (%s)"},
 		{name: "account_groups", keys: []string{"account_id", "group_id"}, filter: "account_id IN (%s)"},
 		{name: "api_keys", keys: []string{"id"}},
 		{name: "api_key_groups", keys: []string{"api_key_id", "group_id"}},
@@ -122,60 +121,9 @@ func NewSiteStore(db *sql.DB, cfg *config.Config) (*SiteStore, error) {
 			}
 		}
 	}
-	h := sha256.New()
-	for i := range s.tables {
-		t := &s.tables[i]
-		rows, err := db.QueryContext(ctx, `SELECT column_name,concat_ws(':',udt_name,character_maximum_length,numeric_precision,numeric_scale,is_nullable),udt_name,is_nullable FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 ORDER BY ordinal_position`, t.name)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var name, kind, dataType, nullable string
-			if err = rows.Scan(&name, &kind, &dataType, &nullable); err != nil {
-				_ = rows.Close()
-				return nil, err
-			}
-			if t.name != "settings" || name != "id" {
-				t.columns = append(t.columns, name)
-			}
-			if nullable == "NO" && (dataType == "json" || dataType == "jsonb") {
-				if t.requiredJSON == nil {
-					t.requiredJSON = make(map[string]string)
-				}
-				t.requiredJSON[name] = dataType
-			}
-			fmt.Fprintf(h, "%s:%s:%s;", t.name, name, kind)
-		}
-		err = rows.Err()
-		_ = rows.Close()
-		if err != nil {
-			return nil, err
-		}
-		if len(t.columns) == 0 {
-			return nil, fmt.Errorf("site schema missing table %s", t.name)
-		}
+	if err := s.initializeContract(ctx); err != nil {
+		return nil, err
 	}
-	s.logColumns = map[string][]string{}
-	for _, table := range []string{"ops_error_logs", "request_connection_traces"} {
-		rows, err := db.QueryContext(ctx, `SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 ORDER BY ordinal_position`, table)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var col string
-			if err = rows.Scan(&col); err != nil {
-				_ = rows.Close()
-				return nil, err
-			}
-			s.logColumns[table] = append(s.logColumns[table], col)
-		}
-		err = rows.Err()
-		_ = rows.Close()
-		if err != nil {
-			return nil, err
-		}
-	}
-	s.schema = hex.EncodeToString(h.Sum(nil))
 	if cfg.Site.EffectiveMode() == site.Primary {
 		if err := s.initializeProjection(ctx); err != nil {
 			return nil, err
@@ -299,6 +247,21 @@ func redactSiteRow(table string, raw []byte, p site.Peer) (json.RawMessage, erro
 		}
 		set("proxy_id", nil) // domestic requests must not inherit a US SOCKS proxy
 		set("proxy_fallback_origin_id", nil)
+		if siteLegacySchemas[p.ConfigSchema] && siteAccountNeedsCurrentReplica(obj) {
+			// A legacy replica cannot execute newly introduced platform or
+			// cooldown semantics. Route these models through the primary until
+			// the replica upgrades, including when another local account overlaps.
+			var extra map[string]json.RawMessage
+			if err := json.Unmarshal(obj["extra"], &extra); err != nil {
+				return nil, err
+			}
+			if extra == nil {
+				extra = map[string]json.RawMessage{}
+			}
+			extra[service.AccountExtraSecondaryEnabled] = json.RawMessage(`false`)
+			obj["extra"], _ = json.Marshal(extra)
+			set("schedulable", false)
+		}
 		if base := p.BaseURLs[id]; base != "" {
 			var creds map[string]json.RawMessage
 			if err := json.Unmarshal(obj["credentials"], &creds); err != nil {

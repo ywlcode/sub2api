@@ -59,9 +59,9 @@ func TestSiteRequestPolicyDependenciesAndQuality(t *testing.T) {
 	require.NoError(t, err)
 	localSignals, err := newUsageLogRepositoryWithSQL(nil, replica).ReadPrioritySchedulingSignals(ctx, q)
 	require.NoError(t, err)
-	require.Equal(t, 1, mainSignals[a.ID].QualitySamples)
-	require.Equal(t, mainSignals[a.ID].QualityPassed, localSignals[a.ID].QualityPassed)
-	require.Equal(t, mainSignals[a.ID].QualitySamples, localSignals[a.ID].QualitySamples)
+	require.Equal(t, 1, mainSignals[a.ID].Performance.QualitySamples)
+	require.Equal(t, mainSignals[a.ID].Performance.DegradationPercent, localSignals[a.ID].Performance.DegradationPercent)
+	require.Equal(t, mainSignals[a.ID].Performance.QualitySamples, localSignals[a.ID].Performance.QualitySamples)
 	// Latest pause decision is separate from the account's ordinary scheduling flag.
 	_, err = db.Exec(`UPDATE account_performance_monitors SET paused=false WHERE account_id=$1`, a.ID)
 	require.NoError(t, err)

@@ -44,6 +44,7 @@ type Manager struct {
 	proxy            *httputil.ReverseProxy
 	maxBody          int64
 	BodyLimit        func() int64
+	BodyBudget       *pkghttputil.BodyMemoryBudget
 	current          atomic.Pointer[lease]
 	identityVerified atomic.Bool
 	lastSync         atomic.Pointer[SyncStats]
@@ -277,7 +278,7 @@ func (m *Manager) SyncHandler(c *gin.Context) {
 		return
 	}
 	var input SyncRequest
-	if err := decodeSiteRequest(c, &input); err != nil || input.Protocol != ProtocolVersion || input.NodeID != peer.ID || input.Schema != m.store.Schema() || len(input.Events) > 128 || len(input.PendingIDs) > MaxPendingBills || !ValidReplicaID(input.ReplicaID) || !ValidReceiptDigests(input.PendingIDs, input.PendingDigests) {
+	if err := decodeSiteRequest(c, &input); err != nil || input.Protocol != ProtocolVersion || input.NodeID != peer.ID || !acceptsConfig(m.store, input.Schema) || len(input.Events) > 128 || len(input.PendingIDs) > MaxPendingBills || !ValidReplicaID(input.ReplicaID) || !ValidReceiptDigests(input.PendingIDs, input.PendingDigests) {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
@@ -375,7 +376,13 @@ func (m *Manager) Ingress() gin.HandlerFunc {
 		}
 		local := false
 		if c.Request.Method == http.MethodPost && strings.Contains(strings.ToLower(c.GetHeader("Content-Type")), "application/json") {
-			wire, err := io.ReadAll(io.LimitReader(c.Request.Body, bodyLimit+1))
+			ctx, release := pkghttputil.WithRequestBodyMemoryBudget(c.Request.Context(), m.BodyBudget)
+			defer release()
+			c.Request = c.Request.WithContext(ctx)
+			inspect := c.Request.Clone(ctx)
+			inspect.Header.Del("Content-Encoding") // read the original wire bytes first
+			inspect.Body = http.MaxBytesReader(c.Writer, c.Request.Body, bodyLimit)
+			wire, err := pkghttputil.ReadRequestBodyWithPreallocLimit(inspect, bodyLimit)
 			_ = c.Request.Body.Close()
 			if err != nil {
 				abortBodyRead(c, err)
@@ -386,8 +393,10 @@ func (m *Manager) Ingress() gin.HandlerFunc {
 				return
 			}
 			body := wire
+			inspectCtx, releaseInspection := pkghttputil.WithRequestBodyMemoryScope(ctx)
+			defer releaseInspection()
 			if c.GetHeader("Content-Encoding") != "" {
-				inspect := c.Request.Clone(c.Request.Context())
+				inspect := c.Request.Clone(inspectCtx)
 				inspect.Body = io.NopCloser(bytes.NewReader(wire))
 				body, err = pkghttputil.ReadRequestBodyWithPreallocLimit(inspect, bodyLimit)
 				if err != nil {
@@ -401,13 +410,24 @@ func (m *Manager) Ingress() gin.HandlerFunc {
 			}
 			c.Set("ops_stream", gjson.GetBytes(body, "stream").Bool())
 			local = m.store.MatchLocalModel(requestKey(c.Request), model, modelEndpoint(c.Request.URL.Path))
+			releaseInspection()
 
 			if local {
 				// Restore the original wire body; the gateway owns decoding and
 				// all protocol-specific validation and compatibility transformations.
-				c.Request.Body = io.NopCloser(bytes.NewReader(wire))
+				if c.GetHeader("Content-Encoding") == "" {
+					c.Request.Body = pkghttputil.NewPrereadBody(wire)
+				} else {
+					c.Request.Body = io.NopCloser(bytes.NewReader(wire))
+				}
 			} else {
 				if c.GetHeader("Content-Encoding") == "" && len(wire) >= 1024 {
+					// Bound bytes.Buffer's capacity growth before compression. The
+					// input remains reserved until the handler finishes.
+					if err := pkghttputil.ReserveRequestBodyMemory(ctx, int64(len(wire))*2+1<<20); err != nil {
+						abortBodyRead(c, err)
+						return
+					}
 					packed, err := compress(wire)
 					if err != nil {
 						c.AbortWithStatus(http.StatusInternalServerError)
@@ -437,6 +457,11 @@ func (m *Manager) Ingress() gin.HandlerFunc {
 }
 
 func abortBodyRead(c *gin.Context, err error) {
+	if errors.Is(err, pkghttputil.ErrRequestBodyMemoryBudget) {
+		c.Header("Retry-After", "1")
+		c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{"type": "overloaded_error", "message": "Request body buffering capacity is exhausted; retry later"}})
+		return
+	}
 	var maxErr *http.MaxBytesError
 	if errors.As(err, &maxErr) {
 		c.AbortWithStatus(http.StatusRequestEntityTooLarge)

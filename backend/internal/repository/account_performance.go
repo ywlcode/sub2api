@@ -25,6 +25,31 @@ func NewAccountPerformanceRepository(db *sql.DB) service.AccountPerformanceRepos
 // The trace start is the actual event time, not the asynchronous usage insert.
 // Normalize Z and nanoseconds before jsonpath .datetime(): PostgreSQL 14-16
 // needs an explicit UTC offset; all supported versions accept microseconds.
+const performanceQualityRoundsSQL = ` SELECT p.account_id,p.id,r.quality_round_id, MIN(r.started_at) AS started_at, MAX(r.finished_at) AS finished_at,
+ bool_or(r.quality_judgment->>'verdict'='incorrect' AND r.status='failed' AND r.error_message IN ('answer_mismatch','state_degraded')
+    AND (COALESCE(r.pelican_config->>'question_kind','')<>'random_reasoning'
+      OR r.pelican_config->'quality_batch'->>'decision'='peer_passed')) AS failed,
+ bool_and(COALESCE(r.quality_judgment->>'verdict'='correct' AND r.status='success'
+    AND (COALESCE(r.pelican_config->>'question_kind','')<>'random_reasoning'
+      OR r.pelican_config->'quality_batch'->>'decision'='passed'),false)) AS passed
+ FROM scheduled_test_plans p JOIN scheduled_test_results r ON r.plan_id=p.id
+ WHERE p.account_id=ANY($1) AND p.enabled AND jsonb_typeof(p.pelican_config->'quality')='object'
+ -- Probe records are created after execution. The indexed completion-time
+ -- lower bound preserves the entire round (event-time HAVING below is final).
+ AND r.created_at >= $2
+ AND r.quality_round_id<>''
+ GROUP BY p.account_id,p.id,r.quality_round_id
+ HAVING MIN(r.started_at)>=$2 AND MAX(r.finished_at)<=$3 AND MIN(r.started_at)>=MAX(p.updated_at)
+ AND bool_and(r.finished_at IS NOT NULL AND r.finished_at>=r.started_at)
+ AND bool_and(r.quality_action NOT IN ('','stale_run','comparison_pending'))
+ AND bool_and(COALESCE(r.pelican_config->>'parallel_count','1') ~ '^[1-8]$')
+ AND bool_and(r.pelican_config->'model_ids' IS NULL OR
+  (jsonb_typeof(r.pelican_config->'model_ids')='array'
+   AND jsonb_array_length(CASE WHEN jsonb_typeof(r.pelican_config->'model_ids')='array' THEN r.pelican_config->'model_ids' ELSE '[]'::jsonb END)<=50))
+ AND COUNT(*)=MAX(CASE WHEN COALESCE(r.pelican_config->>'parallel_count','1') ~ '^[1-8]$'
+  THEN COALESCE(r.pelican_config->>'parallel_count','1')::int *
+   GREATEST(1,jsonb_array_length(CASE WHEN jsonb_typeof(r.pelican_config->'model_ids')='array' THEN r.pelican_config->'model_ids' ELSE '[]'::jsonb END)) END)`
+
 const performanceMetricsSQL = `
 WITH source AS (
  SELECT u.*, t.detail,
@@ -62,30 +87,15 @@ WITH source AS (
   AND input_tokens::numeric+cache_read_tokens+cache_creation_tokens>0) AS cache_n
  FROM successful GROUP BY account_id
 ), rounds AS (
- SELECT p.account_id,p.id,r.quality_round_id,
- bool_or(r.quality_judgment->>'verdict'='incorrect' AND r.status='failed' AND r.error_message IN ('answer_mismatch','state_degraded')
-    AND (COALESCE(r.pelican_config->>'question_kind','')<>'random_reasoning'
-      OR r.pelican_config->'quality_batch'->>'decision'='peer_passed')) AS failed,
- bool_and(COALESCE(r.quality_judgment->>'verdict'='correct' AND r.status='success'
-    AND (COALESCE(r.pelican_config->>'question_kind','')<>'random_reasoning'
-      OR r.pelican_config->'quality_batch'->>'decision'='passed'),false)) AS passed
- FROM scheduled_test_plans p JOIN scheduled_test_results r ON r.plan_id=p.id
- WHERE p.account_id=ANY($1) AND p.enabled AND jsonb_typeof(p.pelican_config->'quality')='object'
- -- Probe records are created after execution. The indexed completion-time
- -- lower bound preserves the entire round (event-time HAVING below is final).
- AND r.created_at >= $2
- AND r.quality_round_id<>''
- GROUP BY p.account_id,p.id,r.quality_round_id
- HAVING MIN(r.started_at)>=$2 AND MAX(r.finished_at)<=$3 AND MIN(r.started_at)>=MAX(p.updated_at)
- AND bool_and(r.finished_at IS NOT NULL AND r.finished_at>=r.started_at)
- AND bool_and(r.quality_action NOT IN ('','stale_run','comparison_pending'))
- AND bool_and(COALESCE(r.pelican_config->>'parallel_count','1') ~ '^[1-8]$')
- AND bool_and(r.pelican_config->'model_ids' IS NULL OR
-  (jsonb_typeof(r.pelican_config->'model_ids')='array'
-   AND jsonb_array_length(CASE WHEN jsonb_typeof(r.pelican_config->'model_ids')='array' THEN r.pelican_config->'model_ids' ELSE '[]'::jsonb END)<=50))
- AND COUNT(*)=MAX(CASE WHEN COALESCE(r.pelican_config->>'parallel_count','1') ~ '^[1-8]$'
-  THEN COALESCE(r.pelican_config->>'parallel_count','1')::int *
-   GREATEST(1,jsonb_array_length(CASE WHEN jsonb_typeof(r.pelican_config->'model_ids')='array' THEN r.pelican_config->'model_ids' ELSE '[]'::jsonb END)) END)
+` + performanceQualityRoundsSQL + `
+ UNION ALL
+ SELECT (value->>'account_id')::bigint,(value->>'id')::bigint,value->>'quality_round_id',
+ (value->>'started_at')::timestamptz,(value->>'finished_at')::timestamptz,
+ (value->>'failed')::boolean,(value->>'passed')::boolean
+ FROM site_replica_rows WHERE table_name='$quality' AND value->>'version'='1'
+ AND (value->>'account_id')::bigint=ANY($1)
+ AND (value->>'started_at')::timestamptz >= $2 AND (value->>'finished_at')::timestamptz <= $3
+ AND EXISTS(SELECT 1 FROM site_identity WHERE singleton AND mode='secondary')
  ), quality AS (
  SELECT account_id,100.0*COUNT(*) FILTER(WHERE failed)/NULLIF(COUNT(*) FILTER(WHERE passed OR failed),0) AS degraded,
  COUNT(*) FILTER(WHERE passed OR failed) AS quality_n FROM rounds GROUP BY account_id

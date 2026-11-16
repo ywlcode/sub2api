@@ -50,7 +50,7 @@ func TestSiteReplicationPreservesRequiredJSONNull(t *testing.T) {
 		}
 	}
 	err = p.local.Install(ctx, site.SyncResponse{PrimaryID: "main", Full: true, Version: "must-not-install", Rows: snapshot.Rows})
-	require.ErrorContains(t, err, `null value in column "supported_model_scopes"`)
+	require.ErrorContains(t, err, `missing site field groups.supported_model_scopes`)
 	var version, stored string
 	require.NoError(t, p.replica.QueryRow(`SELECT version FROM site_identity WHERE singleton`).Scan(&version))
 	require.Equal(t, p.version, version)

@@ -32,6 +32,8 @@ type Config struct {
 }
 
 type Peer struct {
+	// ConfigSchema is negotiated on an authenticated sync request, never YAML.
+	ConfigSchema string `mapstructure:"-" json:"-"`
 	// ReplicaID is supplied by the authenticated control request, never config.
 	ReplicaID string `mapstructure:"-" json:"-"`
 	ID        string `mapstructure:"id" json:"id"`
