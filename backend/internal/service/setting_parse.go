@@ -223,6 +223,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyGrokVideoSourceURLEnabled:            "false",
 		SettingKeyOpenAI409OmitEncryptedHistoryEnabled: "false",
 		SettingKeyOpenAI400OmitEncryptedHistoryEnabled: "false",
+		SettingKeyOpenAI200OmitEncryptedHistoryEnabled: "false",
 
 		// Available channels feature (default disabled; opt-in)
 		SettingKeyAvailableChannelsEnabled: "false",
@@ -894,6 +895,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.GrokVideoSourceURLEnabled = settings[SettingKeyGrokVideoSourceURLEnabled] == "true"
 	result.OpenAI409OmitEncryptedHistoryEnabled = settings[SettingKeyOpenAI409OmitEncryptedHistoryEnabled] == "true"
 	result.OpenAI400OmitEncryptedHistoryEnabled = settings[SettingKeyOpenAI400OmitEncryptedHistoryEnabled] == "true"
+	result.OpenAI200OmitEncryptedHistoryEnabled = settings[SettingKeyOpenAI200OmitEncryptedHistoryEnabled] == "true"
 
 	// Available channels feature (default: disabled; strict true)
 	result.AvailableChannelsEnabled = settings[SettingKeyAvailableChannelsEnabled] == "true"

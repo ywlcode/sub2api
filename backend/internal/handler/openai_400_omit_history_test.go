@@ -23,11 +23,13 @@ import (
 
 type omit400SettingsRepo struct {
 	service.SettingRepository
-	enabled400, enabled409 bool
+	enabled200, enabled400, enabled409 bool
 }
 
 func (s *omit400SettingsRepo) GetValue(_ context.Context, key string) (string, error) {
 	switch key {
+	case service.SettingKeyOpenAI200OmitEncryptedHistoryEnabled:
+		return fmt.Sprint(s.enabled200), nil
 	case service.SettingKeyOpenAI400OmitEncryptedHistoryEnabled:
 		return fmt.Sprint(s.enabled400), nil
 	case service.SettingKeyOpenAI409OmitEncryptedHistoryEnabled:
@@ -39,6 +41,7 @@ func (s *omit400SettingsRepo) GetValue(_ context.Context, key string) (string, e
 
 func (s *omit400SettingsRepo) GetMultiple(_ context.Context, _ []string) (map[string]string, error) {
 	return map[string]string{
+		service.SettingKeyOpenAI200OmitEncryptedHistoryEnabled: fmt.Sprint(s.enabled200),
 		service.SettingKeyOpenAI400OmitEncryptedHistoryEnabled: fmt.Sprint(s.enabled400),
 		service.SettingKeyOpenAI409OmitEncryptedHistoryEnabled: fmt.Sprint(s.enabled409),
 	}, nil

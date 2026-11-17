@@ -63,6 +63,7 @@ describe('NewFeatureBadge', () => {
     ['OAuth 401 quality cleanup', NEW_FEATURE_NOTICES.qualityOAuth401Cleanup],
     ['AI operations proposal cancellation', NEW_FEATURE_NOTICES.aiOpsProposalCancel],
     ['400 encrypted history recovery', NEW_FEATURE_NOTICES.openai400OmitEncryptedHistory],
+    ['200 encrypted history recovery', NEW_FEATURE_NOTICES.openai200OmitEncryptedHistory],
   ])('keeps %s dismissal shared and persistent across feature announcements', async (_feature, noticeId) => {
     const pinia = createPinia()
     setActivePinia(pinia)

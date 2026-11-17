@@ -631,6 +631,7 @@ export interface SystemSettings {
   grok_video_source_url_enabled: boolean;
   openai_409_omit_encrypted_history_enabled: boolean;
   openai_400_omit_encrypted_history_enabled: boolean;
+  openai_200_omit_encrypted_history_enabled: boolean;
 
   // Per-platform account auto-pause thresholds (100 = disabled)
   account_scheduling_thresholds: AccountSchedulingThresholdsMap;
@@ -1031,6 +1032,7 @@ export interface UpdateSettingsRequest {
   grok_video_source_url_enabled?: boolean;
   openai_409_omit_encrypted_history_enabled?: boolean;
   openai_400_omit_encrypted_history_enabled?: boolean;
+  openai_200_omit_encrypted_history_enabled?: boolean;
   account_scheduling_thresholds?: AccountSchedulingThresholdsMap;
   enable_identity_patch?: boolean;
   identity_patch_prompt?: string;

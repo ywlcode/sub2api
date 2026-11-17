@@ -5556,6 +5556,10 @@
                 v-model="form.openai_400_omit_encrypted_history_enabled"
                 :user-id="authStore.user?.id"
               />
+              <EncryptedHistory200Settings
+                v-model="form.openai_200_omit_encrypted_history_enabled"
+                :user-id="authStore.user?.id"
+              />
 
               <!-- OpenAI Responses 首 token 统计 -->
               <div class="border-b border-gray-100 pb-5 dark:border-dark-700 md:col-span-2">
@@ -9615,6 +9619,7 @@
 <script setup lang="ts">
 import EncryptedHistory409Settings from "@/components/settings/EncryptedHistory409Settings.vue";
 import EncryptedHistory400Settings from "@/components/settings/EncryptedHistory400Settings.vue";
+import EncryptedHistory200Settings from "@/components/settings/EncryptedHistory200Settings.vue";
 import { excelBPSImageLimits } from "@/utils/excelBPSImageLimits";
 import { ref, reactive, computed, onMounted, watch } from "vue";
 import { listPlatformIds, listPlatforms } from "@/constants/platformCatalog";
@@ -10662,6 +10667,7 @@ const form = reactive<SettingsForm>({
   grok_video_source_url_enabled: false,
   openai_409_omit_encrypted_history_enabled: false,
   openai_400_omit_encrypted_history_enabled: false,
+  openai_200_omit_encrypted_history_enabled: false,
   // Identity patch (Claude -> Gemini)
   enable_identity_patch: true,
   identity_patch_prompt: "",
@@ -12431,6 +12437,7 @@ async function saveSettings() {
       grok_video_source_url_enabled: form.grok_video_source_url_enabled,
       openai_409_omit_encrypted_history_enabled: form.openai_409_omit_encrypted_history_enabled,
       openai_400_omit_encrypted_history_enabled: form.openai_400_omit_encrypted_history_enabled,
+      openai_200_omit_encrypted_history_enabled: form.openai_200_omit_encrypted_history_enabled,
       enable_identity_patch: form.enable_identity_patch,
       identity_patch_prompt: form.identity_patch_prompt,
       min_claude_code_version: form.min_claude_code_version,

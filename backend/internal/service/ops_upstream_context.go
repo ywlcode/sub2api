@@ -464,8 +464,10 @@ func setOpsUpstreamError(c *gin.Context, upstreamStatusCode int, upstreamMessage
 }
 
 const openAI400HistoryDiagnosticKey = "openai_400_history_diagnostic"
+const openAI200HistoryDiagnosticKey = "openai_200_history_diagnostic"
 
-// Only fixed decisions and booleans reach the existing Ops event JSON.
+// The 400 and 200 Betas share this diagnostic shape. Only fixed decisions and
+// booleans reach the existing Ops event JSON.
 // Applied means a replacement was prepared, not that upstream received it.
 type OpenAI400HistoryDiagnostic struct {
 	Applied  bool   `json:"applied"`
@@ -489,10 +491,18 @@ func sanitizeOpenAI400HistoryDiagnostic(d *OpenAI400HistoryDiagnostic) *OpenAI40
 }
 
 func openAI400HistoryDiagnostic(c *gin.Context) *OpenAI400HistoryDiagnostic {
+	return openAIHistoryDiagnostic(c, openAI400HistoryDiagnosticKey)
+}
+
+func openAI200HistoryDiagnostic(c *gin.Context) *OpenAI400HistoryDiagnostic {
+	return openAIHistoryDiagnostic(c, openAI200HistoryDiagnosticKey)
+}
+
+func openAIHistoryDiagnostic(c *gin.Context, key string) *OpenAI400HistoryDiagnostic {
 	if c == nil {
 		return nil
 	}
-	v, _ := c.Get(openAI400HistoryDiagnosticKey)
+	v, _ := c.Get(key)
 	d, _ := v.(*OpenAI400HistoryDiagnostic)
 	return sanitizeOpenAI400HistoryDiagnostic(d)
 }
@@ -500,6 +510,7 @@ func openAI400HistoryDiagnostic(c *gin.Context) *OpenAI400HistoryDiagnostic {
 // OpsUpstreamErrorEvent describes one upstream error attempt during a single gateway request.
 // It is stored in ops_error_logs.upstream_errors as a JSON array.
 type OpsUpstreamErrorEvent struct {
+	EncryptedHistory200 *OpenAI400HistoryDiagnostic `json:"encrypted_history_200,omitempty"`
 	EncryptedHistory400 *OpenAI400HistoryDiagnostic `json:"encrypted_history_400,omitempty"`
 	AuthConnectionID    string                      `json:"auth_connection_id,omitempty"`
 	AtUnixMs            int64                       `json:"at_unix_ms,omitempty"`
@@ -564,6 +575,11 @@ const (
 func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 	if c == nil {
 		return
+	}
+	if ev.EncryptedHistory200 == nil {
+		ev.EncryptedHistory200 = openAI200HistoryDiagnostic(c)
+	} else {
+		ev.EncryptedHistory200 = sanitizeOpenAI400HistoryDiagnostic(ev.EncryptedHistory200)
 	}
 	if ev.EncryptedHistory400 == nil {
 		ev.EncryptedHistory400 = openAI400HistoryDiagnostic(c)

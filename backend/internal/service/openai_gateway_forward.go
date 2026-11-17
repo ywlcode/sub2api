@@ -1697,8 +1697,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			c.Set(openAIStreamEncryptedRejectionContextKey, []byte(nil))
 			_ = takeOpenAIStreamInvalidEncryptedContent(c)
 			streamCtx := ctx
-			if account.Platform == PlatformOpenAI && !isControlledExperiment(ctx) && !httpInvalidEncryptedContentRetryTried {
-				streamCtx = context.WithValue(ctx, openAIEncryptedContentRecoveryContextKey{}, openAIEncryptedContentRecoveryPolicy{body: body})
+			if account.Platform == PlatformOpenAI && !isControlledExperiment(ctx) {
+				streamCtx = context.WithValue(ctx, openAIEncryptedContentRecoveryContextKey{}, openAIEncryptedContentRecoveryPolicy{body: body, preciseRetryUsed: httpInvalidEncryptedContentRetryTried})
 			}
 			streamResult, err := s.handleStreamingResponseWithReasoning(streamCtx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
 			if phaseErr := openAIHTTPPhaseError(resp); phaseErr != nil {
@@ -1720,6 +1720,26 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 					} else if retry {
 						continue
 					}
+					if resp.StatusCode == http.StatusOK && isOpenAI200EncryptedHistoryRejection(encryptedSignal.payload, encryptedSignal.eventType) {
+						if next, clean, changed := s.prepareOpenAI200HistoryRecovery(ctx, c, account, body, nativeHTTPAttempts); changed {
+							// The rejected attempt's stage/headers never reached the client.
+							// Release its transport before opening the replacement stream.
+							_ = resp.Body.Close()
+							ctx, body = next, clean
+							c.Request = c.Request.WithContext(next)
+							requestView, reqBody = newOpenAIRequestView(body), nil
+							rejectedFieldRetryState.remember(body)
+							appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+								ProxyID: opsUpstreamProxyID(account), ProxyName: opsUpstreamProxyName(account),
+								Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+								UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
+								Kind: "retry", Stage: "native_sse", Reason: "encrypted_history_200_omitted",
+								Message: "Upstream rejected encrypted history before output; one same-account recovery scheduled with context loss",
+							})
+							beginUpstreamResponseModelObservation(c)
+							continue
+						}
+					}
 					// Cancellation can revoke recovery after the scanner's signal.
 					if resp.Body != nil {
 						_ = resp.Body.Close()
@@ -1730,7 +1750,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 					}
 					// Preserve the actual upstream terminal if recovery is revoked.
 					resp.Body = io.NopCloser(strings.NewReader("event: " + encryptedSignal.eventType + "\ndata: " + string(encryptedSignal.payload) + "\n\n"))
-					_, err = s.handleStreamingResponseWithReasoning(ctx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
+					terminalCtx := ctx
+					if encryptedSignal.beta200 {
+						terminalCtx = context.WithValue(ctx, openAI200RejectedTerminalContextKey{}, true)
+					}
+					_, err = s.handleStreamingResponseWithReasoning(terminalCtx, resp, c, account, startTime, originalModel, upstreamModel, reasoningEffortValue)
 					if err == nil {
 						return nil, encryptedSignal
 					}

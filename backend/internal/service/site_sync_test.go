@@ -105,6 +105,8 @@ func TestSiteSettingRefreshAppliesImmediatelyAndRetainsTrust(t *testing.T) {
 	require.False(t, svc.prioritySchedulingRuntimeConfig().Enabled)
 }
 func TestSitePolicyExcludesManagementAndSafety(t *testing.T) {
+	require.True(t, IsSiteSetting(SettingKeyOpenAI200OmitEncryptedHistoryEnabled))
+	require.True(t, IsSiteOptionalSetting(SettingKeyOpenAI200OmitEncryptedHistoryEnabled))
 	for _, k := range []string{"risk_control_enabled", "security_penalty_config", "content_moderation_config", "prompt_audit_config", "group_anti_distillation:1", "smtp_password", "admin_api_key", "payment_config"} {
 		require.False(t, IsSiteSetting(k), k)
 	}

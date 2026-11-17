@@ -139,6 +139,7 @@ user-traffic-pending/
 docs/*
 !docs/account-platform-edit.md
 !docs/openai-totp-factor-recovery.md
+!docs/encrypted-history-200-beta.md
 !docs/ai-ops-codex.md
 !docs/reauth-identity-validation.md
 !docs/openai-context-limit-errors.md

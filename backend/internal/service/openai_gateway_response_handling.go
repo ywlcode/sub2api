@@ -689,7 +689,15 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 					sawResponseFailed = true
 				}
 				failedMessage = extractOpenAISSEErrorMessage(dataBytes)
-				if isOpenAIInvalidEncryptedContentSSE(dataBytes, eventType) {
+				// Read the independent Beta only on a recognized rejection, never
+				// on successful chunks or for another platform/HTTP status.
+				policy, hasRecoveryPolicy := ctx.Value(openAIEncryptedContentRecoveryContextKey{}).(openAIEncryptedContentRecoveryPolicy)
+				rejected200, _ := ctx.Value(openAI200RejectedTerminalContextKey{}).(bool)
+				betaEncryptedRejection := account.Platform == PlatformOpenAI && resp.StatusCode == http.StatusOK &&
+					(hasRecoveryPolicy || rejected200) &&
+					isOpenAI200EncryptedHistoryRejection(dataBytes, eventType) &&
+					(rejected200 || s.settingService.IsOpenAI200OmitEncryptedHistoryEnabled(ctx))
+				if isOpenAIInvalidEncryptedContentSSE(dataBytes, eventType) || betaEncryptedRejection {
 					failedMessage = openAIEncryptedErrorRedacted
 				}
 				if failedMessage == "" {
@@ -722,12 +730,13 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				}
 				outputStarted := openAIStreamClientOutputStarted(c, clientOutputStarted)
 				if stageFirstOutput && !outputStarted && !responsesSemanticOutputSeen && !eventStartsClientOutput &&
-					!clientDisconnected && !cyberHit && ctx.Err() == nil && isOpenAIInvalidEncryptedContentSSE(dataBytes, eventType) {
-					if policy, ok := ctx.Value(openAIEncryptedContentRecoveryContextKey{}).(openAIEncryptedContentRecoveryPolicy); ok &&
-						len(openAIRejectedEncryptedDigests(policy.body, dataBytes)) == 1 {
+					!clientDisconnected && !cyberHit && ctx.Err() == nil {
+					precise := hasRecoveryPolicy && !policy.preciseRetryUsed && isOpenAIInvalidEncryptedContentSSE(dataBytes, eventType) &&
+						len(openAIRejectedEncryptedDigests(policy.body, dataBytes)) == 1
+					if hasRecoveryPolicy && (precise || betaEncryptedRejection) {
 						// Discard staged metadata; Forward owns the shared retry budget.
 						streamEarlyErr = &openAIEncryptedContentRecoverySignal{
-							payload: append([]byte(nil), dataBytes...), eventType: eventType,
+							payload: append([]byte(nil), dataBytes...), eventType: eventType, beta200: betaEncryptedRejection,
 						}
 						return
 					}
@@ -757,7 +766,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				}
 				if !outputStarted {
 					shouldFailover := false
-					if !cyberHit {
+					if !cyberHit && !betaEncryptedRejection {
 						if eventType == "error" {
 							shouldFailover = openAIStreamErrorEventShouldFailover(dataBytes, failedMessage)
 						} else {

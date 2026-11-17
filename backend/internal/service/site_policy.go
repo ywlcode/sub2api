@@ -79,7 +79,7 @@ var SiteSettingKeys = append([]string{
 }, SiteOptionalSettingKeys...)
 
 // New OpenAI recovery toggles are optional and default off on old replicas.
-var SiteOptionalSettingKeys = []string{"openai_400_omit_encrypted_history_enabled", "openai_409_omit_encrypted_history_enabled"}
+var SiteOptionalSettingKeys = []string{"openai_200_omit_encrypted_history_enabled", "openai_400_omit_encrypted_history_enabled", "openai_409_omit_encrypted_history_enabled"}
 
 func IsSiteOptionalSetting(key string) bool {
 	for _, k := range SiteOptionalSettingKeys {

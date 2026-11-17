@@ -558,6 +558,7 @@ const (
 	SettingKeyGrokVideoSourceURLEnabled            = "grok_video_source_url_enabled"
 	SettingKeyOpenAI409OmitEncryptedHistoryEnabled = "openai_409_omit_encrypted_history_enabled"
 	SettingKeyOpenAI400OmitEncryptedHistoryEnabled = "openai_400_omit_encrypted_history_enabled"
+	SettingKeyOpenAI200OmitEncryptedHistoryEnabled = "openai_200_omit_encrypted_history_enabled"
 
 	// SettingKeyAvailableChannelsEnabled is a DB-backed soft switch for the "Available Channels"
 	// user-facing aggregate view. When false: user endpoint returns an empty list and the

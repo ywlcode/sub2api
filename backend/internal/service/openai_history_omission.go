@@ -10,7 +10,7 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// HTTP 400's stricter history transformation. Pre-send 409 builds portable
+// HTTP 400 / pre-output 200 SSE rejection history transformation. Pre-send 409 builds portable
 // readable context separately; this helper grants no retry permission.
 func omitOpenAIHistoricalCiphertextForRecovery(raw []byte, omitReasoning bool) ([]byte, bool) {
 	if !utf8.Valid(raw) || !openAIEncryptedJSONUnambiguous(raw) {

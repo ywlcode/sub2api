@@ -9,12 +9,16 @@ import (
 )
 
 func (s *SettingService) IsOpenAI400OmitEncryptedHistoryEnabled(ctx context.Context) bool {
+	return s.isOpenAIHistoryRecoveryEnabled(ctx, SettingKeyOpenAI400OmitEncryptedHistoryEnabled)
+}
+
+func (s *SettingService) isOpenAIHistoryRecoveryEnabled(ctx context.Context, key string) bool {
 	if s == nil || s.settingRepo == nil || ctx.Err() != nil {
 		return false
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	value, err := s.settingRepo.GetValue(ctx, SettingKeyOpenAI400OmitEncryptedHistoryEnabled)
+	value, err := s.settingRepo.GetValue(ctx, key)
 	return err == nil && strings.TrimSpace(value) == "true"
 }
 
@@ -22,15 +26,27 @@ func (s *SettingService) IsOpenAI400OmitEncryptedHistoryEnabled(ctx context.Cont
 // existing precise recovery declined or used its budget. Never an SSE terminal,
 // transport error, arbitrary 400, account failover or initial selection retry.
 func (s *OpenAIGatewayService) prepareOpenAI400HistoryRecovery(ctx context.Context, c *gin.Context, account *Account, body []byte, attempts int) (context.Context, []byte, bool) {
+	return s.prepareOpenAIRejectedHistoryRecovery(ctx, c, account, body, attempts, SettingKeyOpenAI400OmitEncryptedHistoryEnabled, openAI400HistoryDiagnosticKey)
+}
+
+// Both transports share one lossy retry and the same immutable input, route,
+// ownership and delivery guards. The caller must first classify a rejection;
+// neither a transport failure nor a status code alone grants replay permission.
+func (s *OpenAIGatewayService) prepareOpenAIRejectedHistoryRecovery(ctx context.Context, c *gin.Context, account *Account, body []byte, attempts int, settingKey, diagnosticKey string) (context.Context, []byte, bool) {
+	// Gate on the actual upstream account, not the model name or wire format.
+	// Other platforms must not read these settings or record Beta decisions.
+	if account == nil || account.Platform != PlatformOpenAI {
+		return ctx, body, false
+	}
 	r := openAIAgentRecoveryFromContext(ctx)
 	d := &OpenAI400HistoryDiagnostic{}
 	if r != nil {
-		d.After409, d.Applied = r.omittedHistory, r.omitted400History
+		d.After409, d.Applied = r.omittedHistory, r.omittedErrorHistory
 	}
 	refuse := func(reason string) (context.Context, []byte, bool) {
 		d.Decision = reason
 		if c != nil {
-			c.Set(openAI400HistoryDiagnosticKey, d)
+			c.Set(diagnosticKey, d)
 		}
 		return ctx, body, false
 	}
@@ -41,7 +57,7 @@ func (s *OpenAIGatewayService) prepareOpenAI400HistoryRecovery(ctx context.Conte
 	if d.Applied || attempts >= 3 {
 		return refuse("retry_exhausted")
 	}
-	if s == nil || !s.settingService.IsOpenAI400OmitEncryptedHistoryEnabled(ctx) {
+	if s == nil || !s.settingService.isOpenAIHistoryRecoveryEnabled(ctx, settingKey) {
 		return refuse("disabled")
 	}
 	if r == nil || r.keyID <= 0 || r.session == "" || r.model == "" || r.disallowLearning ||
@@ -85,10 +101,10 @@ func (s *OpenAIGatewayService) prepareOpenAI400HistoryRecovery(ctx context.Conte
 	}
 	r.delivery.finish(false)
 	next := *r
-	next.omitted400History = true
+	next.omittedErrorHistory = true
 	next.delivery, next.outputs = nil, nil
 	route := r.delivery.binding
-	next.retry400Route = &route
+	next.errorHistoryRoute = &route
 	// Freeze ONLY this explicitly authorized transformation. The source snapshot
 	// remains unchanged. Original keys/known/owner are retained for record and
 	// route checks; omitted inputs must never be published as consumed inputs.
@@ -103,12 +119,12 @@ func (s *OpenAIGatewayService) prepareOpenAI400HistoryRecovery(ctx context.Conte
 	}
 	if next.omittedHistory && next.oauthReplayPrepared {
 		// This is the already-built native body. Authorize only the explicit
-		// 400 input transformation; retain the frozen controls and route.
+		// rejected-history transformation; retain the frozen controls and route.
 		next.oauthInputDigest = next.inputDigest
 	}
 	next.items = openAIAgentRecoveryItemDigests(clean)
 	d.Applied, d.Decision = true, "same_account_retry_scheduled"
-	c.Set(openAI400HistoryDiagnosticKey, d)
+	c.Set(diagnosticKey, d)
 	return context.WithValue(ctx, openAIAgentRecoveryContextKey{}, &next), clean, true
 }
 

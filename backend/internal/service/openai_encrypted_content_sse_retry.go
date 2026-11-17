@@ -11,6 +11,7 @@ import (
 type openAIEncryptedContentRecoverySignal struct {
 	payload   []byte
 	eventType string
+	beta200   bool
 }
 
 func (*openAIEncryptedContentRecoverySignal) Error() string {
@@ -22,7 +23,8 @@ type openAIEncryptedContentRecoveryContextKey struct{}
 // Inspect the attempt body only after an explicit rejection; successful requests
 // do not decode or hash their history for this recovery.
 type openAIEncryptedContentRecoveryPolicy struct {
-	body []byte
+	body             []byte
+	preciseRetryUsed bool
 }
 
 func isOpenAIInvalidEncryptedContentError(code, message string) bool {

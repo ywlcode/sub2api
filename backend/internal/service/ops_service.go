@@ -598,6 +598,7 @@ func sanitizeOpsUpstreamErrors(entry *OpsInsertErrorLogInput) error {
 	sanitized := make([]*OpsUpstreamErrorEvent, 0, len(events))
 	for i, ev := range events {
 		out := *ev
+		out.EncryptedHistory200 = sanitizeOpenAI400HistoryDiagnostic(out.EncryptedHistory200)
 		out.EncryptedHistory400 = sanitizeOpenAI400HistoryDiagnostic(out.EncryptedHistory400)
 		normalizeOpsUpstreamProxyAttribution(&out)
 		// Only boundOpsUpstreamErrors may stamp this; never trust caller input.

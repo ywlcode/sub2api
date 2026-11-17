@@ -185,11 +185,21 @@ func TestOpenAI400HistoryNativeForward(t *testing.T) {
 	}
 }
 
-func TestOpenAI400HistorySendGuards(t *testing.T) {
+func TestOpenAI400HistorySendGuards(t *testing.T) { testOpenAIHistorySendGuards(t, false) }
+func TestOpenAI200HistorySendGuards(t *testing.T) { testOpenAIHistorySendGuards(t, true) }
+
+func testOpenAIHistorySendGuards(t *testing.T, beta200 bool) {
 	for _, mode := range []string{"unchanged", "task", "tool_result", "order", "controls", "account", "credential", "url", "budget", "canceled", "output_started", "delivery_pending", "owner_lookup"} {
 		t.Run(mode, func(t *testing.T) {
 			svc := newStreamLineageHTTPService(nil)
 			enableHistory400(svc, true)
+			prepare := svc.prepareOpenAI400HistoryRecovery
+			diagnostic := openAI400HistoryDiagnostic
+			if beta200 {
+				enableHistory200(svc, true, false)
+				prepare = svc.prepareOpenAI200HistoryRecovery
+				diagnostic = openAI200HistoryDiagnostic
+			}
 			c, rec := newStreamLineageTestContext("history400-guards")
 			c.Set("api_key", &APIKey{ID: 7, AllowLongContext: true})
 			body, err := sjson.SetBytes(history400Body(history400Input, false), "parallel_tool_calls", true)
@@ -231,13 +241,13 @@ func TestOpenAI400HistorySendGuards(t *testing.T) {
 			case "owner_lookup":
 				original.lookupErr = fmt.Errorf("fixture unavailable")
 			}
-			next, clean, changed := svc.prepareOpenAI400HistoryRecovery(ctx, c, account, body, attempts)
+			next, clean, changed := prepare(ctx, c, account, body, attempts)
 			if mode == "budget" || mode == "canceled" || mode == "output_started" || mode == "delivery_pending" || mode == "owner_lookup" {
 				require.False(t, changed)
 				require.Equal(t, body, clean)
 				return
 			}
-			require.True(t, changed, "%+v; response=%s", openAI400HistoryDiagnostic(c), rec.Body.String())
+			require.True(t, changed, "%+v; response=%s", diagnostic(c), rec.Body.String())
 			require.Equal(t, digest, original.inputDigest, "source snapshot is immutable")
 			require.Equal(t, apiInput, original.apiInputDigest, "source adapter snapshot is immutable")
 			frozen := openAIAgentRecoveryFromContext(next).inputDigest
