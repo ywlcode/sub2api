@@ -208,6 +208,44 @@ func TestSiteContractUnknownOptionalAndMissingRequiredFields(t *testing.T) {
 	}
 }
 
+func TestSiteContractUltrafastBillingAndProxyIsolation(t *testing.T) {
+	p := newSiteFollowupPair(t)
+	ctx := context.Background()
+	_, err := p.db.Exec(`UPDATE groups SET free_openai_ultrafast=true WHERE id=(SELECT group_id FROM api_keys WHERE id=$1)`, p.key)
+	require.NoError(t, err)
+	_, err = p.db.Exec(`UPDATE accounts SET extra=extra||'{"openai_proxy_mode":"request","openai_proxy_ids":[41],"openai_excel_bps_proxy_mode":"request","openai_excel_bps_proxy_ids":[42],"request_gzip_enabled":true}'::jsonb WHERE id=$1`, p.account)
+	require.NoError(t, err)
+	p.sync(t)
+	var enabled bool
+	require.NoError(t, p.replica.QueryRow(`SELECT free_openai_ultrafast FROM groups WHERE id=(SELECT group_id FROM api_keys WHERE id=$1)`, p.key).Scan(&enabled))
+	require.True(t, enabled)
+	var extra string
+	require.NoError(t, p.replica.QueryRow(`SELECT extra::text FROM accounts WHERE id=$1`, p.account).Scan(&extra))
+	require.NotContains(t, extra, "proxy")
+	require.Contains(t, extra, "request_gzip_enabled")
+	require.Contains(t, extra, "site_secondary_enabled")
+	require.NoError(t, p.db.QueryRow(`SELECT extra ? 'openai_proxy_ids' FROM accounts WHERE id=$1`, p.account).Scan(&enabled))
+	require.True(t, enabled, "export must not change primary network configuration")
+
+	snapshot, err := p.primary.ExportPage(ctx, p.peer, site.SyncRequest{Schema: siteConfigSchema})
+	require.NoError(t, err)
+	for i := range snapshot.Rows {
+		row := &snapshot.Rows[i]
+		if row.Table != "groups" {
+			continue
+		}
+		var obj map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(row.Value, &obj))
+		delete(obj, "free_openai_ultrafast")
+		obj["future_optional_billing_ui"] = json.RawMessage(`true`)
+		row.Value, err = json.Marshal(obj)
+		require.NoError(t, err)
+	}
+	require.NoError(t, p.local.Install(ctx, site.SyncResponse{Full: true, PrimaryID: "main", Version: "old-policy", Rows: snapshot.Rows}))
+	require.NoError(t, p.replica.QueryRow(`SELECT free_openai_ultrafast FROM groups WHERE id=(SELECT group_id FROM api_keys WHERE id=$1)`, p.key).Scan(&enabled))
+	require.False(t, enabled, "an absent optional field explicitly restores the pre-upgrade billing policy")
+}
+
 func TestSiteContractOldBillsOptionalDetailsAndRequiredDebit(t *testing.T) {
 	p := newSiteFollowupPair(t)
 	event := p.bill(t)

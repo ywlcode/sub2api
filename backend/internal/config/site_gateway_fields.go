@@ -4,6 +4,8 @@ package config
 var siteOptionalGatewayPolicyFields = map[string]string{
 	"disable_encrypted_agent_owner_binding":              "false",
 	"openai_scheduler.strict_session_affinity_group_ids": "[]",
+	"openai_ws.client_history_recovery_enabled":          "false",
+	"openai_ws.lossy_history_restart_enabled":            "false",
 }
 
 // Request semantics only. Connections, proxies, paths and worker budgets remain local.

@@ -4396,9 +4396,9 @@ func warnIfInsecureURL(field, raw string) {
 }
 
 func (c *Config) OpenAIWSClientHistoryRecoveryEnabled() bool {
-	return c != nil && c.Gateway.OpenAIWS.ClientHistoryRecoveryEnabled
+	return c != nil && c.RequestGateway().OpenAIWS.ClientHistoryRecoveryEnabled
 }
 
 func (c *Config) OpenAILossyHistoryRestartEnabled() bool {
-	return c != nil && c.Gateway.OpenAIWS.LossyHistoryRestartEnabled
+	return c != nil && c.RequestGateway().OpenAIWS.LossyHistoryRestartEnabled
 }

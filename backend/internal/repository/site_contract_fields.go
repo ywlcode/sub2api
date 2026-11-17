@@ -112,6 +112,7 @@ var siteContractColumns = map[string][]siteColumn{
 		{Name: "force_openai_fast", Type: "bool", Nullable: false},
 		{Name: "max_reasoning_effort_over_limit", Type: "varchar", Nullable: false},
 		{Name: "free_openai_fast", Type: "bool", Nullable: false},
+		{Name: "free_openai_ultrafast", Type: "bool", Nullable: false, Optional: true, Default: "false"},
 		{Name: "codex_models_manifest_config", Type: "jsonb", Nullable: false},
 		{Name: "i18n", Type: "jsonb", Nullable: false},
 		{Name: "stream_only", Type: "bool", Nullable: false},

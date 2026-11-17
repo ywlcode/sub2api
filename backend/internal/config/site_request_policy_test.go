@@ -53,3 +53,35 @@ func TestSiteRequestPolicyEffectiveDefaultsAndLocalResources(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestSiteHistoryRecoveryUsesSyncedPolicyAndDefaultsOff(t *testing.T) {
+	p := &Config{}
+	p.Gateway.OpenAIWS.ClientHistoryRecoveryEnabled = true
+	p.Gateway.OpenAIWS.LossyHistoryRestartEnabled = true
+	raw, err := p.ExportSiteRequestPolicy()
+	require.NoError(t, err)
+	s := &Config{Site: site.Config{Mode: site.Secondary}}
+	require.NoError(t, s.InstallSiteRequestPolicy(raw))
+	require.True(t, s.OpenAIWSClientHistoryRecoveryEnabled())
+	require.True(t, s.OpenAILossyHistoryRestartEnabled())
+	require.False(t, s.Gateway.OpenAIWS.LossyHistoryRestartEnabled, "node boot configuration stays immutable")
+
+	// An older primary omits these optional flags. Do not reuse a previous
+	// true value, or a node-local override, for destructive recovery.
+	var old SiteRequestPolicy
+	require.NoError(t, json.Unmarshal(raw, &old))
+	delete(old.Gateway, "openai_ws.client_history_recovery_enabled")
+	delete(old.Gateway, "openai_ws.lossy_history_restart_enabled")
+	old.Gateway["future_optional_policy"] = json.RawMessage(`true`)
+	oldRaw, err := json.Marshal(old)
+	require.NoError(t, err)
+	s.Gateway.OpenAIWS.ClientHistoryRecoveryEnabled = true
+	s.Gateway.OpenAIWS.LossyHistoryRestartEnabled = true
+	require.NoError(t, s.InstallSiteRequestPolicy(oldRaw))
+	require.False(t, s.OpenAIWSClientHistoryRecoveryEnabled())
+	require.False(t, s.OpenAILossyHistoryRestartEnabled())
+	legacy, err := LegacySiteRequestPolicy(raw)
+	require.NoError(t, err)
+	require.NotContains(t, string(legacy), "client_history_recovery_enabled")
+	require.NotContains(t, string(legacy), "lossy_history_restart_enabled")
+}

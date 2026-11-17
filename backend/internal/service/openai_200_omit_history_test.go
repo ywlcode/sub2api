@@ -12,10 +12,56 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 const history200Success = `{"type":"response.completed","response":{"id":"accepted-attempt","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"continued"}]}],"usage":{"input_tokens":5,"output_tokens":1}}}`
 const history200FunctionFailure = `{"type":"response.failed","response":{"id":"rejected-attempt","status":"failed","error":{"code":"server_error","message":"OpenAI Responses: Encrypted function output content could not be decrypted or decoded."}}}`
+
+func TestOpenAI200ManualTimezoneRecoveryPreservesProjectedTask(t *testing.T) {
+	for _, accountType := range []string{AccountTypeAPIKey, AccountTypeOAuth} {
+		t.Run(accountType, func(t *testing.T) {
+			upstream := &httpUpstreamSequenceRecorder{responses: []*http.Response{
+				newStreamLineageSSEResponse(encryptedSSERetryEvent(encryptedSSERetryFailure)),
+				newStreamLineageSSEResponse(encryptedSSERetryEvent(history200Success)),
+			}}
+			svc := newStreamLineageHTTPService(upstream)
+			svc.cfg.Gateway.DisableEncryptedAgentOwnerBinding = true
+			svc.settingService = NewSettingService(&history400SettingsRepo{values: map[string]string{
+				SettingKeyOpenAIRequestTimezoneEnabled:         "true",
+				SettingKeyOpenAIRequestTimezoneAuto:            "false",
+				SettingKeyOpenAI200OmitEncryptedHistoryEnabled: "true",
+			}}, svc.cfg)
+			input := "[" + gjson.Get(issue715OpaqueBody, "input.0").Raw + "," + strings.TrimPrefix(history400Input, "[")
+			body, err := sjson.SetBytes(history400Body(input, true), "input.-1", map[string]any{"role": "user", "content": issue892Environment})
+			require.NoError(t, err)
+			c, rec := newStreamLineageTestContext("timezone200")
+			c.Set("api_key", &APIKey{ID: 7, AllowLongContext: true})
+			ctx := svc.WithOpenAIAgentMessageRecovery(context.Background(), c, body, "timezone200", "gpt-5.1")
+			c.Request = c.Request.WithContext(ctx)
+			account := newStreamLineageHTTPAccount()
+			account.Type = accountType
+			account.Credentials["access_token"] = "synthetic-access-token"
+			account.Extra = map[string]any{openAIRequestTimezoneExtraKey: "America/Los_Angeles"}
+			_, err = svc.Forward(ctx, c, account, body)
+			require.NoError(t, err, rec.Body.String())
+			require.Equal(t, 2, upstream.callCount)
+			require.Contains(t, rec.Body.String(), "continued")
+			require.NotContains(t, rec.Body.String(), "invalid_encrypted_content")
+			require.Contains(t, string(body), "Asia/Singapore", "client source remains unchanged")
+			for _, path := range []string{"input.3", "input.4", "input.5", "input.6"} {
+				require.JSONEq(t, gjson.GetBytes(upstream.bodies[0], path).Raw, gjson.GetBytes(upstream.bodies[1], path).Raw)
+			}
+			require.Contains(t, gjson.GetBytes(upstream.bodies[1], "input.6.content").String(), "America/Los_Angeles")
+			require.NotContains(t, string(upstream.bodies[1]), "AAAA-fixture-1111")
+			require.Equal(t, upstream.reqs[0].URL.String(), upstream.reqs[1].URL.String())
+			require.Equal(t, upstream.reqs[0].Header.Get("Authorization"), upstream.reqs[1].Header.Get("Authorization"))
+			_, replayed, err := issue892PrepareHTTP(t, svc, upstream.reqs[1].Context(), account, upstream.bodies[1])
+			require.NoError(t, err)
+			require.Equal(t, upstream.bodies[1], replayed, "re-preparation must not restore rejected ciphertext")
+		})
+	}
+}
 
 func enableHistory200(s *OpenAIGatewayService, enabled, enabled400 bool) {
 	s.settingService = NewSettingService(&history400SettingsRepo{values: map[string]string{

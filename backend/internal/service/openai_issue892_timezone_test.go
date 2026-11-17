@@ -384,7 +384,7 @@ func TestIssue892ManualTimezone400Recovery(t *testing.T) {
 				require.Equal(t, upstream.reqs[0].Header.Get("Authorization"), upstream.reqs[1].Header.Get("Authorization"))
 				require.NotContains(t, string(upstream.bodies[1]), "AAAA-fixture-1111")
 				retryCtx := upstream.reqs[1].Context()
-				require.True(t, openAIAgentRecoveryFromContext(retryCtx).omitted400History)
+				require.True(t, openAIAgentRecoveryFromContext(retryCtx).omittedErrorHistory)
 				_, replayed, prepareErr := issue892PrepareHTTP(t, svc, retryCtx, account, upstream.bodies[1])
 				require.NoError(t, prepareErr)
 				require.Equal(t, upstream.bodies[1], replayed, "an authorized 400 omission must not restore the original ciphertext")

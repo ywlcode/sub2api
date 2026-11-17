@@ -256,14 +256,20 @@ func redactSiteRow(table string, raw []byte, p site.Peer) (json.RawMessage, erro
 		}
 		set("proxy_id", nil) // domestic requests must not inherit a US SOCKS proxy
 		set("proxy_fallback_origin_id", nil)
+		// Request proxy groups contain primary-local proxy IDs. Keep them out
+		// even on API-key accounts with stale OAuth configuration in extra.
+		var extra map[string]json.RawMessage
+		if err := json.Unmarshal(obj["extra"], &extra); err != nil {
+			return nil, err
+		}
+		for _, key := range []string{"openai_proxy_mode", "openai_proxy_ids", "openai_excel_bps_proxy_mode", "openai_excel_bps_proxy_ids"} {
+			delete(extra, key)
+		}
+		obj["extra"], _ = json.Marshal(extra)
 		if siteLegacySchemas[p.ConfigSchema] && siteAccountNeedsCurrentReplica(obj) {
 			// A legacy replica cannot execute newly introduced platform or
 			// cooldown semantics. Route these models through the primary until
 			// the replica upgrades, including when another local account overlaps.
-			var extra map[string]json.RawMessage
-			if err := json.Unmarshal(obj["extra"], &extra); err != nil {
-				return nil, err
-			}
 			if extra == nil {
 				extra = map[string]json.RawMessage{}
 			}

@@ -44,6 +44,10 @@ func TestGetByKeyForAuthCarriesGroupForceOpenAIFast(t *testing.T) {
 	require.True(t, got.Group.ForceOpenAIFast)
 	require.True(t, got.Group.FreeOpenAIFast)
 	require.True(t, got.Group.FreeOpenAIUltrafast)
+	secondary, err := apiKeyRepo.(*apiKeyRepository).GetByKeyForSecondaryAuth(ctx, keyValue)
+	require.NoError(t, err)
+	require.NotNil(t, secondary.Group)
+	require.True(t, secondary.Group.FreeOpenAIUltrafast, "secondary auth must use the same billing projection")
 }
 
 func TestFreeUltrafastGroupPersistence(t *testing.T) {
