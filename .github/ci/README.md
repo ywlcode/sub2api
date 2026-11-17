@@ -1,5 +1,7 @@
 # 按改动范围运行 CI
 
+自用发布分支 `dev-ywlcode` 的 push 始终运行五项发布工作流的全部检查，不跳过未变更输入，也不复用旧提交结果，以满足部署文档对实际发布 SHA 的要求；`CI selection rules` 同时覆盖本分支的工作流改动。rebase 后须保留这些触发规则。`production`、PR 和标签仍使用下述上游策略。
+
 主 CI、安全扫描、VIP 入账和多机验收先运行 `changes`。它比较 PR 的 merge base 与 head（production push 比较 before/head），仅启动相关 job。后端改动仍执行完整后端单元、集成和 lint；前端改动仍执行完整前端关键测试、类型检查和 lint。主前端固定 GitHub runner，Node 堆上限 6 GiB。
 
 范围在 `scopes.json` 中维护，包含源码、依赖锁文件及检查使用的辅助脚本。Markdown/RST 文档不计入应用源码指纹。job 命令、runner、环境变量、权限或依赖配置变化仍会触发对应检查；仅修改触发规则、归档工作流和本选择器时由 `CI selection rules` 验证。修改某个检查的依赖范围时应同时补充范围用例，不能为了转绿漏掉依赖。

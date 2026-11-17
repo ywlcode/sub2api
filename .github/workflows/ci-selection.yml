@@ -5,7 +5,7 @@ on:
       - '.github/ci/**'
       - '.github/workflows/**'
   push:
-    branches: [production]
+    branches: [production, dev-ywlcode]
     paths:
       - '.github/ci/**'
       - '.github/workflows/**'

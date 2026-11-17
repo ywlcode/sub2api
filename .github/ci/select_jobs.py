@@ -144,6 +144,10 @@ class Evidence:
 
 
 def select(filename, scopes, event_name, event, head, evidence=None, force=False):
+    # This maintained deployment branch requires checks of each release SHA,
+    # including documentation-only commits and the first push after a rebase.
+    if event_name == 'push' and os.environ.get('GITHUB_REF') == 'refs/heads/dev-ywlcode':
+        return {job: (True, 'dev-ywlcode release verification') for job in scopes}
     if force or event_name in ('workflow_dispatch', 'schedule') or os.environ.get('GITHUB_REF', '').startswith('refs/tags/'):
         return {job: (True, 'explicit full verification') for job in scopes}
     if event_name == 'pull_request':

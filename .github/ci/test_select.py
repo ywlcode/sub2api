@@ -145,6 +145,19 @@ class SelectionTests(unittest.TestCase):
         result = ci.select('main.yml', self.scopes, 'push', {'before': self.base}, head, Evidence())
         self.assertFalse(result['backend'][0])
 
+    def test_deployment_push_verifies_unchanged_sources_without_reuse(self):
+        self.write('docs/release.md', 'deployment notes only')
+        head = self.save()
+        class Evidence:
+            def candidates(self, *args):
+                raise AssertionError('deployment verification must not reuse previous checks')
+        with patch.dict('os.environ', {'GITHUB_REF': 'refs/heads/dev-ywlcode'}):
+            result = ci.select('main.yml', self.scopes, 'push', {'before': self.base}, head, Evidence())
+            self.assertTrue(all(v[0] for v in result.values()))
+        with patch.dict('os.environ', {'GITHUB_REF': 'refs/heads/production'}):
+            result = ci.select('main.yml', self.scopes, 'push', {'before': self.base}, head)
+            self.assertFalse(any(v[0] for v in result.values()))
+
     def test_default_merge_checkout_is_not_reusable(self):
         p = self.root / '.github/workflows/main.yml'
         p.write_text(p.read_text().replace('          ref: ${{ github.event.pull_request.head.sha || github.sha }}', '          fetch-depth: 0'))
@@ -169,6 +182,13 @@ class SelectionTests(unittest.TestCase):
 
 
 class WiringTests(unittest.TestCase):
+    def test_deployment_branch_triggers_all_release_workflows(self):
+        workflows = json.loads((REPO / '.github/ci/scopes.json').read_text())
+        for filename in [*workflows, 'ci-selection.yml']:
+            workflow = yaml.safe_load((REPO / '.github/workflows' / filename).read_text())
+            events = workflow.get('on', workflow.get(True, {}))
+            self.assertIn('dev-ywlcode', events['push']['branches'], filename)
+
     def test_workflow_outputs_scopes_and_conditions_are_consistent(self):
         config = json.loads((REPO / '.github/ci/scopes.json').read_text())
         for filename, scopes in config.items():
