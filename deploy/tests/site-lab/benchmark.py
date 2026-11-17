@@ -80,6 +80,12 @@ try:
                 list(pool.map(warm, users))
             lab.eventually(lab.settled, timeout=90, label="warmup bills settled")
         endpoint = urlsplit(lab.url(site))
+        def database_totals():
+            return {name: lab.query(name, "SELECT sum(calls)::bigint AS calls, sum(total_exec_time) AS execution_ms FROM pg_stat_statements WHERE dbid=(SELECT oid FROM pg_database WHERE datname=current_database())")[0]
+                    for name in ("primary", "secondary")}
+        # Optional pg_stat_statements must be enabled in both isolated DBs.
+        have_statements = all(lab.sql(name, "SELECT count(*) FROM pg_extension WHERE extname='pg_stat_statements'") == "1" for name in ("primary", "secondary"))
+        db_before = database_totals() if have_statements else None
         payload = json.dumps({"model": model, "stream": True, "input": "LAB_BENCH "+context, "reasoning": {"effort": "high"}, "max_output_tokens": 3000}, separators=(",", ":")).encode()
         rows = []
         lock = threading.Lock()
@@ -138,6 +144,11 @@ try:
         (out / (route+".json")).write_text(json.dumps(rows, indent=2))
         print(json.dumps({"route": route, **result}), flush=True)
         lab.eventually(lab.settled, timeout=90, label="billing caught up between routes")
+        if db_before is not None:
+            db_after = database_totals()
+            result["database"] = {name: {field: (db_after[name][field] or 0) - (db_before[name][field] or 0)
+                                         for field in ("calls", "execution_ms")}
+                                  for name in db_before}
 finally:
     stop.set()
     thread.join(timeout=30)

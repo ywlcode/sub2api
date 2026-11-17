@@ -194,7 +194,8 @@ func TestOpenAI200HistoryNativeForward(t *testing.T) {
 						require.Equal(t, upstream.reqs[0].Header.Get("Authorization"), req.Header.Get("Authorization"))
 						require.Equal(t, upstream.reqs[0].URL.String(), req.URL.String())
 					}
-					events := c.MustGet(OpsUpstreamErrorsKey).([]*OpsUpstreamErrorEvent)
+					events, ok := c.MustGet(OpsUpstreamErrorsKey).([]*OpsUpstreamErrorEvent)
+					require.True(t, ok)
 					found := false
 					for _, ev := range events {
 						if ev.Reason == "encrypted_history_200_omitted" {
@@ -325,7 +326,8 @@ func TestOpenAI200HistoryDiagnosticSnapshot(t *testing.T) {
 	c.Set(openAI200HistoryDiagnosticKey, d)
 	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Kind: "retry", UpstreamStatusCode: 200, Message: "fixture"})
 	d.Decision = "retry_exhausted"
-	events := c.MustGet(OpsUpstreamErrorsKey).([]*OpsUpstreamErrorEvent)
+	events, ok := c.MustGet(OpsUpstreamErrorsKey).([]*OpsUpstreamErrorEvent)
+	require.True(t, ok)
 	require.Len(t, events, 1)
 	require.Equal(t, "same_account_retry_scheduled", events[0].EncryptedHistory200.Decision)
 	require.Nil(t, events[0].EncryptedHistory400)
