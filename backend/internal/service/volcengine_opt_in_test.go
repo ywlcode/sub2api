@@ -87,8 +87,8 @@ func TestVolcengineRequestHistoryPolicy(t *testing.T) {
 		{"raw_with_foreign_summary", `{"input":[{"type":"reasoning","content":[{"type":"reasoning_text","text":"full"}],"summary":[{"type":"summary_text","text":"short"}],"encrypted_content":"foreign"}]}`, ""},
 		{"tool_pairs", `{"input":[{"type":"function_call","call_id":"1"},{"type":"function_call","call_id":"2"},{"type":"function_call_output","call_id":"2","output":"b"},{"type":"function_call_output","call_id":"1","output":"a"}]}`, ""},
 		{"id_only", `{"input":[{"type":"reasoning","id":"lost","summary":[]}]}`, "complete reasoning history"},
-		{"encrypted", `{"input":[{"type":"reasoning","encrypted_content":"foreign"}]}`, "recoverable plaintext"},
-		{"real_summary", `{"input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"short"}],"encrypted_content":"foreign"}]}`, "recoverable plaintext"},
+		{"encrypted", `{"input":[{"type":"reasoning","encrypted_content":"opaque"}]}`, ""},
+		{"real_summary", `{"input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"native thought"}],"encrypted_content":"opaque"}]}`, ""},
 		{"store", `{"input":"hi","store":true}`, "stateless full history"},
 		{"previous", `{"input":"hi","previous_response_id":"r"}`, "stateless full history"},
 		{"conversation", `{"input":"hi","conversation":{"id":"c"}}`, "stateless full history"},
@@ -180,8 +180,8 @@ func volcengineSuccessFixture(stream bool) (string, string) {
 func TestVolcengineGatewayRejectsUnsupportedRequestsBeforeUpstream(t *testing.T) {
 	for _, tc := range []struct{ path, body, errorText string }{
 		{"/v1/responses", `{"model":"ep-ark","input":[{"type":"reasoning","id":"lost"}]}`, "complete reasoning history"},
-		{"/v1/responses", `{"model":"ep-ark","input":[{"type":"reasoning","encrypted_content":"foreign"}]}`, "complete reasoning history"},
-		{"/v1/responses", `{"model":"ep-ark","input":[{"type":"reasoning","summary":[{"type":"summary_text","text":"abbreviated"}],"encrypted_content":"foreign"}]}`, "complete reasoning history"},
+		{"/v1/responses", `{"model":"ep-ark","input":[{"type":"reasoning","encrypted_content":""}]}`, "complete reasoning history"},
+		{"/v1/responses", `{"model":"ep-ark","input":[{"type":"reasoning","summary":[],"encrypted_content":42}]}`, "complete reasoning history"},
 		{"/v1/responses", `{"model":"ep-ark","input":"hi","previous_response_id":"old"}`, "stateless full history"},
 		{"/v1/responses/compact", `{"model":"ep-ark","input":"hi"}`, "does not support /responses/compact"},
 		{"/v1/responses", `{"model":"ep-ark","input":[{"type":"additional_tools","tools":"bad"}]}`, "additional_tools.tools must be an array"},

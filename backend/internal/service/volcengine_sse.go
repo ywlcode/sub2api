@@ -28,6 +28,9 @@ func newVolcengineSSEBody(body io.ReadCloser) io.ReadCloser {
 }
 
 func newVolcengineSSEBodyWithLimit(body io.ReadCloser, limit int) io.ReadCloser {
+	if limit <= 0 {
+		limit = defaultMaxLineSize
+	}
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, min(64*1024, limit)), limit)
 	scanner.Split(splitVolcengineSSELine)
@@ -91,7 +94,7 @@ func (b *volcengineSSEBody) frame() ([]byte, error) {
 			line = strings.TrimPrefix(line, "\ufeff")
 			b.started = true
 		}
-		size += len(line)
+		size += len(line) + 1 // Include framing: many short lines also consume memory.
 		if size > b.limit {
 			return nil, errVolcengineSSEEventTooLarge
 		}

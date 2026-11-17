@@ -8,17 +8,20 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-func volcengineHasPlaintextReasoning(item gjson.Result) bool {
+func volcengineHasReplayableReasoning(item gjson.Result) bool {
 	var value map[string]any
 	if decodeOpenAIJSONUseNumber([]byte(item.Raw), &value) != nil {
 		return false
 	}
-	return len(deepSeekReasoningParts(value["content"], "reasoning_text")) > 0 ||
-		(value["encrypted_content"] == nil || value["encrypted_content"] == "") &&
-			len(deepSeekReasoningParts(value["summary"], "summary_text")) > 0
+	// Ark now returns encrypted_content alongside native summary text. It is
+	// opaque provider state, not evidence of foreign or missing history. Only
+	// the upstream can validate it; never decrypt, discard or fabricate it here.
+	encrypted, _ := value["encrypted_content"].(string)
+	return encrypted != "" || len(deepSeekReasoningParts(value["content"], "reasoning_text")) > 0 ||
+		len(deepSeekReasoningParts(value["summary"], "summary_text")) > 0
 }
 
-// Ark compatibility is stateless: clients replay the complete plaintext history.
+// Ark compatibility is stateless: clients replay the complete native history.
 // Validate before any generic normalizer can drop state references or ciphertext.
 func validateVolcengineResponsesRequest(account *Account, body []byte) error {
 	if !account.IsDeepSeekVolcengineCompatibilityEnabled() {
@@ -42,7 +45,7 @@ func validateVolcengineResponsesRequest(account *Account, body []byte) error {
 		effort = volcengineEffort(fields["reasoning_effort"].String())
 	}
 	if reasoning["summary"].String() == "none" && effort != "none" && volcengineEffort(thinking["type"].String()) != "none" {
-		return fmt.Errorf("volcengine compatibility requires plaintext reasoning for replay; reasoning.summary:none is not supported while thinking is enabled (the client may hide thinking locally)")
+		return fmt.Errorf("volcengine compatibility requires complete native reasoning history; reasoning.summary:none is not supported while thinking is enabled (the client may hide thinking locally)")
 	}
 	input := fields["input"]
 	if input.Type != gjson.String && !input.IsArray() {
@@ -63,8 +66,8 @@ func validateVolcengineResponsesRequest(account *Account, body []byte) error {
 		}
 		switch itemType {
 		case "reasoning":
-			if !volcengineHasPlaintextReasoning(item) {
-				return fmt.Errorf("reasoning item %q has no recoverable plaintext; resend the complete reasoning history (ID-only or encrypted history cannot be restored)", item.Get("id").String())
+			if !volcengineHasReplayableReasoning(item) {
+				return fmt.Errorf("reasoning item %q has no replayable content; resend the complete reasoning history including native summary or encrypted_content (ID-only history cannot be restored)", item.Get("id").String())
 			}
 		case "item_reference", "compaction", "compaction_trigger":
 			return fmt.Errorf("volcengine compatibility does not support %s; resend the complete plaintext history", item.Get("type").String())

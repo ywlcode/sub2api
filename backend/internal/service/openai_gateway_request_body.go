@@ -190,10 +190,14 @@ func normalizeDeepSeekResponsesRequestBody(account *Account, body []byte) []byte
 	if applyReasoning {
 		changed = normalizeDeepSeekReasoningInput(input, account.IsDeepSeekVolcengineCompatibilityEnabled())
 	}
-	if liftedInput, lifted := apicompat.LiftResponsesToolOutputMedia(input); lifted {
-		requestBody["input"] = liftedInput
-		input = liftedInput
-		changed = true
+	// Ark accepts native multimodal tool outputs. Lifting them into a new user
+	// turn changes tool attribution and history ordering unnecessarily.
+	if !account.IsDeepSeekVolcengineCompatibilityEnabled() {
+		if liftedInput, lifted := apicompat.LiftResponsesToolOutputMedia(input); lifted {
+			requestBody["input"] = liftedInput
+			input = liftedInput
+			changed = true
+		}
 	}
 	if applyImages {
 		if aliased, aliasedChanged := aliasDeepSeekResponsesInputImages(input, deepSeekResponsesImageField(account)); aliasedChanged {

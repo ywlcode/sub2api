@@ -19,11 +19,13 @@ func TestVolcengineGatewayPlaintextHistoryReplay(t *testing.T) {
 	for _, history := range []struct{ name, item, text string }{
 		{"raw", `{"type":"reasoning","content":[{"type":"reasoning_text","text":"complete thought"}]}`, "complete thought"},
 		{"raw_ciphertext", `{"type":"reasoning","content":[{"type":"reasoning_text","text":"complete thought"}],"encrypted_content":"foreign"}`, "complete thought"},
-		{"raw_summary_ciphertext", `{"type":"reasoning","id":"rs_old","content":[{"type":"reasoning_text","text":"complete thought"}],"summary":[{"type":"summary_text","text":"short"}],"encrypted_content":"foreign"}`, "complete thought"},
+		{"raw_summary_ciphertext", `{"type":"reasoning","id":"rs_old","content":[{"type":"reasoning_text","text":"complete thought"}],"summary":[{"type":"summary_text","text":"short"}],"encrypted_content":"foreign"}`, "short"},
 		{"raw_string_ciphertext", `{"type":"reasoning","content":"complete thought","encrypted_content":"foreign"}`, "complete thought"},
 		{"raw_parts_ciphertext", `{"type":"reasoning","content":[{"type":"reasoning_text","text":"first\n"},{"type":"reasoning_text","text":"second"}],"encrypted_content":"foreign"}`, "first\nsecond"},
 		{"ark_summary", `{"type":"reasoning","summary":[{"type":"summary_text","text":"complete thought"}]}`, "complete thought"},
 		{"ark_summary_null_ciphertext", `{"type":"reasoning","content":null,"summary":[{"type":"summary_text","text":"complete thought"}],"encrypted_content":null}`, "complete thought"},
+		{"ark_summary_ciphertext", `{"type":"reasoning","id":"rs_native","content":null,"summary":[{"type":"summary_text","text":"native thought"}],"encrypted_content":"native-state","status":"completed","provider_extension":{"version":1}}`, "native thought"},
+		{"ark_ciphertext_only", `{"type":"reasoning","id":"rs_native","summary":[],"encrypted_content":"native-state"}`, ""},
 	} {
 		for _, mode := range []string{"ordinary", "tools", "search_history", "server_search", "implicit_server_search", "compaction", "compaction_after_search", "compaction_after_server_search", "compaction_after_implicit_server_search"} {
 			for _, stream := range []bool{false, true} {
@@ -81,7 +83,10 @@ func TestVolcengineGatewayPlaintextHistoryReplay(t *testing.T) {
 							_, _ = text.WriteString(part.Get("text").String())
 						}
 						require.Equal(t, history.text, text.String())
-						require.Empty(t, reasoning.Get("encrypted_content").String())
+						require.Equal(t, gjson.Get(history.item, "encrypted_content").String(), reasoning.Get("encrypted_content").String())
+						if strings.HasPrefix(history.name, "ark_") || history.name == "raw_summary_ciphertext" {
+							require.JSONEq(t, history.item, reasoning.Raw)
+						}
 						require.NoError(t, validateVolcengineResponsesRequest(volcengineTestAccount(), upstream.lastBody))
 						if mode == "search_history" || mode == "compaction_after_search" {
 							require.Empty(t, gjson.GetBytes(upstream.lastBody, "tools").Array())
@@ -104,7 +109,7 @@ func TestVolcengineGatewayPlaintextHistoryReplay(t *testing.T) {
 	}
 }
 
-func TestVolcenginePlaintextCiphertextCleanupScope(t *testing.T) {
+func TestVolcengineNativeCiphertextPreservationScope(t *testing.T) {
 	body := []byte(`{"store":false,"input":[{"type":"reasoning","content":[{"type":"reasoning_text","text":"complete thought"}],"summary":[{"type":"summary_text","text":"short"}],"encrypted_content":"foreign"}]}`)
 	for _, platform := range []string{PlatformDeepseek, PlatformOpenAI, PlatformAnthropic, PlatformGemini, PlatformKimi, PlatformZhipu, PlatformMiniMax, PlatformGrok} {
 		for _, enabled := range []bool{false, true} {
@@ -113,12 +118,7 @@ func TestVolcenginePlaintextCiphertextCleanupScope(t *testing.T) {
 				account.Platform = platform
 				account.Credentials[DeepSeekVolcengineCompatibilityCredential] = enabled
 				got := normalizeDeepSeekResponsesRequestBody(account, body)
-				if platform == PlatformDeepseek && enabled {
-					require.False(t, gjson.GetBytes(got, "input.0.encrypted_content").Exists())
-					require.Equal(t, "complete thought", gjson.GetBytes(got, "input.0.summary.0.text").String())
-				} else {
-					require.JSONEq(t, string(body), string(got))
-				}
+				require.JSONEq(t, string(body), string(got))
 			})
 		}
 	}

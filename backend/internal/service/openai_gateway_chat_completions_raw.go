@@ -338,6 +338,8 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	requestID := resp.Header.Get("x-request-id")
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
 
+	toolUsage := newVolcengineToolUsageObserver(account, APIProtocolChatCompletions)
+	defer toolUsage.log(c.Request.Context(), account, resp.Header.Get("x-request-id"))
 	var usage OpenAIUsage
 	var firstTokenMs *int
 	clientDisconnected := false
@@ -461,6 +463,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		}
 
 		if payload, ok := extractOpenAISSEDataLine(line); ok {
+			toolUsage.observe([]byte(payload))
 			if u := extractCCStreamUsage(payload); u != nil {
 				regionalUsagePayload = []byte(payload)
 				mergeOpenAIProtectionUsageEvidence(usage, u)
@@ -508,6 +511,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	flushToClient()
 
 	resultWithUsage := func() *OpenAIForwardResult {
+		usage.NativeToolUsage = toolUsage.snapshot()
 		return &OpenAIForwardResult{
 			RequestID:                     requestID,
 			UpstreamHeaders:               resp.Header,
@@ -682,10 +686,14 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 		regionalMeterObserveUsage(c.Request.Context(), respBody, "json")
 	}
 
+	toolUsage := newVolcengineToolUsageObserver(account, APIProtocolChatCompletions)
+	defer toolUsage.log(c.Request.Context(), account, resp.Header.Get("x-request-id"))
 	var usage OpenAIUsage
 	if parsedUsage, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
 		usage = parsedUsage
 	}
+	toolUsage.observe(respBody)
+	usage.NativeToolUsage = toolUsage.snapshot()
 	markOpenAICyberPolicyEvent(c, respBody, resp.StatusCode, &usage)
 	if clientBody, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, respBody, 0); matched {
 		writeOpenAIErrorPassthroughClientError(c, status, clientBody)

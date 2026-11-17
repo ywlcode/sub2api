@@ -228,6 +228,9 @@ func (s *OpenAICodexUsageSnapshot) Normalize() *NormalizedCodexLimits {
 
 // OpenAIUsage represents OpenAI API response usage
 type OpenAIUsage struct {
+	// Diagnostic provider counters only. They must not activate Grok search
+	// pricing or Codex alpha/search's token-replacing billing path.
+	NativeToolUsage *VolcengineToolUsage `json:"-"`
 	// CacheReadKnown records an explicit, valid cache read counter from the
 	// upstream. Missing counters must never become zero-cache protection samples.
 	CacheReadKnown bool `json:"-"`

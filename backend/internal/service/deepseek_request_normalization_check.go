@@ -44,9 +44,6 @@ func volcengineRequestNeedsNormalization(body []byte, protocol string) bool {
 			return false
 		}
 		fields := normalizationObjectFields(item)
-		if fields["type"].Str == "reasoning" && fields["encrypted_content"].Str != "" && fields["summary"].IsArray() && len(fields["summary"].Array()) > 0 {
-			return true
-		}
 		if fields["internal_chat_message_metadata_passthrough"].Exists() || volcengineUntypedMessageView(fields) ||
 			fields["type"].Str == "reasoning" && deepSeekReasoningItemNeedsNormalization(item, true) {
 			return true
@@ -89,7 +86,7 @@ func deepSeekReasoningItemNeedsNormalization(item gjson.Result, useSummary bool)
 	return normalizeDeepSeekReasoningInput([]any{object}, useSummary)
 }
 
-func deepSeekInputNeedsNormalization(body []byte, applyImages, applyReasoning, useSummary bool, imageField string) bool {
+func deepSeekInputNeedsNormalization(body []byte, applyImages, applyReasoning, nativeArk bool, imageField string) bool {
 	if !gjson.ValidBytes(body) {
 		return true
 	}
@@ -98,12 +95,12 @@ func deepSeekInputNeedsNormalization(body []byte, applyImages, applyReasoning, u
 			return false
 		}
 		fields := normalizationObjectFields(item)
-		if applyReasoning && fields["type"].Str == "reasoning" && deepSeekReasoningItemNeedsNormalization(item, useSummary) {
+		if applyReasoning && fields["type"].Str == "reasoning" && deepSeekReasoningItemNeedsNormalization(item, nativeArk) {
 			return true
 		}
 		switch strings.TrimSpace(fields["type"].Str) {
 		case "function_call_output", "custom_tool_call_output", "tool_search_output", "tool_search_call_output", "mcp_tool_call_output":
-			if deepSeekToolOutputMayHaveMedia(fields["output"], true) {
+			if !nativeArk && deepSeekToolOutputMayHaveMedia(fields["output"], true) {
 				return true
 			}
 		}

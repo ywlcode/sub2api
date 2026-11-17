@@ -25,7 +25,11 @@ func gatewayHTTPUpstream(upstream HTTPUpstream, limiter *RateLimitService, accou
 	// A recognized Ark compaction can consume a response and retry internally.
 	// Guard each physical attempt inside that adapter, so receiving headers
 	// ends the header timer before the adapter waits for the summary body.
-	return accountVolcengineHTTP(&guardedGatewayHTTP{HTTPUpstream: upstream, cfg: cfg}, account)
+	maxEventSize := defaultMaxLineSize
+	if cfg != nil && cfg.RequestGateway().MaxLineSize > 0 {
+		maxEventSize = cfg.RequestGateway().MaxLineSize
+	}
+	return accountVolcengineHTTP(&guardedGatewayHTTP{HTTPUpstream: upstream, cfg: cfg}, account, maxEventSize)
 }
 
 func (s *AntigravityGatewayService) guardedHTTPUpstream(account *Account) HTTPUpstream {

@@ -25,7 +25,8 @@ func usesNativeDeepSeekReasoningProtocol(account *Account, protocol string) bool
 
 // Ark uses summary_text for DeepSeek's full plaintext reasoning, while native
 // DeepSeek reads content[].reasoning_text and ignores summary. Translate only
-// available plaintext; ciphertext alone cannot reconstruct the original thought.
+// available plaintext. Native Ark blocks (including opaque state) must survive
+// replay; the official DeepSeek branch still never treats ciphertext as plaintext.
 func normalizeDeepSeekReasoningInput(input any, useSummary bool) bool {
 	items, _ := input.([]any)
 	changed := false
@@ -36,14 +37,13 @@ func normalizeDeepSeekReasoningInput(input any, useSummary bool) bool {
 		}
 		content := deepSeekReasoningParts(item["content"], "reasoning_text")
 		if useSummary {
-			if len(content) == 0 {
+			if len(content) == 0 || len(deepSeekReasoningParts(item["summary"], "summary_text")) > 0 {
 				continue
 			}
 			item["summary"] = deepSeekReasoningWireParts(content, "summary_text")
 			delete(item, "content")
-			// The summary now contains the complete plaintext, not an
-			// abbreviated summary coupled to foreign ciphertext.
-			delete(item, "encrypted_content")
+			// Preserve any opaque state and extensions. Its provenance cannot
+			// be determined from the presence of a ciphertext field.
 			changed = true
 			continue
 		}

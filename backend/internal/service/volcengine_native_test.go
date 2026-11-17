@@ -25,7 +25,7 @@ func TestVolcengineNativeProtocolsReplayHistory(t *testing.T) {
 					account := volcengineTestAccount()
 					account.Credentials["api_protocol"] = APIProtocolResponses // legacy stored setting
 					account.Extra = map[string]any{openai_compat.ExtraKeyResponsesSupported: false}
-					thought := `{"type":"reasoning","id":"rs","summary":[{"type":"summary_text","text":"original plan"}]}`
+					thought := `{"type":"reasoning","id":"rs","summary":[{"type":"summary_text","text":"original plan"}],"encrypted_content":"native-state","content":null}`
 					blocks := `[{"type":"thinking","thinking":"original plan","signature":"native-signature"},{"type":"tool_use","id":"call_1","name":"lookup","input":{"n":1}},{"type":"tool_use","id":"call_2","name":"lookup","input":{"n":2}}]`
 					chat := `{"role":"assistant","reasoning_content":"original plan","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"n\":1}"}},{"id":"call_2","type":"function","function":{"name":"lookup","arguments":"{\"n\":2}"}}]}`
 					if effort == "none" {

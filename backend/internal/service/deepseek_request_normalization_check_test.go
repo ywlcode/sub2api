@@ -13,7 +13,7 @@ func TestDeepSeekNormalizedBodyReusesImmutableBytes(t *testing.T) {
 	account := volcengineTestAccount()
 	for _, content := range []string{strings.Repeat("large plain text ", 10000), strings.Repeat(`escaped\ntext\" `, 10000)} {
 		body := []byte(`{"store":false,"seed":9007199254740993,"reasoning":{"effort":"high"},"input":[` +
-			`{"type":"reasoning","summary":[{"type":"summary_text","text":"real thought"}]},` +
+			`{"type":"reasoning","summary":[{"type":"summary_text","text":"real thought"}],"encrypted_content":"opaque","content":null},` +
 			`{"type":"message","role":"user","content":"` + content + `"},` +
 			`{"type":"function_call_output","call_id":"c","output":"{\"content\":{\"text\":\"ordinary tool data\"}}"}]}`)
 		original := bytes.Clone(body)
@@ -55,6 +55,8 @@ func TestVolcengineNormalizationCheckPreservesDecoderSemantics(t *testing.T) {
 }
 
 func TestDeepSeekNormalizationCheckStillLiftsEncodedToolMedia(t *testing.T) {
+	account := volcengineTestAccount()
+	account.Credentials[DeepSeekVolcengineCompatibilityCredential] = false
 	for _, output := range []string{
 		`"data:image/png;base64,YQ=="`,
 		`"[{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,YQ==\"}]"`,
@@ -63,9 +65,9 @@ func TestDeepSeekNormalizationCheckStillLiftsEncodedToolMedia(t *testing.T) {
 		`[{"type":"input_\u0069mage","image_url":"data:image/png;base64,YQ=="}]`,
 	} {
 		body := []byte(`{"input":[{"type":"function_call_output","call_id":"c","output":` + output + `}]}`)
-		require.True(t, deepSeekInputNeedsNormalization(body, true, true, true, "image_url"))
-		got := normalizeDeepSeekResponsesRequestBody(volcengineTestAccount(), body)
+		require.True(t, deepSeekInputNeedsNormalization(body, true, true, false, "image_url"))
+		got := normalizeDeepSeekResponsesRequestBody(account, body)
 		require.True(t, gjson.GetBytes(got, "input.1.content.#(type==input_image)").Exists(), string(got))
-		require.False(t, deepSeekInputNeedsNormalization(got, true, true, true, "image_url"), "lifted media must not cause another full decode")
+		require.False(t, deepSeekInputNeedsNormalization(got, true, true, false, "image_url"), "lifted media must not cause another full decode")
 	}
 }

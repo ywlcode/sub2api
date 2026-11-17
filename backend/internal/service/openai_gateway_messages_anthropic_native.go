@@ -83,10 +83,14 @@ func (s *OpenAIGatewayService) forwardAnthropicViaNativeAnthropicEndpoint(
 		}
 	}
 
-	// 与 Anthropic 平台 passthrough 相同的 pre-filter：剥离空文本块与上游
-	// 无法接受的 web-search 历史块（GLM/Kimi/DeepSeek 对 server_tool_use 400）。
+	// Ark supports native server search history. Remove only local emulation
+	// blocks there; retain the existing policy for other upstreams.
 	body = StripEmptyTextBlocks(body)
-	body = FilterWebSearchHistoryBlocks(body, upstreamModel)
+	if account.IsDeepSeekVolcengineCompatibilityEnabled() {
+		body = filterWebSearchHistoryBlocks(body, false)
+	} else {
+		body = FilterWebSearchHistoryBlocks(body, upstreamModel)
+	}
 
 	logger.LegacyPrintf("service.gateway", "[CN Anthropic 直通] account=%d(%s) platform=%s model=%s upstream=%s stream=%v",
 		account.ID, account.Name, account.Platform, originalModel, upstreamModel, clientStream)
@@ -277,6 +281,9 @@ func (s *OpenAIGatewayService) handleNativeAnthropicBufferedResponse(
 		return nil, invalidNonStreamingJSONFailoverError(ctx, s.rateLimitService, resp, account, body, err, billingModel)
 	}
 
+	toolUsage := newVolcengineToolUsageObserver(account, APIProtocolAnthropic)
+	toolUsage.observe(body)
+	defer toolUsage.log(ctx, account, resp.Header.Get("x-request-id"))
 	usage := parseClaudeUsageFromResponseBody(body)
 	cyberUsage := claudeUsageToOpenAIUsage(usage)
 	if writeNativeCyberPolicyError(c, APIProtocolAnthropic, body, resp.StatusCode, &cyberUsage) {
@@ -310,6 +317,7 @@ func (s *OpenAIGatewayService) handleNativeAnthropicBufferedResponse(
 		ReasoningEffort:             reasoningEffort,
 		Duration:                    time.Since(startTime),
 	}
+	result.Usage.NativeToolUsage = toolUsage.snapshot()
 	applyObservedUpstreamResponseModel(c, result)
 	return result, nil
 }
@@ -361,9 +369,18 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	}
 
 	usage := &ClaudeUsage{}
+	toolUsage := newVolcengineToolUsageObserver(account, APIProtocolAnthropic)
+	defer func() {
+		if result != nil {
+			result.Usage.NativeToolUsage = toolUsage.snapshot()
+		}
+		toolUsage.log(ctx, account, resp.Header.Get("x-request-id"))
+	}()
 	var firstTokenMs *int
 	clientDisconnected := false
 	sawTerminalEvent := false
+	nativeArk := account.IsDeepSeekVolcengineCompatibilityEnabled()
+	stopReason := ""
 	var pendingLines, pendingData []string
 	pendingEventName := ""
 	pendingBytes := 0
@@ -497,16 +514,16 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 			line := ev.line
 			if data, ok := extractAnthropicSSEDataLine(line); ok {
 				trimmed := strings.TrimSpace(data)
-				if account.IsDeepSeekVolcengineCompatibilityEnabled() && (gjson.Get(trimmed, "type").String() == "error" || gjson.Get(trimmed, "error").IsObject()) {
-					upstreamFailed = true
+				if !nativeArk {
+					observer.ObserveAnthropic([]byte(trimmed))
 				}
-
-				observer.ObserveAnthropic([]byte(trimmed))
-				if firstTokenMs == nil && trimmed != "" && trimmed != "[DONE]" {
+				if !nativeArk && firstTokenMs == nil && trimmed != "" && trimmed != "[DONE]" {
 					ms := int(time.Since(startTime).Milliseconds())
 					firstTokenMs = &ms
 				}
-				parseSSEUsagePassthrough(data, usage)
+				if !nativeArk {
+					parseSSEUsagePassthrough(data, usage)
+				}
 				pendingData = append(pendingData, data)
 			} else if eventName, ok := extractOpenAISSEEventLine(line); ok {
 				pendingEventName = eventName
@@ -525,6 +542,22 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 				continue
 			}
 			payload := strings.Join(pendingData, "\n")
+			if nativeArk && gjson.Valid(payload) {
+				// Parse complete events: usage snapshots and semantic completion
+				// must not depend on how JSON was split over data lines.
+				parseVolcengineMessagesUsage(payload, usage)
+				observer.ObserveAnthropic([]byte(payload))
+				toolUsage.observe([]byte(payload))
+				if firstTokenMs == nil && volcengineAnthropicHasContent(payload) {
+					ms := int(time.Since(startTime).Milliseconds())
+					firstTokenMs = &ms
+				}
+				if gjson.Get(payload, "type").String() == "message_delta" && (pendingEventName == "" || pendingEventName == "message_delta") {
+					if reason := gjson.Get(payload, "delta.stop_reason"); reason.Type == gjson.String {
+						stopReason = reason.String()
+					}
+				}
+			}
 			// Classify complete multiline payloads before writing any original
 			// error frame. Audit retains the upstream evidence; clients see
 			// only the fixed Cyber message, regardless of platform.
@@ -543,6 +576,10 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 			}
 			eventType := gjson.Get(payload, "type").String()
 			validTerminal := gjson.Valid(payload) && eventType == "message_stop" && (pendingEventName == "" || pendingEventName == "message_stop")
+			if nativeArk && validTerminal && !volcengineAnthropicStopReasonKnown(stopReason) {
+				return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime),
+					fmt.Errorf("upstream Anthropic message_stop without a recognized stop_reason")
+			}
 			if (pendingEventName == "message_stop" || eventType == "message_stop") && !validTerminal {
 				// Do not let an invalid terminal-shaped event stop the client
 				// before it can receive the subsequent transport failure.
@@ -554,6 +591,7 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 					sawTerminalEvent = true
 				}
 				if !sawTerminalEvent && gjson.Get(payload, "error").IsObject() && (eventType == "error" || pendingEventName == "error") {
+					upstreamFailed = true
 					// Preserve a complete upstream rejection before any later
 					// transport failure; emit exactly one Anthropic error terminal.
 					c.Writer.WriteHeaderNow()
@@ -575,11 +613,9 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 				}
 			}
 			pendingLines, pendingData, pendingEventName, pendingBytes = nil, nil, "", 0
-
-			if upstreamFailed && line == "" {
-				return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime), fmt.Errorf("upstream Anthropic stream returned an error")
+			if nativeArk && sawTerminalEvent {
+				return s.nativeAnthropicStreamResult(c, resp, usage, firstTokenMs, clientDisconnected, originalModel, billingModel, upstreamModel, reasoningEffort, startTime), nil
 			}
-
 		case <-intervalCh:
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
 			if time.Since(lastRead) < streamInterval {

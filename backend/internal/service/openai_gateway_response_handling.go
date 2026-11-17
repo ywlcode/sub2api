@@ -56,6 +56,8 @@ func (s *OpenAIGatewayService) handleStreamingResponse(ctx context.Context, resp
 
 func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, startTime time.Time, originalModel, mappedModel, reasoningEffort string) (*openaiStreamingResult, error) {
 	ctx = bindOpenAI429ResponseObservation(ctx, resp, c)
+	toolUsage := newVolcengineToolUsageObserver(account, APIProtocolResponses)
+	defer toolUsage.log(ctx, account, resp.Header.Get("x-request-id"))
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -425,6 +427,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 	// both list the same call_id — counting both would ~2× the surcharge).
 	streamSearchSeen := make(map[string]struct{})
 	resultWithUsage := func() *openaiStreamingResult {
+		usage.NativeToolUsage = toolUsage.snapshot()
 		if usage != nil && (!protectionTerminalSuccessful || clientDisconnected) {
 			usage.CacheReadKnown = false
 		}
@@ -652,6 +655,7 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 				suppressCurrentEvent = true
 			}
 			observer.ObserveOpenAI(dataBytes, eventType)
+			toolUsage.observe(dataBytes)
 			// 初始上游 data 的 type 只解析一次：原始值保持终止事件的精确匹配，规范化值供后续分支复用。
 			if openAIStreamEventIsTerminalWithType(data, eventType) {
 				sawTerminalEvent = true
@@ -2037,6 +2041,8 @@ func openAICacheCreationTTLTokensFromUsage(value gjson.Result, aggregate int) (i
 
 func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, resp *http.Response, c *gin.Context, account *Account, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
 	ctx = bindOpenAI429ResponseObservation(ctx, resp, c)
+	toolUsage := newVolcengineToolUsageObserver(account, APIProtocolResponses)
+	defer toolUsage.log(ctx, account, resp.Header.Get("x-request-id"))
 	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
 	if err != nil {
 		if resetErr, handled := handleOpenAIHTTP2PeerReset(c, account, resp.Header.Get("x-request-id"), err); handled {
@@ -2084,7 +2090,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		}
 	}
 
+	toolUsage.observe(body)
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
+	usageValue.NativeToolUsage = toolUsage.snapshot()
 	regionalMeterObserveUsage(ctx, body, "json")
 	markOpenAICyberPolicyEvent(c, body, resp.StatusCode, &usageValue)
 	if clientBody, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, body, 0); matched {
@@ -2136,6 +2144,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 		deliveryErr = writeOpenAINonStreamingBody(c, resp.StatusCode, contentType, body)
 	}
 
+	usage.NativeToolUsage = toolUsage.snapshot()
 	result := &openaiNonStreamingResult{
 		agentCompleted:   openAIAgentCompletedResponse(body, false),
 		OpenAIUsage:      usage,
@@ -2175,6 +2184,11 @@ func bodyHasSSEFraming(body []byte) bool {
 
 func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel, mappedModel string) (*openaiNonStreamingResult, error) {
 	bodyText := string(body)
+	toolUsage := newVolcengineToolUsageObserver(account, APIProtocolResponses)
+	defer toolUsage.log(c.Request.Context(), account, resp.Header.Get("x-request-id"))
+	if toolUsage != nil {
+		forEachOpenAISSEFrame(bodyText, func(_ string, payload []byte) { toolUsage.observe(payload) })
+	}
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
 	if c.Request != nil {
 		regionalMeterObserveUsage(c.Request.Context(), terminalPayload, terminalType)
@@ -2289,6 +2303,7 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		deliveryErr = writeOpenAINonStreamingBody(c, resp.StatusCode, contentType, body)
 	}
 
+	usage.NativeToolUsage = toolUsage.snapshot()
 	result := &openaiNonStreamingResult{
 		agentCompleted:   terminalOK && terminalType == "response.completed" && openAIAgentCompletedResponse(terminalPayload, true),
 		OpenAIUsage:      usage,

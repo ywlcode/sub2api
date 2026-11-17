@@ -32,23 +32,27 @@ var (
 //     No upstream ever issued them, so clients replaying the conversation
 //     (e.g. Claude Code) poison every follow-up request. They are stripped
 //     for all upstreams.
-//  2. For passback-required upstreams (DeepSeek/Kimi/GLM …, see
-//     ResolveThinkingProtocol) all server_tool_use / web_search_tool_result
-//     blocks are stripped: these upstreams only accept
-//     text/thinking/image/tool_use/tool_result and reject anything else with
-//     400 "invalid value: `server_tool_use`". anthropic-strict and unknown
-//     upstreams keep genuine blocks untouched.
+//  2. The legacy model-family fallback strips all blocks for passback-required
+//     upstreams (DeepSeek/Kimi/GLM …, see ResolveThinkingProtocol). This is not
+//     a current capability guarantee for every provider. Callers with verified
+//     native support (opted-in Ark Messages) use filterWebSearchHistoryBlocks
+//     with stripAll=false. Other callers keep the existing policy.
 //
 // The emulated assistant turn always carries a trailing text summary, so the
 // search context survives the strip. A message whose content would become
 // empty gets a placeholder text block (mirroring FilterThinkingBlocksForRetry).
 // Returns the original body unchanged when nothing needs stripping.
 func FilterWebSearchHistoryBlocks(body []byte, mappedModel string) []byte {
+	return filterWebSearchHistoryBlocks(body, ResolveThinkingProtocol(mappedModel) == ThinkingProtocolPassbackRequired)
+}
+
+// Native search support is an account/protocol capability, not a consequence of
+// the model's thinking protocol. Explicitly supported paths preserve genuine
+// upstream blocks; fabricated local search IDs must always be removed.
+func filterWebSearchHistoryBlocks(body []byte, stripAll bool) []byte {
 	if !bytes.Contains(body, patternServerToolUse) && !bytes.Contains(body, patternWebSearchToolResult) {
 		return body
 	}
-
-	stripAll := ResolveThinkingProtocol(mappedModel) == ThinkingProtocolPassbackRequired
 
 	jsonStr := *(*string)(unsafe.Pointer(&body))
 	msgsRes := gjson.Get(jsonStr, "messages")

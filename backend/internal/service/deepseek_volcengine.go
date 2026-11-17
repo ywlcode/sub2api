@@ -78,15 +78,6 @@ func normalizeVolcengineRequestBody(account *Account, body []byte, protocol stri
 	}
 	normalizeVolcengineReasoning(request, protocol)
 	normalizeDeepSeekReasoningInput(request["input"], true)
-	if items, ok := request["input"].([]any); ok {
-		for _, value := range items {
-			if item, ok := value.(map[string]any); ok && item["type"] == "reasoning" && len(deepSeekReasoningParts(item["summary"], "summary_text")) > 0 {
-				// This account replays plaintext. Do not attach a foreign
-				// provider's ciphertext/signature to the converted Ark item.
-				delete(item, "encrypted_content")
-			}
-		}
-	}
 	for _, field := range []string{"input", "messages"} {
 		items, _ := request[field].([]any)
 		for _, value := range items {
@@ -198,16 +189,21 @@ func normalizeVolcengineReasoning(request map[string]any, protocol string) {
 
 // Apply the final native-protocol adaptation before gzip, including admin probes.
 // Account scope also works when the next hop is another relay.
-func accountVolcengineHTTP(upstream HTTPUpstream, account *Account) HTTPUpstream {
+func accountVolcengineHTTP(upstream HTTPUpstream, account *Account, eventLimits ...int) HTTPUpstream {
 	if !account.IsDeepSeekVolcengineCompatibilityEnabled() {
 		return upstream
 	}
-	return &volcengineHTTP{HTTPUpstream: upstream, account: account}
+	limit := defaultMaxLineSize
+	if len(eventLimits) > 0 && eventLimits[0] > 0 {
+		limit = eventLimits[0]
+	}
+	return &volcengineHTTP{HTTPUpstream: upstream, account: account, eventLimit: limit}
 }
 
 type volcengineHTTP struct {
 	HTTPUpstream
-	account *Account
+	account    *Account
+	eventLimit int
 }
 
 func (u *volcengineHTTP) Do(req *http.Request, proxy string, accountID int64, concurrency int) (*http.Response, error) {
@@ -280,14 +276,14 @@ func (u *volcengineHTTP) send(req *http.Request, send func(*http.Request) (*http
 		return forwardVolcengineTextCompaction(prepared, body, func(attempt *http.Request) (*http.Response, error) {
 			resp, err := send(attempt)
 			if err == nil && resp != nil && resp.Body != nil && isEventStreamResponse(resp.Header) {
-				resp.Body = newVolcengineSSEBodyWithLimit(resp.Body, volcengineCompactionMaxEventBytes)
+				resp.Body = newVolcengineSSEBodyWithLimit(resp.Body, min(u.eventLimit, volcengineCompactionMaxEventBytes))
 			}
 			return resp, err
 		})
 	}
 	resp, err := send(prepared)
 	if err == nil && resp != nil && resp.Body != nil && isEventStreamResponse(resp.Header) {
-		resp.Body = newVolcengineSSEBody(resp.Body)
+		resp.Body = newVolcengineSSEBodyWithLimit(resp.Body, u.eventLimit)
 	}
 	return resp, err
 }
