@@ -486,7 +486,7 @@ func (s *AntigravityGatewayService) antigravityCompatStreamTimeout() time.Durati
 func (s *AntigravityGatewayService) antigravityCompatPreContentKeepaliveInterval() time.Duration {
 	interval := antigravityCompatPreContentKeepaliveInterval
 	if s.settingService != nil && s.settingService.cfg != nil {
-		configured := time.Duration(s.settingService.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+		configured := time.Duration(s.settingService.cfg.RequestGateway().StreamKeepaliveInterval) * time.Second
 		if configured > 0 && configured < interval {
 			interval = configured
 		}
