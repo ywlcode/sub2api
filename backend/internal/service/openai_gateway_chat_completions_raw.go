@@ -331,6 +331,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 	startTime time.Time,
 	requestBodyLen int,
 ) (*OpenAIForwardResult, error) {
+	timingCtx := requesttiming.ResponseContext(c.Request.Context(), resp)
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -420,6 +421,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 			}
 			payload := strings.Join(pendingErrorData, "\n")
 			if gjson.Valid(payload) && (gjson.Get(payload, "error").IsObject() || gjson.Get(payload, "type").String() == "error") {
+				requesttiming.Output(timingCtx, false, false, "failed")
 				if u := extractCCStreamUsage(payload); u != nil {
 					mergeOpenAIProtectionUsageEvidence(usage, u)
 					usage = *u
@@ -477,6 +479,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 		refusalDetector.ObserveSSELine(line)
 		if payload, ok := extractOpenAISSEDataLine(line); ok {
 			trimmedPayload := strings.TrimSpace(payload)
+			observeNativeChatContentTiming(timingCtx, trimmedPayload)
 			terminal.ObserveDataLine(trimmedPayload)
 			if trimmedPayload == "[DONE]" && c.Request != nil {
 				regionalMeterObserveUsage(c.Request.Context(), regionalUsagePayload, "json")
@@ -613,6 +616,9 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 
 	if clientAborted || clientDisconnected || scanErr != nil || (!terminal.sawDone && !terminal.sawFinishReason) {
 		usage.CacheReadKnown = false
+	}
+	if terminal.Terminated() && !semanticFailure && scanErr == nil {
+		requesttiming.Output(timingCtx, false, false, "completed")
 	}
 	return resultWithUsage(), nil
 }

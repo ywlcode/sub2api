@@ -926,6 +926,7 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 	startTime time.Time,
 	requestBodyLen int,
 ) (*OpenAIForwardResult, error) {
+	timingCtx := requesttiming.ResponseContext(c.Request.Context(), resp)
 	requestID := resp.Header.Get("x-request-id")
 	writeStreamHeaders := s.newStreamHeaderWriter(c, resp.Header)
 
@@ -1007,6 +1008,9 @@ func (s *OpenAIGatewayService) handleChatStreamingResponse(
 			return false
 		}
 		observer.ObserveOpenAI([]byte(payload), event.Type)
+		requesttiming.Content(timingCtx, []byte(payload), event.Type)
+		requesttiming.Output(timingCtx, openAIStreamDataStartsSemanticTTFT(payload, event.Type),
+			openAIStreamDataStartsVisibleOutput(payload, event.Type), timingTerminal(event.Type))
 		if c.Request != nil {
 			regionalMeterObserveUsage(c.Request.Context(), []byte(payload), event.Type)
 		}

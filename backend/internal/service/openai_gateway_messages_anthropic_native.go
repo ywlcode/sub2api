@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/requesttiming"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
@@ -336,6 +337,7 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 	reasoningEffort *string,
 	startTime time.Time,
 ) (result *OpenAIForwardResult, finalErr error) {
+	ctx = requesttiming.ResponseContext(ctx, resp)
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -562,6 +564,7 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 			// error frame. Audit retains the upstream evidence; clients see
 			// only the fixed Cyber message, regardless of platform.
 			if isCyberPolicyRejection([]byte(payload)) {
+				requesttiming.Output(ctx, false, false, "failed")
 				upstreamFailed = true
 				cyberUsage := claudeUsageToOpenAIUsage(usage)
 				if clientDisconnected {
@@ -587,10 +590,13 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 				continue
 			}
 			if gjson.Valid(payload) {
+				observeNativeAnthropicContentTiming(ctx, payload)
 				if validTerminal {
 					sawTerminalEvent = true
+					requesttiming.Output(ctx, false, false, "completed")
 				}
 				if !sawTerminalEvent && gjson.Get(payload, "error").IsObject() && (eventType == "error" || pendingEventName == "error") {
+					requesttiming.Output(ctx, false, false, "failed")
 					upstreamFailed = true
 					// Preserve a complete upstream rejection before any later
 					// transport failure; emit exactly one Anthropic error terminal.
@@ -608,6 +614,11 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 				} else {
 					// 按 SSE 事件边界刷出，减少每行 flush 带来的 syscall 开销。
 					flusher.Flush()
+					requesttiming.OutputFlushed(ctx)
+					requesttiming.SSEEventFlushed(ctx)
+					if validTerminal {
+						requesttiming.TerminalFlushed(ctx, "message_stop")
+					}
 					lastDataAt = time.Now()
 					resetKeepaliveTimer()
 				}
