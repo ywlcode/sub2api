@@ -620,6 +620,28 @@ type durableLaneTestRepo struct {
 	*laneTestRepo
 	DurableUsageBillingRepository
 	recovery *recoveryCacheRepo
+	issues   []SiteUsageIssue
+	issueErr error
+}
+
+func (r *durableLaneTestRepo) RecordSiteUsageIssue(_ context.Context, issue SiteUsageIssue) error {
+	r.issues = append(r.issues, issue)
+	return r.issueErr
+}
+
+func TestUsageBillingProviderPreservesSiteReconciliation(t *testing.T) {
+	underlying := &durableLaneTestRepo{laneTestRepo: newLaneTestRepo()}
+	lanes := newLaneTestCombiner(underlying, 16)
+	t.Cleanup(lanes.Stop)
+	repo := ProvideUsageBillingRepository(lanes)
+	key, account := &APIKey{ID: 2, UserID: 1}, &Account{ID: 3}
+	err := recordSiteUsageIssue(t.Context(), repo, key, account, "missing-usage", "deepseek-chat", "upstream_usage_unavailable")
+	require.ErrorContains(t, err, "requires reconciliation")
+	require.Equal(t, []SiteUsageIssue{{RequestID: "missing-usage", UserID: 1, APIKeyID: 2, AccountID: 3, Model: "deepseek-chat", Reason: "upstream_usage_unavailable"}}, underlying.issues)
+	require.Empty(t, underlying.applyCalls, "missing usage must not be charged as a free request")
+	underlying.issueErr = errors.New("disk full")
+	err = recordSiteUsageIssue(t.Context(), repo, key, account, "missing-price", "deepseek-chat", "pricing_unavailable")
+	require.ErrorIs(t, err, underlying.issueErr, "storage failures must remain visible")
 }
 
 func (r *durableLaneTestRepo) DeferUsageBillingCache(ctx context.Context, key UsageBillingEventKey) error {

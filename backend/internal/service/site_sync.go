@@ -17,10 +17,22 @@ type SiteUsageIssue struct {
 	Model, Reason               string
 }
 
+type siteUsageIssueWriter interface {
+	RecordSiteUsageIssue(context.Context, SiteUsageIssue) error
+}
+
+// The billing lane wrapper must retain durable reconciliation on a secondary.
+// These records go to Ops/outbox, not through monetary Apply or its queue.
+func (c *UsageBillingLaneCombiner) RecordSiteUsageIssue(ctx context.Context, issue SiteUsageIssue) error {
+	writer, ok := c.repo.(siteUsageIssueWriter)
+	if !ok {
+		return errors.New("site usage reconciliation storage unavailable")
+	}
+	return writer.RecordSiteUsageIssue(ctx, issue)
+}
+
 func recordSiteUsageIssue(ctx context.Context, repo UsageBillingRepository, key *APIKey, account *Account, requestID, model, reason string) error {
-	writer, ok := repo.(interface {
-		RecordSiteUsageIssue(context.Context, SiteUsageIssue) error
-	})
+	writer, ok := repo.(siteUsageIssueWriter)
 	if !ok || key == nil || account == nil {
 		return errors.New("site usage reconciliation storage unavailable")
 	}

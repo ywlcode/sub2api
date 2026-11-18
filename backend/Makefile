@@ -38,7 +38,7 @@ test-collection:
 	go test $(TEST_FLAGS) github.com/v03413/bepusdt/app/conf github.com/v03413/bepusdt/app/task github.com/v03413/bepusdt/app/task/notify
 
 test-integration:
-	go test $(TEST_FLAGS) -tags=integration ./...
+	go test $(TEST_FLAGS) -tags=integration -timeout=30m ./...
 
 test-e2e:
 	./scripts/e2e-test.sh

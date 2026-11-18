@@ -116,22 +116,48 @@ func TestForwardAsAnthropic_BufferedCyberPolicyNoFailover(t *testing.T) {
 	require.Contains(t, rec.Body.String(), `"type":"error"`, "must use anthropic error envelope")
 }
 
-// anthropic 流式客户端 cyber 命中——不 failover、标记已设、下发 anthropic SSE error 事件、丢弃 result。
+// Before content starts, a held prelude permits a complete HTTP error. Once
+// content is committed, the same policy error must terminate the SSE stream.
 func TestForwardAsAnthropic_StreamCyberPolicyNoFailover(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	body := []byte(`{"model":"gpt-5.5","max_tokens":1024,"messages":[{"role":"user","content":"hi"}],"stream":true}`)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
-	c.Request.Header.Set("Content-Type", "application/json")
+	for _, outputStarted := range []bool{false, true} {
+		name := "before_content"
+		if outputStarted {
+			name = "after_content"
+		}
+		t.Run(name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			body := []byte(`{"model":"gpt-5.5","max_tokens":1024,"messages":[{"role":"user","content":"hi"}],"stream":true}`)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
 
-	svc := &OpenAIGatewayService{httpUpstream: compatCyberUpstreamRecorder()}
+			upstream := compatCyberUpstreamRecorder()
+			if outputStarted {
+				content := "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_cyber\",\"output_index\":0,\"content_index\":0,\"delta\":\"hello\"}\n\n"
+				stream := strings.Replace(compatCyberUpstreamSSE(), "event: response.failed", content+"event: response.failed", 1)
+				upstream.resp.Body = io.NopCloser(strings.NewReader(stream))
+			}
+			svc := &OpenAIGatewayService{httpUpstream: upstream}
 
-	result, err := svc.ForwardAsAnthropic(context.Background(), c, compatCyberOAuthAccount(), body, "", "gpt-5.5")
-	require.Error(t, err)
-	require.Nil(t, result, "cyber must drop result so handler does not bill via RecordUsage")
-	var failoverErr *UpstreamFailoverError
-	require.False(t, errors.As(err, &failoverErr), "cyber must NOT trigger failover")
-	require.NotNil(t, GetOpsCyberPolicy(c), "cyber mark must be set")
-	require.Contains(t, rec.Body.String(), "event: error", "must emit anthropic SSE error event")
+			result, err := svc.ForwardAsAnthropic(context.Background(), c, compatCyberOAuthAccount(), body, "", "gpt-5.5")
+			require.Error(t, err)
+			require.Nil(t, result, "cyber must drop result so handler does not bill via RecordUsage")
+			var failoverErr *UpstreamFailoverError
+			require.False(t, errors.As(err, &failoverErr), "cyber must NOT trigger failover")
+			require.NotNil(t, GetOpsCyberPolicy(c), "cyber mark must be set")
+			if outputStarted {
+				require.Equal(t, http.StatusOK, rec.Code)
+				require.Contains(t, rec.Body.String(), "event: content_block_delta")
+				require.Contains(t, rec.Body.String(), "event: error", "must terminate committed output with an SSE error")
+			} else {
+				require.Equal(t, http.StatusForbidden, rec.Code)
+				require.Contains(t, rec.Header().Get("Content-Type"), "application/json")
+				require.JSONEq(t, `{"type":"error","error":{"type":"permission_error","message":"`+CyberPolicyClientMessage+`"}}`, rec.Body.String())
+			}
+			require.Contains(t, rec.Body.String(), CyberPolicyClientMessage)
+			require.NotContains(t, rec.Body.String(), "flagged for cyber policy")
+			require.NotContains(t, rec.Body.String(), "cyber_policy")
+		})
+	}
 }

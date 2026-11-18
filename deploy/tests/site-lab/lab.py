@@ -99,6 +99,10 @@ class Lab:
 
 
 def seed(lab):
+    # Tables become visible one migration at a time. Wait for the application
+    # to finish all migrations before inserting fields added by later files.
+    lab.eventually(lambda: lab.http("primary", "/health")["status"] == 200,
+                   timeout=90, label="primary migrations complete before seed")
     key = lab.creds["key"]
     domestic = {"api_key": "domestic-secret", "base_url": "http://upstream:8090/domestic", "deepseek_volcengine_compatibility": True,
                 "api_protocol": "responses", "model_mapping": {"deepseek-chat": "deepseek-chat"},
