@@ -11,11 +11,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/site"
 )
 
-const (
-	secondaryAuthMaxWaiting  = 512
-	secondaryAuthWaitTimeout = 5 * time.Second
-	secondaryAuthReadTimeout = 5 * time.Second
-)
+const secondaryAuthReadTimeout = 5 * time.Second
 
 // Optional repository extension: an authoritative local read of identity,
 // permissions (including denied models), balance and Key quota in one snapshot.
@@ -165,56 +161,4 @@ func (s *APIKeyService) BeginSiteAuthInstall() func() {
 func (s *APIKeyService) invalidateSecondaryAuth() {
 	s.secondaryAuthEpoch.Add(1)
 	s.secondaryAuthConfig.invalidate(nil)
-}
-
-func (s *APIKeyService) beginAuthLookup(ctx context.Context) (func(), error) {
-	if s.authLookupSlots == nil {
-		return func() {}, nil
-	}
-	s.authLookupTotal.Add(1)
-	if err := s.acquireAuthLookupSlot(ctx); err != nil {
-		if errors.Is(err, ErrAPIKeyAuthOverloaded) {
-			s.authLookupRejected.Add(1)
-		}
-		return nil, err
-	}
-	s.authLookupInFlight.Add(1)
-	return func() { s.authLookupInFlight.Add(-1); <-s.authLookupSlots }, nil
-}
-
-func (s *APIKeyService) acquireAuthLookupSlot(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	select {
-	case s.authLookupSlots <- struct{}{}:
-		return nil
-	default:
-	}
-	// Cache misses on a primary still fail fast. A secondary reads the local
-	// replica on every admission, so short bursts may wait without increasing
-	// the number of simultaneous database queries. Bound both memory and time.
-	if s.secondaryAuthWaiters == nil {
-		return ErrAPIKeyAuthOverloaded
-	}
-	select {
-	case s.secondaryAuthWaiters <- struct{}{}:
-		defer func() { <-s.secondaryAuthWaiters }()
-	default:
-		return ErrAPIKeyAuthOverloaded
-	}
-	timer := time.NewTimer(secondaryAuthWaitTimeout)
-	defer timer.Stop()
-	select {
-	case s.authLookupSlots <- struct{}{}:
-		if err := ctx.Err(); err != nil {
-			<-s.authLookupSlots
-			return err
-		}
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return ErrAPIKeyAuthOverloaded
-	}
 }

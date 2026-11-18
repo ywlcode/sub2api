@@ -632,7 +632,7 @@ func TestAPIKeyService_GetByKeyRejectsNonUTF8BeforeLookup(t *testing.T) {
 	}
 }
 
-func TestAPIKeyService_AuthLookupBulkheadRejectsExcessMisses(t *testing.T) {
+func TestAPIKeyService_AuthLookupBulkheadRejectsTimedOutMisses(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	repo := &authRepoStub{getByKeyForAuth: func(context.Context, string) (*APIKey, error) {

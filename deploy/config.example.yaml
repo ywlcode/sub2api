@@ -885,6 +885,8 @@ api_key_auth_cache:
   singleflight: true
   # Maximum concurrent database lookups for authentication cache misses
   # 认证缓存未命中时允许并发回源数据库的最大数量
+  # All site modes queue at most 512 additional lookups for up to 5 seconds.
+  # 所有站点模式均允许额外 512 个查询最多等待 5 秒，缓存命中不排队。
   lookup_concurrency: 64
   # Legacy process-local invalid-auth protection, applied only after credential
   # failure classification so a valid key behind the same NAT is never denied.

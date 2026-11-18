@@ -100,31 +100,37 @@ func TestSecondaryAuthWaitsWithoutIncreasingDBConcurrency(t *testing.T) {
 	require.Zero(t, svc.AuthLookupMetrics().InFlight)
 }
 
-func TestSecondaryAuthQueueBoundCancellationAndTimeout(t *testing.T) {
-	svc := NewAPIKeyService(&authRepoStub{}, nil, nil, nil, nil, nil, secondaryAuthTestConfig())
-	svc.secondaryAuthWaiters = make(chan struct{}, 1)
-	svc.authLookupSlots <- struct{}{} // Occupy the only database slot.
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { _, err := svc.GetByKey(ctx, "waiting"); done <- err }()
-	require.Eventually(t, func() bool { return svc.AuthLookupMetrics().Waiting == 1 }, time.Second, time.Millisecond)
-	_, err := svc.GetByKey(context.Background(), "overflow")
-	require.ErrorIs(t, err, ErrAPIKeyAuthOverloaded)
-	cancel()
-	require.ErrorIs(t, <-done, context.Canceled)
-	require.Zero(t, svc.AuthLookupMetrics().Waiting)
-	_, err = svc.GetByKey(context.Background(), "timeout")
-	require.ErrorIs(t, err, ErrAPIKeyAuthOverloaded)
-	require.Zero(t, svc.AuthLookupMetrics().Waiting)
-	require.Equal(t, uint64(2), svc.AuthLookupMetrics().Rejected)
-	<-svc.authLookupSlots
-	_, err = svc.GetByKey(ctx, "already-cancelled")
-	require.ErrorIs(t, err, context.Canceled)
-	require.Empty(t, svc.authLookupSlots)
+func TestAPIKeyAuthQueueBoundCancellationAndTimeout(t *testing.T) {
+	for _, mode := range []string{site.Primary, site.Standalone, site.Secondary} {
+		t.Run(mode, func(t *testing.T) {
+			cfg := secondaryAuthTestConfig()
+			cfg.Site.Mode = mode
+			svc := NewAPIKeyService(&authRepoStub{}, nil, nil, nil, nil, nil, cfg)
+			svc.authLookupWaiters = make(chan struct{}, 1)
+			svc.authLookupSlots <- struct{}{} // Occupy the only database slot.
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { _, err := svc.GetByKey(ctx, "waiting"); done <- err }()
+			require.Eventually(t, func() bool { return svc.AuthLookupMetrics().Waiting == 1 }, time.Second, time.Millisecond)
+			_, err := svc.GetByKey(context.Background(), "overflow")
+			require.ErrorIs(t, err, ErrAPIKeyAuthOverloaded)
+			cancel()
+			require.ErrorIs(t, <-done, context.Canceled)
+			require.Zero(t, svc.AuthLookupMetrics().Waiting)
+			_, err = svc.GetByKey(context.Background(), "timeout")
+			require.ErrorIs(t, err, ErrAPIKeyAuthOverloaded)
+			require.Zero(t, svc.AuthLookupMetrics().Waiting)
+			require.Equal(t, uint64(2), svc.AuthLookupMetrics().Rejected)
+			<-svc.authLookupSlots
+			_, err = svc.GetByKey(ctx, "already-cancelled")
+			require.ErrorIs(t, err, context.Canceled)
+			require.Empty(t, svc.authLookupSlots)
+		})
+	}
 }
 
-func TestPrimaryAuthDoesNotUseSecondaryProjectionOrQueue(t *testing.T) {
+func TestPrimaryAuthDoesNotUseSecondaryProjection(t *testing.T) {
 	for _, mode := range []string{site.Primary, site.Standalone} {
 		t.Run(string(mode), func(t *testing.T) {
 			repo := &secondaryAuthRepoStub{authRepoStub: authRepoStub{getByKeyForAuth: func(_ context.Context, key string) (*APIKey, error) {
@@ -134,12 +140,9 @@ func TestPrimaryAuthDoesNotUseSecondaryProjectionOrQueue(t *testing.T) {
 			cfg := secondaryAuthTestConfig()
 			cfg.Site.Mode = mode
 			svc := NewAPIKeyService(repo, nil, nil, nil, nil, nil, cfg)
-			require.Nil(t, svc.secondaryAuthWaiters)
+			require.NotNil(t, svc.authLookupWaiters)
 			_, err := svc.GetByKey(context.Background(), "primary-credential")
 			require.ErrorIs(t, err, ErrAPIKeyNotFound)
-			svc.authLookupSlots <- struct{}{}
-			_, err = svc.GetByKey(context.Background(), "busy")
-			require.ErrorIs(t, err, ErrAPIKeyAuthOverloaded)
 		})
 	}
 }

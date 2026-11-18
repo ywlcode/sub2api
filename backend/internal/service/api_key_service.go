@@ -330,7 +330,7 @@ type APIKeyService struct {
 	authCfg                   apiKeyAuthCacheConfig
 	authGroup                 singleflight.Group
 	authLookupSlots           chan struct{}
-	secondaryAuthWaiters      chan struct{}
+	authLookupWaiters         chan struct{}
 	secondaryAuthConfig       requestConfigCache[string, []byte]
 	secondaryAuthEpoch        atomic.Uint64
 	secondaryAuthInstalling   atomic.Int64
@@ -375,7 +375,7 @@ func (s *APIKeyService) AuthLookupMetrics() APIKeyAuthLookupMetrics {
 		Rejected:              s.authLookupRejected.Load(),
 		InFlight:              s.authLookupInFlight.Load(),
 		Capacity:              cap(s.authLookupSlots),
-		Waiting:               len(s.secondaryAuthWaiters),
+		Waiting:               len(s.authLookupWaiters),
 		SecondaryConfigLoads:  s.secondaryAuthConfigLoads.Load(),
 		SecondaryStateReads:   s.secondaryAuthStateReads.Load(),
 		SecondaryCacheEntries: entries,
@@ -408,9 +408,7 @@ func NewAPIKeyService(
 		lookupConcurrency = cfg.APIKeyAuth.LookupConcurrency
 	}
 	svc.authLookupSlots = make(chan struct{}, lookupConcurrency)
-	if cfg.IsSecondary() {
-		svc.secondaryAuthWaiters = make(chan struct{}, secondaryAuthMaxWaiting)
-	}
+	svc.authLookupWaiters = make(chan struct{}, authLookupMaxWaiting)
 	svc.invalidAuthAbuse = newInvalidAuthAbuseLimiter(cfg)
 	return svc
 }
