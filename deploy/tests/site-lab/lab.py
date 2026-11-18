@@ -55,14 +55,14 @@ class Lab:
                 raw = gzip.decompress(raw)
             return {"status": resp.status, "body": raw.decode(), "seconds": round(time.monotonic() - started, 4), "first_byte_seconds": round(first_byte, 4), "headers": dict(resp.headers)}
 
-    def request(self, protocol="responses", model="deepseek-chat", stream=False, text="hello", site="secondary", key=None, extra=None):
+    def request(self, protocol="responses", model="deepseek-chat", stream=False, text="hello", site="secondary", key=None, extra=None, timeout=35):
         body = {"model": model, "stream": stream}
         if protocol == "responses":
             body.update(input=text, max_output_tokens=200)
         else:
             body.update(messages=[{"role": "user", "content": text}], max_tokens=200)
         body.update(extra or {})
-        return self.http(site, "/v1/" + protocol, body, {"Authorization": "Bearer " + (key or self.creds["key"])})
+        return self.http(site, "/v1/" + protocol, body, {"Authorization": "Bearer " + (key or self.creds["key"])}, timeout=timeout)
 
     def control(self, **settings):
         script = "import json,urllib.request; r=urllib.request.Request('http://127.0.0.1:8091/control',data=" + repr(json.dumps(settings).encode()) + ",headers={'Content-Type':'application/json'}); print(urllib.request.urlopen(r).read().decode())"

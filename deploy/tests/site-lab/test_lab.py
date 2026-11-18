@@ -239,13 +239,14 @@ def network():
     wait_sync()
     # Start a streaming domestic request, then lose ALL primary connectivity.
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        slow = pool.submit(lab.request, text="LAB_SLOW", stream=True)
+        slow = pool.submit(lab.request, text="LAB_SLOW_EXPIRY", stream=True, timeout=100)
         time.sleep(1)
         lab.netem("loss", "100%")
         expire("complete_network_partition")
-        result = slow.result(timeout=15)
+        assert not slow.done(), "the stream must still be in flight when the lease expires"
+        result = slow.result(timeout=30)
         success(result, stream=True)
-        assert result["seconds"] >= 22
+        assert result["seconds"] >= 75
         record("inflight_domestic_stream_survives_lease_expiry", seconds=result["seconds"], first_byte_seconds=result["first_byte_seconds"], completed=True)
     backlog = int(lab.sql("secondary", "SELECT count(*) FROM site_outbox;"))
     assert backlog > 0

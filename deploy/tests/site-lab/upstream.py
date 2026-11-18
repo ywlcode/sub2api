@@ -49,7 +49,7 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(raw)
         label = json.dumps(body, ensure_ascii=False)
         scenario = "normal"
-        for marker in ("LAB_SLOW", "LAB_STREAM_FAIL", "LAB_MISSING_USAGE", "LAB_HTTP_ERROR"):
+        for marker in ("LAB_SLOW", "LAB_SLOW_EXPIRY", "LAB_STREAM_FAIL", "LAB_MISSING_USAGE", "LAB_HTTP_ERROR"):
             if marker in label:
                 scenario = marker
         request_id = self.headers.get("X-Request-ID", "")
@@ -84,8 +84,8 @@ class Handler(BaseHTTPRequestHandler):
         if scenario == "LAB_MISSING_USAGE":
             del response["usage"]
         if not body.get("stream"):
-            if scenario == "LAB_SLOW":
-                time.sleep(22)
+            if scenario in ("LAB_SLOW", "LAB_SLOW_EXPIRY"):
+                time.sleep(75 if scenario == "LAB_SLOW_EXPIRY" else 22)
             if self.path.endswith("/chat/completions"):
                 response = {"id": rid, "object": "chat.completion", "model": body["model"], "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}}
             elif self.path.endswith("/messages"):
@@ -102,8 +102,8 @@ class Handler(BaseHTTPRequestHandler):
             self.event("response.output_item.added", {"type": "response.output_item.added", "output_index": 0, "item": {**output[0], "status": "in_progress", "content": []}})
             self.event("response.content_part.added", {"type": "response.content_part.added", "output_index": 0, "content_index": 0, "item_id": output[0]["id"], "part": {"type": "output_text", "text": "", "annotations": []}})
             self.event("response.output_text.delta", {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "item_id": output[0]["id"], "delta": text})
-            if scenario == "LAB_SLOW":
-                time.sleep(22)
+            if scenario in ("LAB_SLOW", "LAB_SLOW_EXPIRY"):
+                time.sleep(75 if scenario == "LAB_SLOW_EXPIRY" else 22)
             if scenario == "LAB_STREAM_FAIL":
                 time.sleep(2)  # Let the gateway commit/flush its HTTP 200 first.
                 response.update(status="failed", error={"code": "server_error", "message": "controlled stream failure"})
