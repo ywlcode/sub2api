@@ -11,11 +11,6 @@ import (
 	"go.uber.org/zap"
 )
 
-// gatewayTransportErrorTempUnschedDuration is how long an account is temporarily
-// unscheduled after a durable transport failure (matches the OpenAI-side
-// openAITransportErrorTempUnschedDuration).
-const gatewayTransportErrorTempUnschedDuration = 10 * time.Minute
-
 // gatewayTransportFailoverBody is the Anthropic-format error body attached to
 // the failover error for a transport-level failure. Kept identical to the
 // legacy inline 502 body so the client-visible payload is unchanged if
@@ -31,7 +26,8 @@ var gatewayTransportFailoverBody = []byte(`{"type":"error","error":{"type":"upst
 //     filled here from the same account snapshot that built the transport.
 //     A client disconnect is not recorded (see isClientCanceledTransportError);
 //  2. for durable faults (expired/rejected proxy creds, dead proxy,
-//     DNS/routing) temporarily unschedules the account and logs a stable warn
+//     DNS/routing) temporarily unschedules the account if its network pause
+//     is enabled, and logs a stable warn
 //     event that alert rules can key on — except for direct pool-mode
 //     accounts that opted in by listing 503 in pool_mode_retry_status_codes,
 //     see poolModeTreatsTransportErrorAs503;
@@ -84,7 +80,7 @@ func (s *GatewayService) handleUpstreamTransportError(ctx context.Context, c *gi
 // HTTP response. A pool-mode account often fronts a relay or an account pool
 // that is restarted as a unit, so a refused dial means the relay is briefly
 // down, not that this local account is broken. Temporarily unscheduling it
-// for gatewayTransportErrorTempUnschedDuration turns a restart of a few
+// for the default ten minutes turns a restart of a few
 // seconds into a ten-minute outage for every group whose only account it is.
 //
 // It is opt-in through the existing pool_mode_retry_status_codes setting:
@@ -150,7 +146,11 @@ func tempUnscheduleAccountForTransportError(ctx context.Context, repo AccountRep
 	if account == nil || repo == nil {
 		return
 	}
-	until := time.Now().Add(gatewayTransportErrorTempUnschedDuration)
+	duration := account.UpstreamTransportCooldown()
+	if duration == 0 {
+		return
+	}
+	until := time.Now().Add(duration)
 	reason := "upstream transport error (proxy/network): " + safeErr
 
 	bgCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openAIAccountStateUpdateTimeout)

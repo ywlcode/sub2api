@@ -246,6 +246,9 @@ func (s *AccountService) Create(ctx context.Context, req CreateAccountRequest) (
 	if err := ValidateAPIKeyHealthConfig(req.Credentials); err != nil {
 		return nil, err
 	}
+	if err := ValidateUpstreamTransportCooldownConfig(req.Credentials); err != nil {
+		return nil, err
+	}
 	if err := ValidateModelMappingMode(req.Credentials); err != nil {
 		return nil, err
 	}
@@ -360,6 +363,9 @@ func (s *AccountService) Update(ctx context.Context, id int64, req UpdateAccount
 
 	if req.Credentials != nil {
 		if err := ValidateAPIKeyHealthConfig(*req.Credentials); err != nil {
+			return nil, err
+		}
+		if err := ValidateUpstreamTransportCooldownConfig(*req.Credentials); err != nil {
 			return nil, err
 		}
 		if err := ValidateModelMappingMode(*req.Credentials); err != nil {

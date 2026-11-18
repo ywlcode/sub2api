@@ -662,6 +662,13 @@ export default {
         viewTempUnschedDetails: '查看临时不可调度详情',
         tempUnschedulableUntil: '预计 {time} 恢复'
       },
+      transportCooldown: {
+        title: '网络故障自动暂停调度',
+        hint: '连接被拒绝、DNS 或路由不可达等持续性网络故障发生后，自动暂停该账号。默认开启，暂停 10 分钟。',
+        duration: '暂停时长（分钟）',
+        independent: '仅控制网络故障直接触发的暂停；健康熔断与其他停调度规则独立生效。关闭不会清除已经触发的暂停，可等待到期或手动解除。',
+        invalid: '暂停时长必须是 1 至 1440 之间的整数。'
+      },
       healthBreaker: {
         title: 'API Key 健康熔断',
         hint: '按本账号最近 N 次上游调用统计，失败达到 M 次时暂停整个账号；每次重试独立计数，窗口未满也会判断。',

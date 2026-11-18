@@ -2682,6 +2682,7 @@
       </div>
 
       <APIKeyHealthSettings v-if="accountCategory === 'apikey'" v-model="apiKeyHealth" />
+      <TransportCooldownSettings v-if="accountCategory === 'apikey'" v-model="transportCooldown" />
 
       <!-- Temp Unschedulable Rules -->
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
@@ -4459,6 +4460,8 @@ import AccountAutoBPSSection from '@/components/account/AccountAutoBPSSection.vu
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import APIKeyHealthSettings from '@/components/account/APIKeyHealthSettings.vue'
+import TransportCooldownSettings from '@/components/account/TransportCooldownSettings.vue'
+import { defaultTransportCooldownConfig, applyTransportCooldownPatch } from '@/components/account/transportCooldown'
 import { defaultAPIKeyHealthConfig, applyAPIKeyHealthConfig } from '@/components/account/apiKeyHealth'
 import AccountRpmSettings from '@/components/account/AccountRpmSettings.vue'
 import { applyAccountRPMSettings } from '@/components/account/accountRpm'
@@ -5207,6 +5210,7 @@ watch(vertexAuthMode, () => {
   vertexApiKey.value = ''
 })
 const apiKeyHealth = ref(defaultAPIKeyHealthConfig())
+const transportCooldown = ref(defaultTransportCooldownConfig())
 const tempUnschedEnabled = ref(false)
 const tempUnschedRules = ref<TempUnschedRuleForm[]>([])
 const getModelMappingKey = createStableObjectKeyResolver<ModelMapping>('create-model-mapping')
@@ -6072,6 +6076,9 @@ async function runChannelCreation<T>(kind: string, payload: unknown, operation: 
  return result
 }
 function createAccountWithUpstream(payload: CreateAccountRequest) {
+ if (payload.type === 'apikey' && !applyTransportCooldownPatch(payload.credentials, transportCooldown.value)) {
+   throw new Error(t('admin.accounts.transportCooldown.invalid'))
+ }
  if (providerImportMode.value && payload.type === 'apikey' && providerSelection.value) {
    const credentials = { ...payload.credentials }
    delete credentials.api_key
@@ -6164,6 +6171,7 @@ const resetForm = () => {
   initialChannelConfirmed.value = false
   pendingChannelCreations.clear()
   apiKeyHealth.value = defaultAPIKeyHealthConfig()
+  transportCooldown.value = defaultTransportCooldownConfig()
   step.value = 1
   openaiTwoFA.value = false
   openaiBPSOAuth.value = false

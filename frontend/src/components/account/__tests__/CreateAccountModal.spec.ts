@@ -595,6 +595,49 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     }))
   })
 
+  it.each(['OpenAI', 'DeepSeek'])('creates %s with network pause disabled and health breaker enabled independently', async (platform) => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, platform)
+    if (platform === 'OpenAI') await selectButtonByText(wrapper, 'API Key')
+    const toggle = wrapper.get('[data-testid="transport-cooldown-settings"] [role="switch"]')
+    expect(toggle.attributes('aria-checked')).toBe('true')
+    expect(wrapper.get<HTMLInputElement>('[data-testid="transport-cooldown-duration"]').element.value).toBe('10')
+    await toggle.trigger('click')
+    expect(wrapper.find('[data-testid="transport-cooldown-duration"]').exists()).toBe(false)
+    await wrapper.get('[data-testid="api-key-health-settings"] [role="switch"]').trigger('click')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Network policy')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(createAccountMock).toHaveBeenCalledTimes(1)
+    expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({
+      upstream_transport_cooldown: { enabled: false, duration_minutes: 10 },
+      api_key_health_breaker: { enabled: true, window_size: 100, failure_threshold: 10 }
+    })
+    await wrapper.setProps({ show: false })
+    await wrapper.setProps({ show: true })
+    await selectButtonByText(wrapper, 'DeepSeek')
+    expect(wrapper.get('[data-testid="transport-cooldown-settings"] [role="switch"]').attributes('aria-checked')).toBe('true')
+  })
+
+  it.each([5, 0, 1441, 1.5])('validates network pause duration %s before account creation', async (duration) => {
+    const wrapper = mountModal()
+    await selectButtonByText(wrapper, 'DeepSeek')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Network policy')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-api-key')
+    await wrapper.get('[data-testid="transport-cooldown-duration"]').setValue(duration)
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+    if (duration === 5) {
+      expect(createAccountMock.mock.calls[0]?.[0]?.credentials).toMatchObject({
+        upstream_transport_cooldown: { enabled: true, duration_minutes: 5 }
+      })
+    } else {
+      expect(createAccountMock).not.toHaveBeenCalled()
+      expect(wrapper.get('[data-testid="transport-cooldown-settings"] [role="alert"]').text()).toBe('admin.accounts.transportCooldown.invalid')
+    }
+  })
+
   it('saves extra image models only for OpenAI API-key accounts', async () => {
     const wrapper = mountModal()
     await selectButtonByText(wrapper, 'OpenAI')

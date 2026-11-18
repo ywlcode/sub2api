@@ -1761,6 +1761,7 @@
       </div>
 
       <APIKeyHealthSettings v-if="account?.type === 'apikey'" v-model="apiKeyHealth" />
+      <TransportCooldownSettings v-if="!isSparkShadow" v-model="transportCooldown" />
 
       <!-- Temp Unschedulable Rules -->
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
@@ -3924,6 +3925,8 @@ import RequestGzipField from '@/components/account/RequestGzipField.vue'
 import SecondaryProcessingField from '@/components/account/SecondaryProcessingField.vue'
 import Toggle from '@/components/common/Toggle.vue'
 import APIKeyHealthSettings from '@/components/account/APIKeyHealthSettings.vue'
+import TransportCooldownSettings from '@/components/account/TransportCooldownSettings.vue'
+import { defaultTransportCooldownConfig, readTransportCooldownConfig, applyTransportCooldownPatch } from '@/components/account/transportCooldown'
 import { defaultAPIKeyHealthConfig, readAPIKeyHealthConfig, applyAPIKeyHealthConfig } from '@/components/account/apiKeyHealth'
 import AccountRpmSettings from '@/components/account/AccountRpmSettings.vue'
 import { applyAccountRPMSettings } from '@/components/account/accountRpm'
@@ -4716,6 +4719,7 @@ const antigravityModelMappings = ref<ModelMapping[]>([])
 const isSyncingAntigravityUpstream = ref(false)
 let antigravityUpstreamSyncVersion = 0
 const apiKeyHealth = ref(defaultAPIKeyHealthConfig())
+const transportCooldown = ref(defaultTransportCooldownConfig())
 const tempUnschedEnabled = ref(false)
 const accountSchedulingThresholdOverrideEnabled = ref(false)
 const accountSchedulingThresholdOverrideValue = ref(100)
@@ -5610,6 +5614,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   loadQuotaControlSettings(newAccount)
 
   apiKeyHealth.value = readAPIKeyHealthConfig(credentials)
+  transportCooldown.value = readTransportCooldownConfig(credentials)
   loadTempUnschedRules(credentials)
   loadAccountSchedulingThresholdOverride(newAccount.platform, credentials)
 
@@ -6544,6 +6549,18 @@ const submitUpdateAccount = async (accountID: number, updatePayload: Record<stri
   }
   submitting.value = true
   try {
+    if (!isSparkShadow.value) {
+      const credentials = { ...((updatePayload.credentials || {}) as Record<string, unknown>) }
+      if (!applyTransportCooldownPatch(credentials, transportCooldown.value, props.account?.credentials)) {
+        appStore.showError(t('admin.accounts.transportCooldown.invalid'))
+        return
+      }
+      if (Object.keys(credentials).length > 0) {
+        updatePayload.credentials = updatePayload.credentials
+          ? credentials
+          : { ...props.account?.credentials, ...credentials }
+      }
+    }
     if (props.account?.type === 'apikey') {
       const credentials = { ...((updatePayload.credentials || props.account.credentials || {}) as Record<string, unknown>) }
       if (!applyAPIKeyHealthConfig(credentials, apiKeyHealth.value)) {

@@ -614,6 +614,13 @@ export default {
           normal: 'Quota normal'
         },
       },
+      transportCooldown: {
+        title: 'Pause scheduling on network failures',
+        hint: 'Pause this account after persistent network failures such as refused connections or unavailable DNS/routing. Enabled by default for 10 minutes.',
+        duration: 'Pause duration (minutes)',
+        independent: 'Controls only the direct network-failure pause. Health breakers and other scheduling rules remain independent. Disabling does not clear an existing pause; wait for expiry or clear it manually.',
+        invalid: 'Pause duration must be an integer between 1 and 1440.'
+      },
       healthBreaker: {
         title: 'API key health breaker',
         hint: 'Pause this account when M failures occur in its last N upstream calls. Each retry counts separately; a full window is not required.',

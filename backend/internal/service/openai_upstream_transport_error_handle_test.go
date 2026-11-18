@@ -90,8 +90,8 @@ func TestHandleOpenAIUpstreamTransportError_PersistentEvictsAndFailsOver(t *test
 	require.Len(t, repo.tempUnschedCalls, 1)
 	require.Equal(t, int64(4627), repo.tempUnschedCalls[0].accountID)
 	require.Contains(t, repo.tempUnschedCalls[0].reason, "authentication failed")
-	require.True(t, repo.tempUnschedCalls[0].until.After(before.Add(openAITransportErrorTempUnschedDuration-time.Second)))
-	require.True(t, repo.tempUnschedCalls[0].until.Before(after.Add(openAITransportErrorTempUnschedDuration+time.Second)))
+	require.True(t, repo.tempUnschedCalls[0].until.After(before.Add(10*time.Minute-time.Second)))
+	require.True(t, repo.tempUnschedCalls[0].until.Before(after.Add(10*time.Minute+time.Second)))
 
 	// Immediate in-memory effect so subsequent requests skip it before DB/cache catches up.
 	require.True(t, svc.isOpenAIAccountRuntimeBlocked(account))

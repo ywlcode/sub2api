@@ -868,6 +868,74 @@ describe('EditAccountModal', () => {
     wrapper.unmount()
   })
 
+  it('round-trips network pause settings independently of health and credentials', async () => {
+    const account = buildAccount()
+    account.credentials.upstream_transport_cooldown = { enabled: true, duration_minutes: 25 }
+    account.credentials.api_key_health_breaker = { enabled: true, window_size: 80, failure_threshold: 8 }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    const wrapper = mountModal(account)
+    await flushPromises()
+    expect(wrapper.get<HTMLInputElement>('[data-testid="transport-cooldown-duration"]').element.value).toBe('25')
+    await wrapper.get('[data-testid="transport-cooldown-settings"] [role="switch"]').trigger('click')
+    await wrapper.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    const saved = updateAccountMock.mock.calls[0]?.[1]?.credentials
+    expect(saved).toMatchObject({
+      api_key: 'sk-test', upstream_transport_cooldown: { enabled: false, duration_minutes: 25 },
+      api_key_health_breaker: { enabled: true, window_size: 80, failure_threshold: 8 }
+    })
+    expect(account.credentials.upstream_transport_cooldown.enabled).toBe(true)
+    wrapper.unmount()
+    const restored = mountModal({ ...account, credentials: saved })
+    await flushPromises()
+    expect(restored.get('[data-testid="transport-cooldown-settings"] [role="switch"]').attributes('aria-checked')).toBe('false')
+    await restored.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[1]?.[1]?.credentials.upstream_transport_cooldown).toEqual({ enabled: false, duration_minutes: 25 })
+    await restored.get('[data-testid="transport-cooldown-settings"] [role="switch"]').trigger('click')
+    await restored.get('[data-testid="transport-cooldown-duration"]').setValue(10)
+    await restored.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[2]?.[1]?.credentials.upstream_transport_cooldown).toEqual({ enabled: true, duration_minutes: 10 })
+  })
+
+  it.each([0, 1441, 1.5])('rejects invalid network pause duration %s before saving', async (duration) => {
+    updateAccountMock.mockReset()
+    showErrorMock.mockReset()
+    const wrapper = mountModal()
+    await flushPromises()
+    await wrapper.get('[data-testid="transport-cooldown-duration"]').setValue(duration)
+    await wrapper.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).not.toHaveBeenCalled()
+    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.transportCooldown.invalid')
+  })
+
+  it.each(['openai', 'anthropic'])('preserves %s OAuth credentials and omits an untouched network policy', async (platform) => {
+    const account = { ...buildOpenAIOAuthParentAccount(), platform }
+    updateAccountMock.mockReset().mockResolvedValue(account)
+    checkMixedChannelRiskMock.mockReset().mockResolvedValue({ has_risk: false })
+    const wrapper = mountModal(account)
+    await flushPromises()
+    await wrapper.get('[data-tour="edit-account-form-name"]').setValue('Unrelated edit')
+    await wrapper.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock).toHaveBeenCalledTimes(1)
+    expect(updateAccountMock.mock.calls[0]?.[1]?.credentials ?? {}).not.toHaveProperty('upstream_transport_cooldown')
+    await wrapper.get('[data-testid="transport-cooldown-settings"] [role="switch"]').trigger('click')
+    await wrapper.get('#edit-account-form').trigger('submit.prevent')
+    await flushPromises()
+    expect(updateAccountMock.mock.calls[1]?.[1]?.credentials).toMatchObject({
+      access_token: 'oauth-token', upstream_transport_cooldown: { enabled: false, duration_minutes: 10 }
+    })
+  })
+
+  it('keeps network policy on the credential parent of a Spark shadow', async () => {
+    const wrapper = mountModal(buildOpenAISparkShadowAccount())
+    await flushPromises()
+    expect(wrapper.find('[data-testid="transport-cooldown-settings"]').exists()).toBe(false)
+  })
+
   it('rejects invalid health thresholds and hides the feature for OAuth', async () => {
     updateAccountMock.mockReset()
     const wrapper = mountModal()

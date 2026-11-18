@@ -150,7 +150,7 @@ func TestHandleUpstreamTransportError_PersistentEvictsAccount(t *testing.T) {
 	if repo.lastID != account.ID {
 		t.Fatalf("unscheduled account = %d, want %d", repo.lastID, account.ID)
 	}
-	wantUntil := before.Add(gatewayTransportErrorTempUnschedDuration)
+	wantUntil := before.Add(10 * time.Minute)
 	if repo.lastUntil.Before(wantUntil.Add(-time.Minute)) || repo.lastUntil.After(wantUntil.Add(time.Minute)) {
 		t.Fatalf("until = %v, want ~%v", repo.lastUntil, wantUntil)
 	}
@@ -172,7 +172,7 @@ func newPoolModeTransportTestAccount(retryStatusCodes []any) *Account {
 // never temporarily unscheduled for a transport failure, durable or
 // transient: the failure is handled as a same-account-retryable 503, so a
 // single-account group backs off and retries instead of going dark for
-// gatewayTransportErrorTempUnschedDuration.
+// the default ten-minute cooldown.
 func TestHandleUpstreamTransportError_PoolModeOptInKeepsAccountSchedulable(t *testing.T) {
 	for _, tc := range []struct {
 		name string

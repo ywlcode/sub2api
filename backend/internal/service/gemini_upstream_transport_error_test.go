@@ -89,7 +89,7 @@ func TestGeminiForwardNative_PersistentTransportErrorEvictsAccount(t *testing.T)
 	require.Equal(t, 1, httpStub.calls)
 	require.Equal(t, 1, repo.calls, "持久性故障应临时摘号")
 	require.Equal(t, account.ID, repo.lastID)
-	require.WithinDuration(t, before.Add(gatewayTransportErrorTempUnschedDuration), repo.lastUntil, 5*time.Second)
+	require.WithinDuration(t, before.Add(10*time.Minute), repo.lastUntil, 5*time.Second)
 	require.False(t, c.Writer.Written())
 }
 

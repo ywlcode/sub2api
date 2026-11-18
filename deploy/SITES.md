@@ -40,6 +40,10 @@
 
 ## 请求配置同步范围
 
+账号的 `credentials.upstream_transport_cooldown` 是可选配置，随获准账号的 credentials 同步，控制持续性网络故障直接触发的暂停。缺失时沿用开启、10 分钟；可关闭或将 `duration_minutes` 配置为 1～1440。它不修改健康熔断、HTTP 错误规则、余额检测、人工禁用或并发限制。关闭只阻止新增的网络暂停，不清除已经产生的暂停。旧版本从站忽略此键并继续原有 10 分钟行为；主站先升级时可正常同步，需从站升级后才会执行新设置。它不涉及权限或计费字段，不改变同步协议版本或数据库结构。
+
+Anthropic/Bedrock 路径原有的直连池模式豁免仍保留：`pool_mode_retry_status_codes` 包含 503 时，网络失败继续使用原有请求重试策略，不直接暂停账号。
+
 控制协议为 v6；配置、事件各自使用稳定契约标识，主站另外兼容已验证的旧 v6 schema。固定字段见 `repository/site_contract_fields.go`，策略见 `service/site_policy.go`、`config/site_gateway_fields.go`；不依赖在每个管理接口中发送通知。
 
 - 固定业务表投影（完整清单见 `site_store.go`）：用户与并发/RPM/平台限制、Key 与 IP/模型限制、分组与个人覆盖、订阅与实际额度、获准账号与模型映射、组合路由、渠道计价与峰谷时区、错误透传、账号引用的 TLS 指纹等。

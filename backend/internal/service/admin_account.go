@@ -440,6 +440,9 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	if err := ValidateAPIKeyHealthConfig(input.Credentials); err != nil {
 		return nil, err
 	}
+	if err := ValidateUpstreamTransportCooldownConfig(input.Credentials); err != nil {
+		return nil, err
+	}
 	if err := ValidateOpenAIRequestTimezoneExtra(input.Platform, accountExtra); err != nil {
 		return nil, err
 	}
@@ -791,6 +794,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, err
 		}
 		if err := ValidateAPIKeyHealthConfig(account.Credentials); err != nil {
+			return nil, err
+		}
+		if err := ValidateUpstreamTransportCooldownConfig(account.Credentials); err != nil {
 			return nil, err
 		}
 		if err := ValidateModelMappingMode(account.Credentials); err != nil {
@@ -1437,6 +1443,9 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 
 	// 校验并规范化请求头覆写配置（批量路径为 JSONB 顶层 key 合并，直接校验增量即可）
 	if err := ValidateAPIKeyHealthConfig(input.Credentials); err != nil {
+		return nil, err
+	}
+	if err := ValidateUpstreamTransportCooldownConfig(input.Credentials); err != nil {
 		return nil, err
 	}
 	if err := ValidateModelMappingMode(input.Credentials); err != nil {
