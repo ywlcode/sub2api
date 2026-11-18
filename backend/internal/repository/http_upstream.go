@@ -34,6 +34,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/transportpolicy"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/upstreamroute"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -80,8 +81,8 @@ const (
 	defaultOpenAIHTTP2FallbackWindow         = 60 * time.Second
 	defaultOpenAIHTTP2FallbackTTL            = 10 * time.Minute
 	// OpenAI 保留原有的探测与应答期限，避免中转站的延迟 PING 应答被长流策略提前判死。
-	openAIHTTP2ReadIdleTimeout = 15 * time.Second
-	openAIHTTP2PingTimeout     = 15 * time.Second
+	openAIHTTP2ReadIdleTimeout = transportpolicy.HTTP2ReadIdleTimeout
+	openAIHTTP2PingTimeout     = transportpolicy.HTTP2PingTimeout
 	// 长流 HTTP/2 连接健康探测：池化连接被代理/NAT
 	// 静默掐断会成为“死连接”（两端都以为存活），请求落上去会挂到 TCP 重传超时
 	// （分钟级）。Go 的 http2.Transport 默认 ReadIdleTimeout=0（不发健康 PING），
@@ -1510,16 +1511,7 @@ func defaultPoolSettings(cfg *config.Config) poolSettings {
 // 必须显式提供：http.Transport 的 DialContext 为 nil 时使用零值 net.Dialer，
 // 建连没有任何超时上限，只能等内核 TCP 重传耗尽（Linux 约 130 秒）。
 func newUpstreamDialer() *net.Dialer {
-	return &net.Dialer{
-		Timeout: defaultUpstreamDialTimeout,
-		KeepAliveConfig: net.KeepAliveConfig{
-			Enable:   true,
-			Idle:     upstreamKeepAliveIdle,
-			Interval: upstreamKeepAliveInterval,
-			Count:    upstreamKeepAliveCount,
-		},
-		Control: upstreamDialControl,
-	}
+	return transportpolicy.NewDialer(defaultUpstreamDialTimeout)
 }
 
 // buildUpstreamTransport 构建上游请求的 Transport
@@ -1585,19 +1577,11 @@ func buildUpstreamTransport(settings poolSettings, proxyURL *url.URL, protocolMo
 // 静默掐断的死连接。此处主动设置 ReadIdleTimeout/PingTimeout，让死连接被提前 PING
 // 出并关闭，请求得以重建连接而非挂到 TCP 重传超时。返回底层 *http2.Transport 便于测试。
 func enableHTTP2KeepAlive(transport *http.Transport, protocolMode string) (*http2.Transport, error) {
-	h2, err := http2.ConfigureTransports(transport)
-	if err != nil {
-		return nil, err
+	idle, ping := longStreamHTTP2ReadIdleTimeout, longStreamHTTP2PingTimeout
+	if protocolMode == upstreamProtocolModeOpenAIH2 {
+		idle, ping = openAIHTTP2ReadIdleTimeout, openAIHTTP2PingTimeout
 	}
-	if h2 != nil {
-		h2.ReadIdleTimeout = longStreamHTTP2ReadIdleTimeout
-		h2.PingTimeout = longStreamHTTP2PingTimeout
-		if protocolMode == upstreamProtocolModeOpenAIH2 {
-			h2.ReadIdleTimeout = openAIHTTP2ReadIdleTimeout
-			h2.PingTimeout = openAIHTTP2PingTimeout
-		}
-	}
-	return h2, nil
+	return transportpolicy.ConfigureHTTP2(transport, idle, ping, protocolMode)
 }
 
 // buildUpstreamTransportWithTLSFingerprint 构建带 TLS 指纹伪装的 Transport

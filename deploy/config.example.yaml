@@ -7,6 +7,11 @@ site:
   token: ""
   allow_http: false
   peers: []
+  # Secondary -> primary model forwarding, seconds. 0 disables a phase limit.
+  # These do not limit total stream length or change synchronization deadlines.
+  forward_upload_idle_timeout_seconds: 120
+  forward_response_header_timeout_seconds: 600
+  forward_response_idle_timeout_seconds: 600
 
 # Process role within a site: full retains dashboard/global jobs (default).
 # primary/secondary site modes require full; secondary suppresses global jobs.

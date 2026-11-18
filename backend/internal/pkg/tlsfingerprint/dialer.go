@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/transportpolicy"
+
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/proxy"
 )
@@ -122,7 +124,7 @@ var (
 // If baseDialer is nil, direct TCP dial is used.
 func NewDialer(profile *Profile, baseDialer func(ctx context.Context, network, addr string) (net.Conn, error)) *Dialer {
 	if baseDialer == nil {
-		baseDialer = (&net.Dialer{}).DialContext
+		baseDialer = transportpolicy.NewDialer(10 * time.Second).DialContext
 	}
 	return &Dialer{profile: profile, baseDialer: baseDialer}
 }
@@ -163,7 +165,7 @@ func (d *SOCKS5ProxyDialer) DialTLSContext(ctx context.Context, network, addr st
 		proxyAddr = net.JoinHostPort(d.proxyURL.Hostname(), "1080") // Default SOCKS5 port
 	}
 
-	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second})
+	socksDialer, err := proxy.SOCKS5("tcp", proxyAddr, auth, transportpolicy.NewDialer(10*time.Second))
 	if err != nil {
 		slog.Debug("tls_fingerprint_socks5_dialer_failed", "error", err)
 		return nil, fmt.Errorf("create SOCKS5 dialer: %w", err)
@@ -206,7 +208,7 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 		}
 	}
 
-	dialer := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}
+	dialer := transportpolicy.NewDialer(10 * time.Second)
 	conn, err := dialer.DialContext(ctx, "tcp", proxyAddr)
 	if err != nil {
 		slog.Debug("tls_fingerprint_http_proxy_connect_failed", "error", err)

@@ -18,14 +18,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/transportpolicy"
 	"golang.org/x/net/proxy"
 )
 
 const (
 	// socks5DialTimeout 限制到 SOCKS5 代理自身的 TCP 建连耗时。
 	socks5DialTimeout = 10 * time.Second
-	// socks5DialKeepAlive 与 Go 默认 keepalive 探测间隔保持一致。
-	socks5DialKeepAlive = 30 * time.Second
 )
 
 // socks5ForwardDialer 是 SOCKS5 dialer 的底层拨号器。
@@ -34,10 +33,7 @@ const (
 // 代理地址不可达时会一直卡到内核 TCP 重传耗尽（Linux 约 130 秒）。SOCKS5 分支会
 // 覆盖 Transport.DialContext，因此调用方在 Transport 上设置的建连超时对这条路径
 // 无效，必须在这里补上。
-var socks5ForwardDialer = &net.Dialer{
-	Timeout:   socks5DialTimeout,
-	KeepAlive: socks5DialKeepAlive,
-}
+var socks5ForwardDialer = transportpolicy.NewDialer(socks5DialTimeout)
 
 // ConfigureTransportProxy 根据代理 URL 配置 Transport
 //

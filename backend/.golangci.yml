@@ -125,8 +125,8 @@ linters:
     rules:
       # x/net v0.60 marks the existing HTTP/2 compatibility adapters deprecated.
       # Keep their tested H2C/keepalive behavior and typed GOAWAY handling during
-      # this security update; only exempt these deprecations at the existing sites.
-      - path: 'internal/(repository/http_upstream(_http2_keepalive_test)?|server/http|service/openai_codex_models_service(_test)?)\.go$'
+      # this security update; transportpolicy now owns the same keepalive adapter.
+      - path: 'internal/(repository/http_upstream(_http2_keepalive_test)?|pkg/transportpolicy/transport|server/http|service/openai_codex_models_service(_test)?)\.go$'
         linters: [ staticcheck ]
         text: '^SA1019: .*golang\.org/x/net/http2[.)]'
       # G703/G704 污点分析在测试文件中只会命中 httptest mock 与测试者自设的

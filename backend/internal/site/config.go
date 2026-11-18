@@ -29,6 +29,11 @@ type Config struct {
 	// private encrypted tunnel. Certificates are always verified for HTTPS.
 	AllowHTTP bool   `mapstructure:"allow_http"`
 	Peers     []Peer `mapstructure:"peers"`
+	// Node-local forwarding budgets. Nil selects the default; zero disables
+	// that phase limit. They never become a total model-generation deadline.
+	ForwardUploadIdleTimeoutSeconds     *int `mapstructure:"forward_upload_idle_timeout_seconds"`
+	ForwardResponseHeaderTimeoutSeconds *int `mapstructure:"forward_response_header_timeout_seconds"`
+	ForwardResponseIdleTimeoutSeconds   *int `mapstructure:"forward_response_idle_timeout_seconds"`
 }
 
 type Peer struct {
@@ -53,6 +58,11 @@ func (c Config) EffectiveMode() string {
 var identifier = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 func (c Config) Validate() error {
+	for _, n := range []*int{c.ForwardUploadIdleTimeoutSeconds, c.ForwardResponseHeaderTimeoutSeconds, c.ForwardResponseIdleTimeoutSeconds} {
+		if n != nil && (*n < 0 || *n > 86400) {
+			return fmt.Errorf("site forwarding timeouts must be between 0 and 86400 seconds")
+		}
+	}
 	switch c.EffectiveMode() {
 	case Standalone:
 		if c.PrimaryURL != "" || c.Token != "" || len(c.Peers) != 0 {

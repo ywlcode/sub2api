@@ -20,6 +20,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/transportpolicy"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -73,6 +74,7 @@ func New(cfg Config, store Store, maxBody int64) (*Manager, error) {
 		return nil, errors.New("site requires the standard HTTP transport")
 	}
 	transport := defaultTransport.Clone()
+	transport.DialContext = transportpolicy.NewDialer(10 * time.Second).DialContext
 	transport.MaxIdleConns = 256
 	transport.MaxIdleConnsPerHost = 128
 	transport.ResponseHeaderTimeout = 0 // long thinking/streams use request cancellation
@@ -90,6 +92,9 @@ func New(cfg Config, store Store, maxBody int64) (*Manager, error) {
 	}
 	if cfg.EffectiveMode() == Secondary {
 		m.forwardTransport = transport.Clone()
+		if _, err := transportpolicy.ConfigureHTTP2(m.forwardTransport, transportpolicy.HTTP2ReadIdleTimeout, transportpolicy.HTTP2PingTimeout, "site_forward"); err != nil {
+			return nil, fmt.Errorf("configure site forwarding transport: %w", err)
+		}
 		target, _ := url.Parse(cfg.PrimaryURL)
 		m.proxy = &httputil.ReverseProxy{
 			Rewrite: func(r *httputil.ProxyRequest) {
@@ -100,9 +105,10 @@ func New(cfg Config, store Store, maxBody int64) (*Manager, error) {
 					r.Out.Header.Set("X-Request-ID", id)
 				}
 			},
-			Transport: m.forwardTransport, FlushInterval: -1,
+			Transport: &forwardRoundTripper{base: m.forwardTransport, timeouts: cfg.forwardTimeouts()}, FlushInterval: -1,
 			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
-				slog.Warn("site primary forwarding failed", "error", err)
+				// The forwarding transport records a bounded error category and
+				// request ID; do not log URL errors containing query credentials.
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadGateway)
 				_, _ = io.WriteString(w, `{"error":{"type":"primary_unavailable","message":"Primary site unavailable"}}`)

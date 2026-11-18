@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/transportpolicy"
 	"github.com/stretchr/testify/require"
 )
 
@@ -20,7 +21,10 @@ var errStub = errors.New("stub dial")
 func TestSOCKS5ForwardDialerHasBoundedTimeout(t *testing.T) {
 	require.Greater(t, socks5ForwardDialer.Timeout, time.Duration(0))
 	require.Equal(t, socks5DialTimeout, socks5ForwardDialer.Timeout)
-	require.Equal(t, socks5DialKeepAlive, socks5ForwardDialer.KeepAlive)
+	require.True(t, socks5ForwardDialer.KeepAliveConfig.Enable)
+	require.Equal(t, transportpolicy.KeepAliveIdle, socks5ForwardDialer.KeepAliveConfig.Idle)
+	require.Equal(t, transportpolicy.KeepAliveInterval, socks5ForwardDialer.KeepAliveConfig.Interval)
+	require.Equal(t, transportpolicy.KeepAliveCount, socks5ForwardDialer.KeepAliveConfig.Count)
 }
 
 func TestConfigureTransportProxySOCKS5SetsDialContext(t *testing.T) {
