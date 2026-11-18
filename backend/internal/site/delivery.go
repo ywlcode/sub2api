@@ -100,11 +100,12 @@ func (m *Manager) postSite(ctx context.Context, client *http.Client, path string
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "gzip")
 	req.Header.Set("Accept-Encoding", "gzip")
-	if path == DeliveryPath {
+	switch path {
+	case DeliveryPath:
 		var finish func(error)
 		req, finish = traceEventUpload(req, len(input.Events), len(packed))
 		defer func() { finish(err) }()
-	} else if path == SyncPath {
+	case SyncPath:
 		var finish func(error)
 		req, finish = traceSiteTransfer(req, "site synchronization transfer failed", true)
 		defer func() { finish(err) }()

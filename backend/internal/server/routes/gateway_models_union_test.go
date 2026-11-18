@@ -525,12 +525,18 @@ func TestMultiGroupModelsUnionKeyExpiryAndQuota(t *testing.T) {
 		status int
 	}{
 		{"expired", func(k *service.APIKey) { past := time.Now().Add(-time.Hour); k.ExpiresAt = &past }, http.StatusForbidden},
-		{"quota exhausted", func(k *service.APIKey) { k.Status = service.StatusAPIKeyQuotaExhausted }, http.StatusTooManyRequests},
+		{"quota exhausted status", func(k *service.APIKey) { k.Status = service.StatusAPIKeyQuotaExhausted }, http.StatusOK},
+		{"quota exhausted amount", func(k *service.APIKey) { k.Quota = 1; k.QuotaUsed = 1 }, http.StatusOK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newUnionFixture()
 			tc.change(f.key)
-			require.Equal(t, tc.status, unionRequest(f.router(t, "", nil, nil), http.MethodGet, "/v1/models").Code)
+			response := unionRequest(f.router(t, "", nil, nil), http.MethodGet, "/v1/models")
+			require.Equal(t, tc.status, response.Code)
+			if tc.status == http.StatusOK {
+				require.Equal(t, []string{"image-model", "shared-model", "text-model"}, unionIDs(t, response),
+					"discovery retains authorized models even when generation quota is exhausted")
+			}
 		})
 	}
 }

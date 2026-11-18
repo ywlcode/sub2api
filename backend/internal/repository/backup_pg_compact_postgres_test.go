@@ -31,7 +31,7 @@ func TestCompactBackupPostgresRestore(t *testing.T) {
 	require.True(t, filepath.IsAbs(socket))
 	require.True(t, strings.HasPrefix(filepath.Base(socket), "sub2api-compact-"))
 	container := os.Getenv("SUB2API_BACKUP_TEST_CONTAINER")
-	require.True(t, strings.HasPrefix(container, "sub2api-compact-backup-"))
+	require.Regexp(t, `^sub2api-compact-backup-[A-Za-z0-9][A-Za-z0-9_.-]*$`, container)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	dsn := fmt.Sprintf("host=%s port=5432 user=postgres dbname=postgres sslmode=disable", socket)
@@ -52,6 +52,8 @@ func TestCompactBackupPostgresRestore(t *testing.T) {
 		})
 		return db, &PgDumper{db: db, cfg: &config.DatabaseConfig{Host: socket, Port: 5432, User: "postgres", DBName: name, SSLMode: "disable"},
 			commandContext: func(ctx context.Context, binary string, args ...string) *exec.Cmd {
+				require.Contains(t, []string{"pg_dump", "psql"}, binary)
+				//nolint:gosec // G702: validated opt-in fixture container and fixed PostgreSQL tools; separate argv, never a shell.
 				return exec.CommandContext(ctx, "docker", append([]string{"exec", "-i", container, binary}, args...)...)
 			}}
 	}
@@ -219,7 +221,7 @@ func TestCompactBackupPostgresRestore(t *testing.T) {
 	// A future schema change must not silently create unrestorable compact dumps.
 	observer, err := source.Conn(ctx)
 	require.NoError(t, err)
-	defer observer.Close()
+	defer func() { require.NoError(t, observer.Close()) }()
 	assertUnlocked := func() {
 		var acquired bool
 		require.NoError(t, observer.QueryRowContext(ctx, "SELECT pg_try_advisory_lock($1)", migrationsAdvisoryLockID).Scan(&acquired))
@@ -253,9 +255,11 @@ func TestCompactBackupPostgresRestore(t *testing.T) {
 	stalledCtx, stop := context.WithCancel(ctx)
 	stalled, err := dumper.DumpCompact(stalledCtx)
 	require.NoError(t, err)
+	stalledReader, ok := stalled.(*compactDumpReader)
+	require.True(t, ok)
 	stop()
 	select {
-	case <-stalled.(*compactDumpReader).done:
+	case <-stalledReader.done:
 	case <-time.After(5 * time.Second):
 		_ = stalled.Close()
 		t.Fatal("canceled compact dump retained a stalled pipe/snapshot")

@@ -48,7 +48,11 @@ func TestSiteSyncTimeoutDiscardsStalledConnection(t *testing.T) {
 			m, err := New(Config{Mode: Secondary, ID: "office", PrimaryURL: server.URL, Token: strings.Repeat("s", 32)}, &deliveryTestStore{}, 1<<20)
 			require.NoError(t, err)
 			defer m.Stop()
-			m.syncClients[0].Transport.(*http.Transport).TLSClientConfig.RootCAs = server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+			syncTransport, ok := m.syncClients[0].Transport.(*http.Transport)
+			require.True(t, ok)
+			serverTransport, ok := server.Client().Transport.(*http.Transport)
+			require.True(t, ok)
+			syncTransport.TLSClientConfig.RootCAs = serverTransport.TLSClientConfig.RootCAs
 			input := SyncRequest{Protocol: ProtocolVersion, NodeID: "office"}
 			var output SyncResponse
 			ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
@@ -93,8 +97,12 @@ func TestSiteSyncUsesFiveWarmPoolsAndPreservesLeaseRules(t *testing.T) {
 				m, err := New(Config{Mode: Secondary, ID: "office", PrimaryURL: server.URL, Token: strings.Repeat("s", 32)}, local, 1<<20)
 				require.NoError(t, err)
 				defer m.Stop()
+				serverTransport, ok := server.Client().Transport.(*http.Transport)
+				require.True(t, ok)
 				for _, client := range m.syncClients {
-					client.Transport.(*http.Transport).TLSClientConfig.RootCAs = server.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+					transport, ok := client.Transport.(*http.Transport)
+					require.True(t, ok)
+					transport.TLSClientConfig.RootCAs = serverTransport.TLSClientConfig.RootCAs
 					client.Timeout = 200 * time.Millisecond
 				}
 				now := time.Now()
