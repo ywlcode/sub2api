@@ -735,6 +735,14 @@ func (s *OpenAIGatewayService) handleErrorResponse(
 		"upstream_error",
 		"Upstream request failed",
 	); matched {
+		// This is the final attempt even when a rule rewrites the client status.
+		// Keep it after earlier failover events so Ops retains the actual cause.
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			ProxyID: opsUpstreamProxyID(account), ProxyName: opsUpstreamProxyName(account),
+			Platform: account.Platform, AccountID: account.ID, AccountName: account.Name,
+			UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"),
+			Kind: "http_error", Message: upstreamMsg, Detail: upstreamDetail,
+		})
 		MarkResponseCommitted(c)
 		c.JSON(status, gin.H{
 			"error": gin.H{

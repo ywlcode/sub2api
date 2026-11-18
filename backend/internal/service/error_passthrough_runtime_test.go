@@ -381,3 +381,42 @@ func newNonFailoverPassthroughRule(statusCode int, keyword string, respCode int,
 		CustomMessage:   &customMessage,
 	}
 }
+
+func TestOpenAIHandleErrorResponse_PassthroughRetainsFinalAttempt(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+
+	ruleSvc := &ErrorPassthroughService{}
+	ruleSvc.setLocalCache([]*model.ErrorPassthroughRule{newNonFailoverPassthroughRule(http.StatusUnprocessableEntity, "invalid schema", http.StatusTeapot, "OpenAI上游失败")})
+	BindErrorPassthroughService(c, ruleSvc)
+
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{AccountID: 1, UpstreamStatusCode: http.StatusTooManyRequests, Kind: "failover", Message: "earlier capacity exhausted"})
+	svc := &OpenAIGatewayService{}
+	respBody := []byte(`{"error":{"message":"Invalid schema for field messages"}}`)
+	resp := &http.Response{
+		StatusCode: http.StatusUnprocessableEntity,
+		Body:       io.NopCloser(bytes.NewReader(respBody)),
+		Header:     http.Header{},
+	}
+	account := &Account{ID: 2, Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+
+	_, err := svc.handleErrorResponse(context.Background(), resp, c, account, nil)
+	require.Error(t, err)
+	assert.Equal(t, http.StatusTeapot, rec.Code)
+
+	value, ok := c.Get(OpsUpstreamErrorsKey)
+	require.True(t, ok)
+	events := value.([]*OpsUpstreamErrorEvent)
+	require.Len(t, events, 2)
+	require.Equal(t, http.StatusTooManyRequests, events[0].UpstreamStatusCode)
+	require.Equal(t, http.StatusUnprocessableEntity, events[1].UpstreamStatusCode)
+	require.Equal(t, account.ID, events[1].AccountID)
+	require.Equal(t, "Invalid schema for field messages", events[1].Message)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &payload))
+	errField, ok := payload["error"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "upstream_error", errField["type"])
+	assert.Equal(t, "OpenAI上游失败", errField["message"])
+}
