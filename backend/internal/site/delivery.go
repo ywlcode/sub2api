@@ -7,7 +7,6 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -105,6 +104,10 @@ func (m *Manager) postSite(ctx context.Context, client *http.Client, path string
 		var finish func(error)
 		req, finish = traceEventUpload(req, len(input.Events), len(packed))
 		defer func() { finish(err) }()
+	} else if path == SyncPath {
+		var finish func(error)
+		req, finish = traceSiteTransfer(req, "site synchronization transfer failed", true)
+		defer func() { finish(err) }()
 	}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -112,7 +115,7 @@ func (m *Manager) postSite(ctx context.Context, client *http.Client, path string
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return stats, fmt.Errorf("primary %s status %d", path, resp.StatusCode)
+		return stats, &siteHTTPError{path: path, status: resp.StatusCode}
 	}
 	wire := &countingReader{r: io.LimitReader(resp.Body, maxSyncBody+1)}
 	var reader io.Reader = wire

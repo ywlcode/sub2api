@@ -1,6 +1,7 @@
 """Deterministic local upstream. No requests leave the Docker test network."""
 import json
 import os
+import re
 import threading
 import time
 import uuid
@@ -52,6 +53,11 @@ class Handler(BaseHTTPRequestHandler):
         for marker in ("LAB_SLOW", "LAB_SLOW_EXPIRY", "LAB_STREAM_FAIL", "LAB_MISSING_USAGE", "LAB_HTTP_ERROR"):
             if marker in label:
                 scenario = marker
+        slow_seconds = 75 if scenario == "LAB_SLOW_EXPIRY" else 22
+        if scenario == "LAB_SLOW_EXPIRY":
+            duration = re.search(r"LAB_SLOW_EXPIRY:(\d+)", label)
+            if duration:
+                slow_seconds = int(duration.group(1))
         request_id = self.headers.get("X-Request-ID", "")
         account_key = self.headers.get("Authorization", "") or self.headers.get("x-api-key", "")
         provider = "domestic" if "/domestic/" in self.path else "foreign"
@@ -85,7 +91,7 @@ class Handler(BaseHTTPRequestHandler):
             del response["usage"]
         if not body.get("stream"):
             if scenario in ("LAB_SLOW", "LAB_SLOW_EXPIRY"):
-                time.sleep(75 if scenario == "LAB_SLOW_EXPIRY" else 22)
+                time.sleep(slow_seconds)
             if self.path.endswith("/chat/completions"):
                 response = {"id": rid, "object": "chat.completion", "model": body["model"], "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120}}
             elif self.path.endswith("/messages"):
@@ -103,7 +109,13 @@ class Handler(BaseHTTPRequestHandler):
             self.event("response.content_part.added", {"type": "response.content_part.added", "output_index": 0, "content_index": 0, "item_id": output[0]["id"], "part": {"type": "output_text", "text": "", "annotations": []}})
             self.event("response.output_text.delta", {"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "item_id": output[0]["id"], "delta": text})
             if scenario in ("LAB_SLOW", "LAB_SLOW_EXPIRY"):
-                time.sleep(75 if scenario == "LAB_SLOW_EXPIRY" else 22)
+                # Keep the upstream stream alive across a full replica lease;
+                # this scenario exercises lease expiry, not stream-idle expiry.
+                end = time.monotonic() + slow_seconds
+                while time.monotonic() < end:
+                    time.sleep(min(5, max(0, end - time.monotonic())))
+                    self.wfile.write(b": lab keepalive\n\n")
+                    self.wfile.flush()
             if scenario == "LAB_STREAM_FAIL":
                 time.sleep(2)  # Let the gateway commit/flush its HTTP 200 first.
                 response.update(status="failed", error={"code": "server_error", "message": "controlled stream failure"})

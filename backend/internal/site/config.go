@@ -14,7 +14,7 @@ const (
 	Primary         = "primary"
 	Secondary       = "secondary"
 	SyncInterval    = 5 * time.Second
-	ReplicaTTL      = time.Minute
+	ReplicaTTL      = 20 * time.Minute
 	ProtocolVersion = 6
 	SyncPath        = "/internal/sites/sync"
 	DeliveryPath    = "/internal/sites/events"

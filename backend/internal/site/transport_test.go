@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -113,8 +114,8 @@ func newSitePoolFixture(t *testing.T, http2 bool, model http.HandlerFunc) *siteP
 	f := &sitePoolFixture{
 		local:    &deliveryTestStore{},
 		remote:   &deliveryTestStore{wait: make(chan struct{}), started: make(chan struct{}, 4)},
-		requests: make(chan sitePoolRequest, 32),
-		closed:   make(chan string, 32),
+		requests: make(chan sitePoolRequest, 1024),
+		closed:   make(chan string, 1024),
 	}
 	token := strings.Repeat("p", 32)
 	primary, err := New(Config{Mode: Primary, ID: "main", Peers: []Peer{{ID: "office", Token: token}}}, f.remote, 1<<20)
@@ -142,15 +143,15 @@ func newSitePoolFixture(t *testing.T, http2 bool, model http.HandlerFunc) *siteP
 	serverTransport, ok := server.Client().Transport.(*http.Transport)
 	require.True(t, ok)
 	trust := serverTransport.TLSClientConfig
-	syncTransport, ok := f.manager.syncClient.Transport.(*http.Transport)
-	require.True(t, ok)
 	deliveryTransport, ok := f.manager.deliveryClient.Transport.(*http.Transport)
 	require.True(t, ok)
-	for _, transport := range []*http.Transport{
-		syncTransport,
-		deliveryTransport,
-		f.manager.forwardTransport,
-	} {
+	transports := []*http.Transport{deliveryTransport, f.manager.forwardTransport}
+	for _, client := range f.manager.syncClients {
+		transport, ok := client.Transport.(*http.Transport)
+		require.True(t, ok)
+		transports = append(transports, transport)
+	}
+	for _, transport := range transports {
 		if transport.TLSClientConfig == nil {
 			transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
 		}
@@ -160,6 +161,84 @@ func newSitePoolFixture(t *testing.T, http2 bool, model http.HandlerFunc) *siteP
 		transport.MaxConnsPerHost = 1
 	}
 	return f
+}
+
+func TestSiteSyncAndBillingRemainIndependentWith200ModelStreams(t *testing.T) {
+	const count = 200
+	started := make(chan struct{}, count)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	f := newSitePoolFixture(t, true, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: first\n\n")
+		_ = http.NewResponseController(w).Flush()
+		started <- struct{}{}
+		select {
+		case <-release:
+			_, _ = io.WriteString(w, "data: {\"type\":\"response.completed\"}\n\n")
+		case <-r.Context().Done():
+		}
+	})
+	close(f.remote.wait)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	t.Cleanup(cancel)
+	require.NoError(t, f.manager.syncOnce(ctx))
+	router := gin.New()
+	router.Use(f.manager.Ingress())
+	router.POST("/v1/responses", func(c *gin.Context) { c.Status(http.StatusTeapot) })
+	secondary := httptest.NewServer(router)
+	t.Cleanup(secondary.Close)
+	t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+	results := make(chan string, count)
+	for i := 0; i < count; i++ {
+		go func() {
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, secondary.URL+"/v1/responses", strings.NewReader(`{"model":"gpt-test","stream":true}`))
+			if err != nil {
+				results <- err.Error()
+				return
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := secondary.Client().Do(req)
+			if err != nil {
+				results <- err.Error()
+				return
+			}
+			defer func() { _ = resp.Body.Close() }()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				results <- err.Error()
+			} else if resp.StatusCode != http.StatusOK || !strings.Contains(string(body), "response.completed") {
+				results <- "missing successful stream terminal event"
+			} else {
+				results <- ""
+			}
+		}()
+	}
+	for i := 0; i < count; i++ {
+		select {
+		case <-started:
+		case <-ctx.Done():
+			t.Fatal("model streams did not all start")
+		}
+	}
+	for i := 0; i < 10; i++ {
+		require.NoError(t, f.manager.syncOnce(ctx))
+		require.True(t, f.manager.Ready())
+		f.queueEvent(int64(i + 1))
+		active, err := f.manager.deliverOnce(ctx)
+		require.NoError(t, err)
+		require.True(t, active)
+	}
+	releaseOnce.Do(func() { close(release) })
+	for i := 0; i < count; i++ {
+		select {
+		case result := <-results:
+			require.Empty(t, result)
+		case <-ctx.Done():
+			t.Fatal("model streams did not finish")
+		}
+	}
 }
 
 func (f *sitePoolFixture) queueEvent(id int64) {
@@ -187,7 +266,7 @@ func TestSitePoolsReuseOnlyWithinTrafficClassAndCloseOnStop(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			connections := make(map[string]string)
-			for i := 0; i < 2; i++ {
+			for i := 0; i < 2*syncConnectionPools; i++ {
 				require.NoError(t, f.manager.syncOnce(ctx))
 				f.queueEvent(int64(i + 1))
 				active, err := f.manager.deliverOnce(ctx)
@@ -203,10 +282,13 @@ func TestSitePoolsReuseOnlyWithinTrafficClassAndCloseOnStop(t *testing.T) {
 					select {
 					case observed := <-f.requests:
 						wantProtocol := protocol.major
-						if observed.path == DeliveryPath {
+						if observed.path == DeliveryPath || observed.path == SyncPath {
 							wantProtocol = 1
 						}
 						require.Equal(t, wantProtocol, observed.protocol)
+						if observed.path == SyncPath {
+							observed.path += "/pool/" + strconv.Itoa(i%syncConnectionPools)
+						}
 						if previous, ok := connections[observed.path]; ok {
 							require.Equal(t, previous, observed.connection, "each traffic class should reuse its connection")
 						}
@@ -216,10 +298,12 @@ func TestSitePoolsReuseOnlyWithinTrafficClassAndCloseOnStop(t *testing.T) {
 					}
 				}
 			}
-			require.Len(t, connections, 3)
-			require.NotEqual(t, connections[SyncPath], connections[DeliveryPath], "policy and billing must use separate connections")
-			require.NotEqual(t, connections[SyncPath], connections["/v1/responses"], "policy and models must use separate connections")
-			require.NotEqual(t, connections[DeliveryPath], connections["/v1/responses"], "billing and models must use separate connections")
+			require.Len(t, connections, syncConnectionPools+2)
+			unique := make(map[string]bool)
+			for _, connection := range connections {
+				unique[connection] = true
+			}
+			require.Len(t, unique, len(connections), "all sync pools, billing and model forwarding must own separate connections")
 			f.manager.Stop()
 			require.False(t, f.manager.Ready())
 			closed := make(map[string]bool)
@@ -228,7 +312,7 @@ func TestSitePoolsReuseOnlyWithinTrafficClassAndCloseOnStop(t *testing.T) {
 				case address := <-f.closed:
 					closed[address] = true
 				case <-ctx.Done():
-					t.Fatal("Stop did not release all three idle connections")
+					t.Fatal("Stop did not release every idle connection")
 				}
 			}
 			for _, connection := range connections {

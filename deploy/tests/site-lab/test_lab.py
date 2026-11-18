@@ -13,7 +13,11 @@ from lab import Lab
 parser = argparse.ArgumentParser()
 parser.add_argument("directory")
 parser.add_argument("phase", choices=["protocols", "policy", "delivery", "network", "lifecycle"])
+parser.add_argument("--lease-seconds", type=int, default=20 * 60,
+                    help="Expected replica lease; use 60 when testing older binaries")
 args = parser.parse_args()
+if args.lease_seconds <= 0:
+    parser.error("--lease-seconds must be positive")
 lab = Lab(args.directory)
 evidence = []
 opening_accounting_basis = None
@@ -55,13 +59,15 @@ def accounting():
 
 def expire(label):
     start = time.monotonic()
-    lab.eventually(lambda: not lab.ready(), timeout=65, label="60 second expiry")
+    lab.eventually(lambda: not lab.ready(), timeout=args.lease_seconds + 5,
+                   label=f"{args.lease_seconds} second expiry")
     elapsed = time.monotonic() - start
     for model in ("deepseek-chat", "gpt-test"):
         r = lab.request(model=model)
         assert r["status"] == 503, r
     assert lab.http("secondary", "/health")["status"] == 200
-    record(label, stopped_after_fault_seconds=round(elapsed, 3), new_domestic_and_gpt_status=503, liveness=200)
+    record(label, expected_lease_seconds=args.lease_seconds,
+           stopped_after_fault_seconds=round(elapsed, 3), new_domestic_and_gpt_status=503, liveness=200)
 
 
 def protocols():
@@ -238,15 +244,17 @@ def network():
     lab.clear_netem()
     wait_sync()
     # Start a streaming domestic request, then lose ALL primary connectivity.
+    stream_seconds = args.lease_seconds + 15
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        slow = pool.submit(lab.request, text="LAB_SLOW_EXPIRY", stream=True, timeout=100)
+        slow = pool.submit(lab.request, text=f"LAB_SLOW_EXPIRY:{stream_seconds}",
+                           stream=True, timeout=stream_seconds + 30)
         time.sleep(1)
         lab.netem("loss", "100%")
         expire("complete_network_partition")
         assert not slow.done(), "the stream must still be in flight when the lease expires"
-        result = slow.result(timeout=30)
+        result = slow.result(timeout=stream_seconds + 30)
         success(result, stream=True)
-        assert result["seconds"] >= 75
+        assert result["seconds"] >= stream_seconds
         record("inflight_domestic_stream_survives_lease_expiry", seconds=result["seconds"], first_byte_seconds=result["first_byte_seconds"], completed=True)
     backlog = int(lab.sql("secondary", "SELECT count(*) FROM site_outbox;"))
     assert backlog > 0

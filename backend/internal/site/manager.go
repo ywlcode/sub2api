@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,7 +38,8 @@ type peerSnapshot struct {
 type Manager struct {
 	cfg              Config
 	store            Store
-	syncClient       *http.Client
+	syncClients      [syncConnectionPools]*http.Client
+	syncNextClient   int // owned by the single synchronization loop
 	deliveryClient   *http.Client
 	forwardTransport *http.Transport
 	proxy            *httputil.ReverseProxy
@@ -81,20 +81,10 @@ func New(cfg Config, store Store, maxBody int64) (*Manager, error) {
 	// sessions. Large uploads and model streams must not share a connection
 	// with policy renewal. Request contexts still own control-plane deadlines.
 	noRedirect := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	m.syncClient = &http.Client{Transport: transport, Timeout: 0, CheckRedirect: noRedirect}
-	deliveryTransport := transport.Clone()
-	// Uploads are serial. HTTP/1 cancellation closes the underlying connection,
-	// so a timed-out batch cannot keep retrying on a stalled HTTP/2 session.
-	// Successful batches still use keep-alive; other pools keep HTTP/2 support.
-	deliveryTransport.Protocols = new(http.Protocols)
-	deliveryTransport.Protocols.SetHTTP1(true)
-	// Clone initializes the source transport and can copy its HTTP/2 ALPN
-	// advertisement. Keep the TLS negotiation consistent with Protocols too.
-	if deliveryTransport.TLSClientConfig == nil {
-		deliveryTransport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	for i := range m.syncClients {
+		m.syncClients[i] = &http.Client{Transport: newSiteControlTransport(transport), CheckRedirect: noRedirect}
 	}
-	deliveryTransport.TLSClientConfig.NextProtos = []string{"http/1.1"}
-	m.deliveryClient = &http.Client{Transport: deliveryTransport, Timeout: 0, CheckRedirect: noRedirect}
+	m.deliveryClient = &http.Client{Transport: newSiteControlTransport(transport), CheckRedirect: noRedirect}
 	for _, p := range cfg.Peers {
 		m.peers[p.ID] = &peerSnapshot{}
 	}
@@ -142,10 +132,13 @@ func (m *Manager) Stop() {
 	}
 	m.wg.Wait()
 	m.current.Store(nil)
-	for _, client := range []*http.Client{m.syncClient, m.deliveryClient} {
+	for _, client := range m.syncClients {
 		if client != nil {
 			client.CloseIdleConnections()
 		}
+	}
+	if m.deliveryClient != nil {
+		m.deliveryClient.CloseIdleConnections()
 	}
 	if m.forwardTransport != nil {
 		m.forwardTransport.CloseIdleConnections()
@@ -161,9 +154,9 @@ func (m *Manager) syncOnce(parent context.Context) error {
 	m.deliveryGate.Lock()
 	defer m.deliveryGate.Unlock()
 	wallStarted, started := time.Now(), m.now()
-	// Initial paged bootstrap may take longer than a lease. It stays closed until
-	// an additional fresh delta succeeds; page fetches never extend validity.
-	timeout := 12 * time.Second
+	// Initial paged bootstrap has a larger request budget. Page fetches never
+	// extend the request-start lease, and serving stays closed until installation.
+	timeout := syncAttemptsPerRound * syncAttemptTimeout
 	if m.version == "" {
 		timeout = 2 * time.Minute
 	}
@@ -208,7 +201,7 @@ func (m *Manager) syncOnce(parent context.Context) error {
 	var stats SyncStats
 	for {
 		var page SyncResponse
-		transfer, e := m.postSite(ctx, m.syncClient, SyncPath, &input, &page)
+		transfer, e := m.postSync(ctx, &input, &page)
 		if e != nil {
 			return e
 		}
