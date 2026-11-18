@@ -86,7 +86,7 @@ func ResolveResponsesWebSocketGroup(c *gin.Context, frame []byte) (*service.APIK
 	// Replace only the group-specific revalidator. The connection's admission
 	// owner and cancellation lifecycle remain owned by the auth middleware.
 	revalidate := newAPIKeyAuthRevalidator(apiKeyAdmissionLookup(c, selection.keys, key), selection.original.Key,
-		ip.GetSecurityClientIP(c, selection.cfg.TrustForwardedIPForAPIKeyACL()), key)
+		ip.GetSecurityClientIP(c, selection.cfg.TrustForwardedIPForAPIKeyACL()), key, true)
 	ctx := service.WithUserConcurrencyPolicy(c.Request.Context(), key, revalidate)
 	ctx = service.WithAPIKeyQueueAuthRevalidator(ctx, revalidate)
 	c.Request = c.Request.WithContext(ctx)

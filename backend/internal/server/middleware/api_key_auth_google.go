@@ -162,9 +162,15 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			abortWithGoogleError(c, 403, "API Key 所属专属分组不再允许当前用户使用")
 			return
 		}
+		modelDiscovery := isModelDiscoveryRequest(c)
+		if modelDiscovery && (apiKey.Status == service.StatusAPIKeyExpired || apiKey.IsExpired()) {
+			abortWithGoogleError(c, 403, "API key 已过期")
+			return
+		}
 
-		// 简易模式：跳过余额和订阅检查
-		if cfg.RunMode == config.RunModeSimple {
+		// Model discovery never spends funds; retain the identity, group and IP
+		// checks above and the queue revalidation installed below.
+		if cfg.RunMode == config.RunModeSimple || modelDiscovery {
 			c.Set(string(ContextKeyAPIKey), apiKey)
 			c.Set(string(ContextKeyUser), AuthSubject{
 				UserID:      apiKey.User.ID,
@@ -172,7 +178,9 @@ func APIKeyAuthWithSubscriptionGoogle(apiKeyService *service.APIKeyService, subs
 			})
 			c.Set(string(ContextKeyUserRole), apiKey.User.Role)
 			setGroupContext(c, apiKey.Group)
-			_ = apiKeyService.TouchLastUsed(c.Request.Context(), apiKey.ID)
+			if !modelDiscovery {
+				_ = apiKeyService.TouchLastUsed(c.Request.Context(), apiKey.ID)
+			}
 			nextWithAPIKeyAdmissionOwner(c, apiKeyService, apiKeyString, ip.GetSecurityClientIP(c, cfg.TrustForwardedIPForAPIKeyACL()), apiKey, true)
 			return
 		}

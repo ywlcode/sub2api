@@ -47,7 +47,7 @@ func TestAPIKeyModelListGroupSelection(t *testing.T) {
 			"fallback after inactive group",
 			"all groups unauthorized",
 			"invalid credential",
-			"subscription quota remains enforced",
+			"subscription quota does not block discovery",
 		} {
 			t.Run(path+"/"+scenario, func(t *testing.T) {
 				now := time.Now()
@@ -88,9 +88,8 @@ func TestAPIKeyModelListGroupSelection(t *testing.T) {
 				case "invalid credential":
 					credential = "invalid-key"
 					wantStatus = http.StatusUnauthorized
-				case "subscription quota remains enforced":
+				case "subscription quota does not block discovery":
 					sub.DailyUsageUSD = limit + 1
-					wantStatus = http.StatusTooManyRequests
 				}
 
 				cfg := &config.Config{RunMode: config.RunModeStandard}
@@ -143,8 +142,6 @@ func TestAPIKeyModelListExceptionDoesNotBypassOtherRoutes(t *testing.T) {
 		{http.MethodGet, "/v1/responses", ""},
 		{http.MethodGet, "/responses", ""},
 		{http.MethodGet, "/backend-api/codex/responses", ""},
-		{http.MethodGet, "/v1/models/:model", ""},
-		{http.MethodGet, "/v1beta/models", ""},
 		{http.MethodPost, "/v1/models", `{"model":"gpt-test"}`},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {

@@ -28,7 +28,7 @@ func TestUserPlatformConcurrencyRevalidatorPublishesFreshLimits(t *testing.T) {
 	latest := queueAuthTestKey(service.StatusActive, 0)
 	latest.User.Concurrency = 10
 	latest.User.PlatformConcurrencyLimits = map[string]int{service.PlatformOpenAI: 2}
-	revalidate := newAPIKeyAuthRevalidator(func(context.Context, string) (*service.APIKey, error) { return latest, nil }, initial.Key, "", initial)
+	revalidate := newAPIKeyAuthRevalidator(func(context.Context, string) (*service.APIKey, error) { return latest, nil }, initial.Key, "", initial, true)
 	ctx := service.WithUserConcurrencyPolicy(context.Background(), initial, revalidate)
 	cache := &platformPolicyCache{}
 	svc := service.NewConcurrencyService(cache)

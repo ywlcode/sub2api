@@ -44,7 +44,7 @@ func nextWithAPIKeyAdmissionOwner(c *gin.Context, apiKeyService *service.APIKeyS
 // owner/revalidation lifecycle preserves revocation and key-slot cancellation
 // without introducing the primary-backed API Key middleware.
 func nextWithAPIKeyAdmissionLookup(c *gin.Context, lookup func(context.Context, string) (*service.APIKey, error), credential string, trustedClientIP string, key *service.APIKey, googleStyle bool) {
-	revalidate := newAPIKeyAuthRevalidator(lookup, credential, trustedClientIP, key)
+	revalidate := newAPIKeyAuthRevalidator(lookup, credential, trustedClientIP, key, !isModelDiscoveryRequest(c))
 	c.Request = c.Request.WithContext(service.WithUserConcurrencyPolicy(c.Request.Context(), key, revalidate))
 	var writer *apiKeyAdmissionWriter
 	// A WS connection outlives one capacity decision: install the revalidator
@@ -76,7 +76,7 @@ func nextWithAPIKeyAdmissionLookup(c *gin.Context, lookup func(context.Context, 
 
 // Share all identity, permission and expiry gates between cached HTTP queue
 // revalidation and authoritative WS turn revalidation.
-func newAPIKeyAuthRevalidator(lookup func(context.Context, string) (*service.APIKey, error), credential string, trustedClientIP string, initial *service.APIKey) service.APIKeyQueueAuthRevalidator {
+func newAPIKeyAuthRevalidator(lookup func(context.Context, string) (*service.APIKey, error), credential string, trustedClientIP string, initial *service.APIKey, enforceQuota bool) service.APIKeyQueueAuthRevalidator {
 	identity := captureAPIKeyQueueIdentity(initial)
 	return func(ctx context.Context) (int, error) {
 		if lookup == nil || credential == "" || initial == nil {
@@ -93,8 +93,8 @@ func newAPIKeyAuthRevalidator(lookup func(context.Context, string) (*service.API
 			return 0, service.NewAPIKeyQueueAuthRejected(infraerrors.Unauthorized("INVALID_API_KEY", "Invalid API key"))
 		}
 		// disabled / deleted / unknown status are unconditional rejections; an
-		// expired or exhausted key is rejected in the queue as well because the
-		// wait must not revive a dead authorization.
+		// expired key is rejected in the queue as well. A metadata read may use
+		// an exhausted key, but cannot revive revoked or expired authorization.
 		if !latest.IsActive() &&
 			latest.Status != service.StatusAPIKeyExpired &&
 			latest.Status != service.StatusAPIKeyQuotaExhausted {
@@ -103,7 +103,7 @@ func newAPIKeyAuthRevalidator(lookup func(context.Context, string) (*service.API
 		if latest.Status == service.StatusAPIKeyExpired || latest.IsExpired() {
 			return 0, service.NewAPIKeyQueueAuthRejected(service.ErrAPIKeyExpired)
 		}
-		if latest.Status == service.StatusAPIKeyQuotaExhausted || latest.IsQuotaExhausted() {
+		if enforceQuota && (latest.Status == service.StatusAPIKeyQuotaExhausted || latest.IsQuotaExhausted()) {
 			return 0, service.NewAPIKeyQueueAuthRejected(service.ErrAPIKeyQuotaExhausted)
 		}
 		if latest.User == nil || !latest.User.IsActive() {

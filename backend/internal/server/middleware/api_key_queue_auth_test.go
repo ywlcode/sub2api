@@ -49,7 +49,7 @@ func TestNewAPIKeyQueueAuthRevalidatorRejectsDisabledKey(t *testing.T) {
 		return current, nil
 	}}
 	svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, &config.Config{})
-	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current)
+	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current, true)
 
 	current = queueAuthTestKey(service.StatusDisabled, 1)
 	_, err := revalidate(context.Background())
@@ -66,7 +66,7 @@ func TestNewAPIKeyQueueAuthRevalidatorRejectsDeletedKey(t *testing.T) {
 		return nil, service.ErrAPIKeyNotFound
 	}}
 	svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, &config.Config{})
-	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current)
+	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current, true)
 
 	_, err := revalidate(context.Background())
 	require.Error(t, err)
@@ -79,7 +79,7 @@ func TestNewAPIKeyQueueAuthRevalidatorPreservesLookupCause(t *testing.T) {
 	cause := errors.New("synthetic database timeout")
 	revalidate := newAPIKeyAuthRevalidator(func(context.Context, string) (*service.APIKey, error) {
 		return nil, cause
-	}, key.Key, "", key)
+	}, key.Key, "", key, true)
 	_, err := revalidate(context.Background())
 	require.ErrorIs(t, err, cause)
 	require.Equal(t, http.StatusServiceUnavailable, infraerrors.Code(err))
@@ -93,7 +93,7 @@ func TestNewAPIKeyQueueAuthRevalidatorRejectsGroupChange(t *testing.T) {
 		return current, nil
 	}}
 	svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, &config.Config{})
-	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current)
+	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current, true)
 
 	moved := queueAuthTestKey(service.StatusActive, 1)
 	other := int64(77)
@@ -121,7 +121,7 @@ func TestNewAPIKeyQueueAuthRevalidatorRejectsCoreBindingChanges(t *testing.T) {
 				return current, nil
 			}}
 			svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, &config.Config{})
-			revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current)
+			revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current, true)
 
 			changed := queueAuthTestKey(service.StatusActive, 1)
 			tc.mutate(changed)
@@ -144,7 +144,7 @@ func TestNewAPIKeyQueueAuthRevalidatorAllowsUnrelatedPermissionChange(t *testing
 		return current, nil
 	}}
 	svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, &config.Config{})
-	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current)
+	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current, true)
 
 	// Same group ID; the Live permission was revoked while a text request waited.
 	revoked := queueAuthTestKey(service.StatusActive, 1)
@@ -164,7 +164,7 @@ func TestNewAPIKeyQueueAuthRevalidatorAllowsBenignGroupEdits(t *testing.T) {
 		return current, nil
 	}}
 	svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, &config.Config{})
-	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current)
+	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current, true)
 
 	benign := queueAuthTestKey(service.StatusActive, 1)
 	benign.Group.Name = "renamed-group"
@@ -188,7 +188,7 @@ func TestNewAPIKeyQueueAuthRevalidatorRejectsRemovedRequestedModel(t *testing.T)
 		return current, nil
 	}}
 	svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, &config.Config{})
-	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current)
+	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current, true)
 	ctx := service.WithAPIKeyQueueRequestPermissions(context.Background(), service.APIKeyQueueRequestPermissions{
 		Models: []string{"gpt-5.4", "gpt-5.4-mini"},
 	})
@@ -262,7 +262,7 @@ func TestNewAPIKeyQueueAuthRevalidatorRejectsRevokedCapability(t *testing.T) {
 				return current, nil
 			}}
 			svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, &config.Config{})
-			revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current)
+			revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, "", current, true)
 			ctx := service.WithAPIKeyQueueCapability(context.Background(), tc.capability)
 
 			revoked := queueAuthTestKey(service.StatusActive, 1)
@@ -297,7 +297,7 @@ func TestNewAPIKeyQueueAuthRevalidatorRejectsIPBlacklistChange(t *testing.T) {
 	}}
 	svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, nil, &config.Config{})
 	const trustedIP = "203.0.113.9"
-	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, trustedIP, current)
+	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, current.Key, trustedIP, current, true)
 
 	blocked := queueAuthTestKey(service.StatusActive, 1)
 	blocked.IPBlacklist = []string{trustedIP}
@@ -321,7 +321,7 @@ func TestNewAPIKeyQueueAuthRevalidatorReturnsFreshLimitAndCaches(t *testing.T) {
 	cfg.APIKeyAuth.L2TTLSeconds = 60
 	authCache := &stubAPIKeyAuthCache{entries: map[string]*service.APIKeyAuthCacheEntry{}}
 	svc := service.NewAPIKeyService(repo, nil, nil, nil, nil, authCache, cfg)
-	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, key.Key, "", key)
+	revalidate := newAPIKeyAuthRevalidator(svc.GetByKey, key.Key, "", key, true)
 
 	for i := 0; i < 3; i++ {
 		limit, err := revalidate(context.Background())
@@ -560,12 +560,12 @@ func TestAPIKeyQueueMiddlewareLimitZeroTracksOnly(t *testing.T) {
 }
 
 func TestAPIKeyQueueAuthRevalidatorFallbackWithoutServiceOrCredential(t *testing.T) {
-	revalidate := newAPIKeyAuthRevalidator(nil, "", "", nil)
+	revalidate := newAPIKeyAuthRevalidator(nil, "", "", nil, true)
 	_, err := revalidate(context.Background())
 	require.Error(t, err)
 	require.Equal(t, http.StatusServiceUnavailable, infraerrors.Code(err))
 
-	revalidate = newAPIKeyAuthRevalidator(nil, "cred", "", queueAuthTestKey(service.StatusActive, 1))
+	revalidate = newAPIKeyAuthRevalidator(nil, "cred", "", queueAuthTestKey(service.StatusActive, 1), true)
 	_, err = revalidate(context.Background())
 	require.Error(t, err)
 	require.Equal(t, http.StatusServiceUnavailable, infraerrors.Code(err))

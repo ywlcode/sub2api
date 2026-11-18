@@ -24,6 +24,24 @@ const modelListingClientPolicyKey = "api_key.model_listing_client_policy"
 
 type modelListingRefresh func(context.Context) ([]*service.APIKey, error)
 
+// Discovery is an authenticated read, not an inference admission. Match only
+// registered GET routes so a model name or query cannot bypass billing on a
+// generation endpoint (including a Responses WebSocket upgrade).
+func isModelDiscoveryRequest(c *gin.Context) bool {
+	if c == nil || c.Request.Method != http.MethodGet {
+		return false
+	}
+	switch c.FullPath() {
+	case "/v1/models", "/v1/models/:model", "/models", "/models/:model",
+		"/backend-api/codex/models", "/v1beta/models", "/v1beta/models/:model",
+		"/antigravity/models", "/antigravity/v1/models",
+		"/antigravity/v1beta/models", "/antigravity/v1beta/models/:model":
+		return true
+	default:
+		return false
+	}
+}
+
 // ModelListingClientPolicy supplies the same configured client policy used by
 // GroupCodexCLIOnly before authentication considers each directory candidate.
 func ModelListingClientPolicy(settings *service.SettingService, auth APIKeyAuthMiddleware) APIKeyAuthMiddleware {
@@ -141,11 +159,8 @@ func resolveAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subs
 	if strings.Contains(path, "/videos") {
 		kind = "video"
 	}
-	if c.Request.Method == http.MethodGet {
-		switch c.FullPath() {
-		case "/v1/models", "/models", "/backend-api/codex/models":
-			kind = service.APIKeyGroupKindModelList
-		}
+	if isModelDiscoveryRequest(c) {
+		kind = service.APIKeyGroupKindModelList
 	}
 	if ws && frame == nil {
 		kind = service.APIKeyGroupKindModelList
@@ -230,7 +245,7 @@ func resolveAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subs
 					return nil, err
 				}
 				if latest == nil || latest.ID != key.ID || latest.UserID != key.UserID || latest.User == nil ||
-					!latest.User.IsActive() || !latest.IsActive() || latest.IsExpired() || latest.IsQuotaExhausted() {
+					!latest.User.IsActive() || (!latest.IsActive() && latest.Status != service.StatusAPIKeyQuotaExhausted) || latest.IsExpired() {
 					return nil, infraerrors.Forbidden("MODEL_LISTING_UNAVAILABLE", "Model listing authorization changed")
 				}
 				return keys.ModelListingGroups(ctx, latest, accepts)
