@@ -110,6 +110,7 @@ var siteContractColumns = map[string][]siteColumn{
 		{Name: "long_context_pricing_enabled", Type: "bool", Nullable: false},
 		{Name: "model_pricing", Type: "jsonb", Nullable: true},
 		{Name: "force_openai_fast", Type: "bool", Nullable: false},
+		{Name: "force_openai_ultrafast", Type: "bool", Nullable: false, Optional: true, Default: "false"},
 		{Name: "max_reasoning_effort_over_limit", Type: "varchar", Nullable: false},
 		{Name: "free_openai_fast", Type: "bool", Nullable: false},
 		{Name: "free_openai_ultrafast", Type: "bool", Nullable: false, Optional: true, Default: "false"},

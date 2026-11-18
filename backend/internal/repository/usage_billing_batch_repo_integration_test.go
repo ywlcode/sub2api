@@ -465,3 +465,38 @@ func TestAccountRepositoryBatchUpdateLastUsed_DoesNotBlockForeignKeyShareLocks(t
 	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT last_used_at FROM accounts WHERE id = $1", acc.ID).Scan(&lastUsed))
 	require.True(t, lastUsed.Valid)
 }
+
+func TestUsageBillingBatchPreservesQuotationAndRollback(t *testing.T) {
+	ctx := context.Background()
+	fixture := newBatchBillingFixture(t, integrationEntClient, 100)
+	repo := NewUsageBillingRepository(integrationEntClient, integrationDB)
+	quote := 0.1234567890123456
+	cmds := fixture.commands("quotes-"+uuid.NewString(), []batchBillingStep{{key: 'A', account: 'P', balance: .1}, {key: 'B', account: 'Q', balance: .2}})
+	for _, cmd := range cmds {
+		cmd.QuotedActualCost = &quote
+	}
+	outcomes, err := repo.ApplyBatch(ctx, cmds)
+	require.NoError(t, err)
+	for i, cmd := range cmds {
+		require.True(t, outcomes[i].Result.Applied)
+		var saved float64
+		require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT quoted_actual_cost FROM usage_billing_quotes WHERE request_id=$1 AND api_key_id=$2", cmd.RequestID, cmd.APIKeyID).Scan(&saved))
+		require.Equal(t, quote, saved)
+	}
+	outcomes, err = repo.ApplyBatch(ctx, cmds)
+	require.NoError(t, err)
+	for _, outcome := range outcomes {
+		require.False(t, outcome.Result.Applied)
+	}
+	before := readBatchBillingState(t, ctx, fixture)
+	bad := fixture.commands("bad-quotes-"+uuid.NewString(), []batchBillingStep{{key: 'A', account: 'P', balance: 1}, {key: 'B', account: 'Q', balance: 2}})
+	bad[0].QuotedActualCost = &quote
+	invalid := math.Inf(1)
+	bad[1].QuotedActualCost = &invalid
+	_, err = repo.ApplyBatch(ctx, bad)
+	require.Error(t, err)
+	require.Equal(t, before, readBatchBillingState(t, ctx, fixture), "a failed quote rolls back the whole batch including debit and dedup")
+	var count int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, "SELECT count(*) FROM usage_billing_quotes WHERE request_id=$1", bad[0].RequestID).Scan(&count))
+	require.Zero(t, count)
+}

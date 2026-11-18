@@ -96,6 +96,7 @@ var authGroupColumns = []string{
 	group.FieldAllowMessagesDispatch,
 	group.FieldAllowLive,
 	group.FieldForceOpenaiFast,
+	group.FieldForceOpenaiUltrafast,
 	group.FieldFreeOpenaiFast,
 	group.FieldFreeOpenaiUltrafast,
 	group.FieldDefaultMappedModel,

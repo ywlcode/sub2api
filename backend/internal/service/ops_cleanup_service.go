@@ -518,7 +518,7 @@ func (s *OpsCleanupService) runCleanupOnce(ctx context.Context) (opsCleanupDelet
 			if err != nil || days == 0 {
 				return err
 			}
-			out.billingDedupDeleted, err = deleteOldRowsByCTID(ctx, s.db, "usage_billing_dedup_archive", "created_at", now.AddDate(0, 0, -days), "", opsCleanupBatchSize)
+			out.billingDedupDeleted, err = deleteOldRowsByCTID(ctx, s.db, "usage_billing_dedup_archive", "created_at", GroupUsageTodayStart(now.AddDate(0, 0, -days)), "", opsCleanupBatchSize)
 			return err
 		})
 	}

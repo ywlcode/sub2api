@@ -90,6 +90,16 @@ func (r *usageBillingRepository) ApplyBatch(ctx context.Context, cmds []*service
 		return nil, err
 	}
 
+	// Preserve the same quotation evidence as single-command and durable billing.
+	// Duplicate claims must neither charge nor append a second quote.
+	for i, cmd := range cmds {
+		if applied[i] {
+			if err := insertUsageBillingQuote(ctx, tx, cmd); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}

@@ -257,7 +257,7 @@
           :platform="editingAccount.platform"
           :plan="currentOpenCodeOrCNMode()"
         />
-        <div v-if="isCNApiKeyAccount && account.platform === 'deepseek'" class="flex items-center justify-between gap-4">
+        <div v-if="isCNApiKeyAccount && editingAccount.platform === 'deepseek'" class="flex items-center justify-between gap-4">
           <div>
             <label class="input-label mb-0">{{ t('admin.accounts.cnProviders.volcengineCompatibility') }}</label>
             <p class="input-hint">{{ t('admin.accounts.cnProviders.volcengineCompatibilityHint') }}</p>
@@ -2099,8 +2099,8 @@
         :type="editingAccount.type"
       />
 
-      <RequestGzipField v-if="account.type === 'apikey'" v-model="requestGzipEnabled" />
-      <SecondaryProcessingField v-if="account.type === 'apikey' && !account.parent_account_id" v-model="secondaryProcessingEnabled" />
+      <RequestGzipField v-if="editingAccount.type === 'apikey'" v-model="requestGzipEnabled" />
+      <SecondaryProcessingField v-if="editingAccount.type === 'apikey' && !editingAccount.parent_account_id" v-model="secondaryProcessingEnabled" />
 
       <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <div>
@@ -6659,7 +6659,7 @@ const handleSubmit = async () => {
         ...currentCredentials,
         base_url: newBaseUrl
       }
-      if (props.account.platform === 'deepseek') {
+      if (editingAccount.value.platform === 'deepseek') {
         newCredentials.deepseek_volcengine_compatibility = deepseekVolcengineCompatibility.value
       }
 
@@ -6671,7 +6671,7 @@ const handleSubmit = async () => {
           const defaults = defaultCNAdaptiveBaseUrls(adaptivePresetPlatform.value, currentOpenCodeOrCNMode())
           const protocolBaseUrls: Record<string, string> = {}
           for (const item of editAdaptiveProtocolOptions.value) {
-            protocolBaseUrls[item.value] = (editAdaptiveBaseUrls.value[item.value] || (props.account.platform === 'deepseek' && deepseekVolcengineCompatibility.value ? '' : defaults[item.value])).trim()
+            protocolBaseUrls[item.value] = (editAdaptiveBaseUrls.value[item.value] || (editingAccount.value.platform === 'deepseek' && deepseekVolcengineCompatibility.value ? '' : defaults[item.value])).trim()
           }
           newCredentials.api_base_urls = protocolBaseUrls
           newCredentials.base_url = protocolBaseUrls.chat_completions
@@ -7511,16 +7511,16 @@ const handleSubmit = async () => {
       updatePayload.extra = newExtra
     }
 
-    if (props.account.type === 'apikey' && !props.account.parent_account_id && secondaryProcessingEnabled.value !== (props.account.extra?.site_secondary_enabled === true)) {
+    if (editingAccount.value.type === 'apikey' && !editingAccount.value.parent_account_id && secondaryProcessingEnabled.value !== (editingAccount.value.extra?.site_secondary_enabled === true)) {
       updatePayload.extra = {
-        ...(updatePayload.extra || props.account.extra || {}),
+        ...(updatePayload.extra || editingAccount.value.extra || {}),
         site_secondary_enabled: secondaryProcessingEnabled.value
       }
     }
 
-    if (props.account.type === 'apikey' && requestGzipEnabled.value !== (props.account.extra?.request_gzip_enabled === true)) {
+    if (editingAccount.value.type === 'apikey' && requestGzipEnabled.value !== (editingAccount.value.extra?.request_gzip_enabled === true)) {
       updatePayload.extra = {
-        ...(updatePayload.extra || props.account.extra || {}),
+        ...(updatePayload.extra || editingAccount.value.extra || {}),
         request_gzip_enabled: requestGzipEnabled.value
       }
     }

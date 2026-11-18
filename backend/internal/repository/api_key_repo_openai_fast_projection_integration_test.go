@@ -17,7 +17,7 @@ func TestGetByKeyForAuthCarriesGroupForceOpenAIFast(t *testing.T) {
 	suffix := time.Now().UnixNano()
 	group := mustCreateGroup(t, integrationEntClient, &service.Group{
 		Name: fmt.Sprintf("fast-proj-group-%d", suffix), Platform: service.PlatformOpenAI,
-		RateMultiplier: 1, ForceOpenAIFast: true, FreeOpenAIFast: true, FreeOpenAIUltrafast: true,
+		RateMultiplier: 1, ForceOpenAIFast: true, ForceOpenAIUltrafast: true, FreeOpenAIFast: true, FreeOpenAIUltrafast: true,
 	})
 	user := mustCreateUser(t, integrationEntClient, &service.User{
 		Email: fmt.Sprintf("fast-proj-%d@example.com", suffix), Concurrency: 5,
@@ -49,6 +49,7 @@ func TestGetByKeyForAuthCarriesGroupForceOpenAIFast(t *testing.T) {
 	secondary, err := secondaryRepo.GetByKeyForSecondaryAuth(ctx, keyValue)
 	require.NoError(t, err)
 	require.NotNil(t, secondary.Group)
+	require.True(t, secondary.Group.ForceOpenAIUltrafast, "secondary auth must preserve forced UltraFast")
 	require.True(t, secondary.Group.FreeOpenAIUltrafast, "secondary auth must use the same billing projection")
 }
 
