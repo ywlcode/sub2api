@@ -113,9 +113,15 @@ func (d *PgDumper) Restore(ctx context.Context, data io.Reader) error {
 		"-U", d.cfg.User,
 		"-d", d.cfg.DBName,
 		"--single-transaction",
+		"--set", "ON_ERROR_STOP=1",
+		"--no-psqlrc",
 	}
 
-	cmd := exec.CommandContext(ctx, "psql", args...)
+	commandContext := d.commandContext
+	if commandContext == nil {
+		commandContext = exec.CommandContext
+	}
+	cmd := commandContext(ctx, "psql", args...)
 	if d.cfg.Password != "" {
 		cmd.Env = append(cmd.Environ(), "PGPASSWORD="+d.cfg.Password)
 	}

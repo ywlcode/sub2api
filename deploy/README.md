@@ -4,6 +4,8 @@ This directory contains files for deploying Sub2API on Linux servers and Apple-s
 
 网页注册额度、登录失败封禁及可信代理升级要求见 [网页认证 IP 防护](AUTH_IP_GUARD.md)。
 
+全量与定时精简备份的保留范围、计费恢复保障和测试方式见 [数据库备份](BACKUP.md)。
+
 自用分支同步上游、构建镜像和更新服务器的流程见 [dev-ywlcode 分支维护与 Docker 发布](DEV_YWLCODE.md)。每次 rebase 必须完成 [主从字段兼容审查](DEV_YWLCODE.md#主从站的字段兼容要求) 和 [升级前后性能对照](DEV_YWLCODE.md#升级前后的性能对照)，仓库约定见 [AGENTS.md](../AGENTS.md)。
 
 **本机测试网络必须避让公司 `node*`／`open*` 网段。** 新建测试网络不得自动分配地址，须显式配置经核对的 IPAM，避开 `172.16.0.0/12`、`172.38.8.0/22` 及其他实际内网网段；测试结束移除容器和专属网络，不能只停止容器。详见 [本机 Docker 测试网络约束](DEV_YWLCODE.md#本机-docker-测试网络约束)。

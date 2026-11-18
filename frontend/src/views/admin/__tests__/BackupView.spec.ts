@@ -108,6 +108,37 @@ describe('admin BackupView', () => {
     document.body.innerHTML = ''
   })
 
+  it('loads and saves compact scheduled backups while old settings default to full', async () => {
+    const wrapper = mountBackupView()
+    await flushPromises()
+    const checkbox = wrapper.get<HTMLInputElement>('[data-testid="backup-compact"]')
+    expect(checkbox.element.checked).toBe(false)
+    await checkbox.setValue(true)
+    await wrapper.get('[data-testid="backup-schedule"] button.btn-primary').trigger('click')
+    await flushPromises()
+    expect(updateSchedule).toHaveBeenCalledWith(expect.objectContaining({ compact: true }))
+
+    getSchedule.mockResolvedValue({ enabled: true, compact: true, cron_expr: '0 2 * * *', retain_days: 14, retain_count: 10 })
+    const reloaded = mountBackupView()
+    await flushPromises()
+    expect(reloaded.get<HTMLInputElement>('[data-testid="backup-compact"]').element.checked).toBe(true)
+    await reloaded.get('[data-testid="backup-compact"]').setValue(false)
+    await reloaded.get('[data-testid="backup-schedule"] button.btn-primary').trigger('click')
+    await flushPromises()
+    expect(updateSchedule).toHaveBeenLastCalledWith(expect.objectContaining({ compact: false }))
+  })
+
+  it('marks compact records and explains the missing history before restore', async () => {
+    listBackups.mockResolvedValue({ items: [{ ...baseRecord('compact'), compact: true }] })
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    const wrapper = mountBackupView()
+    await flushPromises()
+    expect(wrapper.get('tbody').text()).toContain('admin.backup.schedule.compact')
+    const restore = wrapper.findAll('tbody button').find(button => button.text().includes('admin.backup.actions.restore'))!
+    await restore.trigger('click')
+    expect(confirm).toHaveBeenCalledWith(expect.stringContaining('admin.backup.actions.compactRestoreHint'))
+  })
+
   it.each(['backup', 'restore'])('does not resume %s polling after navigation during initial loading', async (operation) => {
     vi.useFakeTimers()
     let finish!: (value: object) => void

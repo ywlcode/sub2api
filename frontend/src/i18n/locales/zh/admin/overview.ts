@@ -85,7 +85,7 @@ export default {
 
     backup: {
       title: '数据库备份',
-      description: '全量数据库备份到 S3 兼容存储，支持定时备份与恢复',
+      description: '数据库备份到 S3 兼容存储，支持全量备份、定时精简备份与恢复',
       s3: {
         title: 'S3 存储配置',
         description: '配置 S3 兼容存储（支持 Cloudflare R2）',
@@ -122,6 +122,8 @@ export default {
         title: '定时备份',
         description: '配置自动定时备份',
         enabled: '启用定时备份',
+        compact: '精简备份',
+        compactHint: '仅影响后续定时备份（含月度归档），手动备份仍为全量。省略错误/系统日志、运行指标、请求诊断、耗时明细、流量事件、已完成计费事件和历史报价；保留用户使用记录、余额、订阅、计费去重、未完成计费事件及主从同步凭据。不会删除当前数据库的数据。',
         cronExpr: 'Cron 表达式',
         cronHint: '例如 "0 2 * * *" 表示每天凌晨 2 点',
         retainDays: '备份过期天数',
@@ -210,6 +212,7 @@ export default {
         downloadFailed: '下载地址为空',
         restore: '恢复',
         restoreConfirm: '确定要从此备份恢复吗？这将覆盖当前数据库！',
+        compactRestoreHint: '这是精简备份，恢复后不包含已省略的诊断、指标、流量事件、已完成计费事件和历史报价。用户使用记录与计费恢复凭据仍保留。',
         restorePasswordPrompt: '请输入管理员密码以确认恢复操作',
         restoreSuccess: '数据库恢复成功',
         deleteConfirm: '确定要删除此备份吗？',

@@ -12,6 +12,7 @@ export interface BackupS3Config {
 
 export interface BackupScheduleConfig {
   enabled: boolean
+  compact?: boolean
   cron_expr: string
   retain_days: number
   retain_count: number
@@ -34,6 +35,7 @@ export interface BackupRecord {
   id: string
   status: 'pending' | 'running' | 'completed' | 'failed'
   backup_type: string
+  compact?: boolean
   file_name: string
   s3_key: string
   parts?: BackupPart[]

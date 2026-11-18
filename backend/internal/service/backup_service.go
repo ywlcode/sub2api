@@ -78,6 +78,12 @@ type DBDumper interface {
 	Restore(ctx context.Context, data io.Reader) error
 }
 
+// CompactDBDumper omits diagnostic history while retaining recoverable billing
+// and replication state. Unsupported dumpers must never silently change scope.
+type CompactDBDumper interface {
+	DumpCompact(ctx context.Context) (io.ReadCloser, error)
+}
+
 // BackupObjectStore abstracts object storage for backup files
 type BackupObjectStore interface {
 	Upload(ctx context.Context, key string, body io.Reader, contentType string) (sizeBytes int64, err error)
@@ -112,6 +118,7 @@ func (c *BackupS3Config) IsConfigured() bool {
 // BackupScheduleConfig 定时备份配置
 type BackupScheduleConfig struct {
 	Enabled        bool                        `json:"enabled"`
+	Compact        bool                        `json:"compact"`
 	CronExpr       string                      `json:"cron_expr"`    // cron 表达式，如 "0 2 * * *" 每天凌晨2点
 	RetainDays     int                         `json:"retain_days"`  // 备份文件过期天数，默认14，0=不自动清理
 	RetainCount    int                         `json:"retain_count"` // 最多保留份数，0=不限制
@@ -123,6 +130,7 @@ type BackupRecord struct {
 	ID               string                `json:"id"`
 	Status           string                `json:"status"`      // pending, running, completed, failed
 	BackupType       string                `json:"backup_type"` // postgres
+	Compact          bool                  `json:"compact,omitempty"`
 	FileName         string                `json:"file_name"`
 	S3Key            string                `json:"s3_key"`
 	Parts            []BackupPart          `json:"parts,omitempty"`
@@ -634,6 +642,10 @@ func (s *BackupService) createBackup(ctx context.Context, triggeredBy string, ex
 	now := time.Now()
 	backupID := uuid.New().String()[:8]
 	fileName := fmt.Sprintf("%s_%s_%s.sql.gz", s.dbCfg.DBName, now.Format("20060102_150405"), backupID)
+	compact := schedule != nil && schedule.Compact
+	if compact {
+		fileName = strings.TrimSuffix(fileName, ".sql.gz") + "_compact.sql.gz"
+	}
 	s3Key := s.buildS3Key(s3Cfg, fileName)
 
 	var expiresAt string
@@ -645,6 +657,7 @@ func (s *BackupService) createBackup(ctx context.Context, triggeredBy string, ex
 		ID:          backupID,
 		Status:      "running",
 		BackupType:  "postgres",
+		Compact:     compact,
 		FileName:    fileName,
 		S3Key:       s3Key,
 		TriggeredBy: triggeredBy,
@@ -652,7 +665,7 @@ func (s *BackupService) createBackup(ctx context.Context, triggeredBy string, ex
 		ExpiresAt:   expiresAt,
 	}
 
-	archivePath, sizeBytes, err := s.createCompressedBackupFile(ctx)
+	archivePath, sizeBytes, err := s.createCompressedBackupFileWithScope(ctx, compact)
 	if err != nil {
 		record.Status = "failed"
 		record.ErrorMsg = err.Error()
@@ -816,7 +829,21 @@ func (s *BackupService) executeBackup(record *BackupRecord, objectStore BackupOb
 }
 
 func (s *BackupService) createCompressedBackupFile(ctx context.Context) (string, int64, error) {
-	dumpReader, err := s.dumper.Dump(ctx)
+	return s.createCompressedBackupFileWithScope(ctx, false)
+}
+
+func (s *BackupService) createCompressedBackupFileWithScope(ctx context.Context, compact bool) (string, int64, error) {
+	var dumpReader io.ReadCloser
+	var err error
+	if compact {
+		dumper, ok := s.dumper.(CompactDBDumper)
+		if !ok {
+			return "", 0, errors.New("database dumper does not support compact backups")
+		}
+		dumpReader, err = dumper.DumpCompact(ctx)
+	} else {
+		dumpReader, err = s.dumper.Dump(ctx)
+	}
 	if err != nil {
 		return "", 0, fmt.Errorf("pg_dump: %w", err)
 	}

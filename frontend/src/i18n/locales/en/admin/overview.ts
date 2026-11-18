@@ -85,7 +85,7 @@ export default {
 
     backup: {
       title: 'Database Backup',
-      description: 'Full database backup to S3-compatible storage with scheduled backup and restore',
+      description: 'Database backups to S3-compatible storage, with full backups, compact scheduled backups and restore support',
       s3: {
         title: 'S3 Storage Configuration',
         description: 'Configure S3-compatible storage (supports Cloudflare R2)',
@@ -122,6 +122,8 @@ export default {
         title: 'Scheduled Backup',
         description: 'Configure automatic scheduled backups',
         enabled: 'Enable Scheduled Backup',
+        compact: 'Compact backup',
+        compactHint: 'Applies to future scheduled backups, including monthly archives. Manual backups remain full. Omits error/system logs, runtime metrics, request diagnostics, timing details, traffic events, completed billing events and historical quotes. Preserves usage records, balances, subscriptions, billing deduplication, unfinished billing and site replication state. Does not delete live database data.',
         cronExpr: 'Cron Expression',
         cronHint: 'e.g. "0 2 * * *" means every day at 2:00 AM',
         retainDays: 'Backup Expire Days',
@@ -210,6 +212,7 @@ export default {
         downloadFailed: 'Download URL is empty',
         restore: 'Restore',
         restoreConfirm: 'Are you sure you want to restore from this backup? This will overwrite the current database!',
+        compactRestoreHint: 'This compact backup does not contain the omitted diagnostics, metrics, traffic events, completed billing events or historical quotes. Usage records and billing recovery state are retained.',
         restorePasswordPrompt: 'Please enter your admin password to confirm the restore operation',
         restoreSuccess: 'Database restored successfully',
         deleteConfirm: 'Are you sure you want to delete this backup?',

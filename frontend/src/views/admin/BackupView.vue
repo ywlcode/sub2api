@@ -144,6 +144,13 @@
             <input v-model="scheduleForm.enabled" type="checkbox" />
             <span>{{ t('admin.backup.schedule.enabled') }}</span>
           </label>
+          <div class="md:col-span-2">
+            <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+              <input v-model="scheduleForm.compact" type="checkbox" data-testid="backup-compact" aria-describedby="backup-compact-hint" />
+              <span>{{ t('admin.backup.schedule.compact') }}</span>
+            </label>
+            <p id="backup-compact-hint" class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.backup.schedule.compactHint') }}</p>
+          </div>
           <div>
             <label class="mb-1 block text-xs font-medium text-gray-600 dark:text-gray-400">{{ t('admin.backup.schedule.cronExpr') }}</label>
             <input v-model="scheduleForm.cron_expr" class="input w-full" placeholder="0 2 * * *" />
@@ -230,6 +237,7 @@
                 </td>
                 <td class="py-3 pr-4 text-xs">
                   {{ record.file_name }}
+                  <span v-if="record.compact" class="ml-1 inline-block rounded bg-gray-100 px-1.5 py-0.5 text-gray-700 dark:bg-dark-700 dark:text-gray-300">{{ t('admin.backup.schedule.compact') }}</span>
                   <span v-if="record.monthly_archive" class="ml-1 inline-block rounded bg-primary-50 px-1.5 py-0.5 text-primary-700 dark:bg-primary-900/30 dark:text-primary-300">{{ t('admin.backup.archive.badge') }}</span>
                   <div v-if="record.monthly_archive" class="mt-1 text-gray-500 dark:text-gray-400">{{ record.monthly_archive.dates.join(' / ') }}</div>
                 </td>
@@ -482,6 +490,7 @@ const testingImageStorage = ref(false)
 // Schedule config
 const scheduleForm = ref<BackupScheduleConfig>({
   enabled: false,
+  compact: false,
   cron_expr: '0 2 * * *',
   retain_days: 14,
   retain_count: 10,
@@ -757,6 +766,7 @@ async function loadSchedule() {
     const cfg = await adminAPI.backup.getSchedule()
     scheduleForm.value = {
       enabled: cfg.enabled,
+      compact: cfg.compact ?? false,
       cron_expr: cfg.cron_expr || '0 2 * * *',
       retain_days: cfg.retain_days ?? 14,
       retain_count: cfg.retain_count ?? 10,
@@ -855,7 +865,9 @@ function closeDownloadParts() {
 }
 
 async function restoreBackup(id: string) {
-  if (!window.confirm(t('admin.backup.actions.restoreConfirm'))) return
+  const compact = backups.value.find(record => record.id === id)?.compact
+  const confirmation = t('admin.backup.actions.restoreConfirm') + (compact ? `\n\n${t('admin.backup.actions.compactRestoreHint')}` : '')
+  if (!window.confirm(confirmation)) return
   const password = window.prompt(t('admin.backup.actions.restorePasswordPrompt'))
   if (!password) return
   restoringId.value = id
