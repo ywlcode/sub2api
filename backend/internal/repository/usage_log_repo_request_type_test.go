@@ -6,6 +6,8 @@ import (
 	"database/sql/driver"
 	"fmt"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +111,7 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // queue_timing
 			sql.NullString{}, // platform
 			nil,              // customer_cost_details
+			nil,              // client_context
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(99), createdAt))
 
@@ -210,6 +213,7 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(), // queue_timing
 			sql.NullString{}, // platform
 			nil,              // customer_cost_details
+			nil,              // client_context
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(100), createdAt))
 
@@ -290,8 +294,8 @@ func TestPrepareUsageLogInsert_PersistsNativeCompactionV2WithoutChangingRequestT
 	prepared := prepareUsageLogInsert(log)
 
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
-	require.Equal(t, "boolean", usageLogInsertArgTypes[len(usageLogInsertArgTypes)-7])
-	require.Equal(t, true, prepared.args[len(prepared.args)-7])
+	require.Equal(t, "boolean", usageLogInsertArgTypes[slices.Index(strings.Split(usageLogSelectColumns, ", "), "native_compaction_v2")-1])
+	require.Equal(t, true, prepared.args[slices.Index(strings.Split(usageLogSelectColumns, ", "), "native_compaction_v2")-1])
 	require.Equal(t, int16(service.RequestTypeStream), prepared.args[30])
 	require.Equal(t, service.RequestTypeStream, log.RequestType)
 	require.True(t, log.Stream)
@@ -979,6 +983,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{}, // queue_timing
 			sql.NullString{}, // platform
 			sql.NullString{}, // customer_cost_details
+			sql.NullString{}, // client_context
 		}})
 		require.NoError(t, err)
 		require.Equal(t, 2, log.ImageCount)
@@ -1065,6 +1070,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{}, // queue_timing
 			sql.NullString{}, // platform
 			sql.NullString{}, // customer_cost_details
+			sql.NullString{}, // client_context
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)
@@ -1134,6 +1140,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{}, // queue_timing
 			sql.NullString{}, // platform
 			sql.NullString{}, // customer_cost_details
+			sql.NullString{}, // client_context
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)
@@ -1204,6 +1211,7 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{}, // queue_timing
 			sql.NullString{}, // platform
 			sql.NullString{}, // customer_cost_details
+			sql.NullString{}, // client_context
 		}})
 		require.NoError(t, err)
 		require.NotNil(t, log.ServiceTier)

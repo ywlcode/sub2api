@@ -398,6 +398,29 @@ export default {
 
   // Usage
   usage: {
+    attribution: {
+      identity_conflict: '标识冲突',
+      identity_invalid: '标识无效',
+
+      session: '会话',
+      source: '请求来源',
+      thread: '线程',
+      parentThread: '父线程',
+      agent: '代理',
+      parentAgent: '父代理',
+      turn: '轮次',
+      main: '主代理',
+      subagent: '子代理',
+      compaction: '压缩',
+      auxiliary: '辅助请求',
+      workflow: '工作流',
+      prewarm: '预热',
+      memory: '记忆整理',
+      unknown: '未识别',
+      unknownClient: '未识别客户端',
+      notProvided: '未提供',
+      hint: '依据客户端上报的信息；未识别不代表主代理。ID 仅用于当前用户的请求关联。',
+    },
     ...usageRequestTiming,
     title: '使用记录',
     description: '查看和分析您的 API 使用历史',

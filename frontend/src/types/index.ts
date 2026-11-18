@@ -2058,7 +2058,24 @@ export interface CustomerCostDetails {
   multiplier: number
 }
 
+/** Optional client-declared attribution; absent on legacy requests and older secondary events. */
+export interface UsageClientContext {
+  client?: 'codex' | 'claude_code' | 'opencode' | 'dsh'
+  session_id?: string
+  thread_id?: string
+  parent_thread_id?: string
+  agent_id?: string
+  parent_agent_id?: string
+  agent_type?: string
+  agent_role?: 'main' | 'subagent'
+  request_kind?: 'turn' | 'compaction' | 'auxiliary' | 'workflow' | 'prewarm' | 'memory'
+  turn_id?: string
+  identity_status?: 'conflict' | 'invalid'
+}
+
 export interface UsageLog {
+  session_id?: string | null
+  client_context?: UsageClientContext | null
   customer_cost_details?: CustomerCostDetails | null
   id: number
   user_id: number

@@ -393,6 +393,29 @@ export default {
 
   // Usage
   usage: {
+    attribution: {
+      identity_conflict: 'Conflicting IDs',
+      identity_invalid: 'Invalid ID',
+
+      session: 'Session',
+      source: 'Request source',
+      thread: 'Thread',
+      parentThread: 'Parent thread',
+      agent: 'Agent',
+      parentAgent: 'Parent agent',
+      turn: 'Turn',
+      main: 'Main agent',
+      subagent: 'Subagent',
+      compaction: 'Compaction',
+      auxiliary: 'Auxiliary',
+      workflow: 'Workflow',
+      prewarm: 'Prewarm',
+      memory: 'Memory',
+      unknown: 'Unidentified',
+      unknownClient: 'Unknown client',
+      notProvided: 'Not provided',
+      hint: 'Based on client-declared metadata; unidentified does not mean main agent. IDs correlate requests within the same user only.',
+    },
     ...usageRequestTiming,
     title: 'Usage Records',
     description: 'View and analyze your API usage history',

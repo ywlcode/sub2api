@@ -851,6 +851,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 		forceCacheBilling := fs.ForceCacheBilling
 		quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 		sessionID := service.ExtractClientSessionID(c)
+		clientContext := service.ExtractUsageClientContext(c, body)
 		// 长上下文阶梯由目录数据驱动，统一在计费路径内生效，入口无需声明。
 		channelUsageFields := clientRequestedUsageFields(c, channelMapping, reqModel, result.UpstreamModel)
 		h.submitUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
@@ -870,6 +871,7 @@ func (h *GatewayHandler) GeminiV1BetaModels(c *gin.Context) {
 				ForceCacheBilling:  forceCacheBilling,
 				APIKeyService:      h.apiKeyService,
 				SessionID:          sessionID,
+				ClientContext:      clientContext,
 				ChannelUsageFields: channelUsageFields,
 			}); err != nil {
 				logger.L().With(

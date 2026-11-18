@@ -329,6 +329,13 @@
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
+        <template #cell-session_id="{ row }">
+          <UsageClientContextCell :row="row" column="session" />
+        </template>
+        <template #cell-request_source="{ row }">
+          <UsageClientContextCell :row="row" column="source" />
+        </template>
+
         <template #cell-user_agent="{ row }">
           <span v-if="row.user_agent" class="text-sm text-gray-600 dark:text-gray-400 block max-w-[320px] truncate" :title="row.user_agent">{{ formatUserAgent(row.user_agent) }}</span>
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
@@ -629,6 +636,7 @@ function accountBilled(row: { total_cost?: number | null; account_stats_cost?: n
 }
 
 
+import UsageClientContextCell from './UsageClientContextCell.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'

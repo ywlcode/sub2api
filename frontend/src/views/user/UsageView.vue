@@ -223,6 +223,7 @@
 </template>
 
 <script setup lang="ts">
+import { usageSessionText, usageRequestSourceText } from '@/utils/usageClientContext'
 import { getTodayRangeDates } from '@/utils/dateRange'
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -684,6 +685,8 @@ const exportToCSV = async () => {
       'Original Cost',
       'First Token (ms)',
       'Duration (ms)',
+      'Session',
+      'Request Source',
     ]
     const rows = allLogs.map((log) => [
       log.created_at,
@@ -705,6 +708,8 @@ const exportToCSV = async () => {
       log.total_cost.toFixed(8),
       log.first_token_ms ?? '',
       log.duration_ms ?? '',
+      usageSessionText(log, t),
+      usageRequestSourceText(log, t),
     ].map(escapeCSVValue))
     const csvContent = [
       headers.map(escapeCSVValue).join(','),
@@ -733,6 +738,8 @@ const HIDDEN_COLUMNS_KEY = 'user-usage-hidden-columns'
 const allColumns = computed<Column[]>(() => [
   { key: 'api_key', label: t('usage.apiKeyFilter'), sortable: false },
   { key: 'model', label: t('usage.model'), sortable: true },
+  { key: 'session_id', label: t('usage.attribution.session'), sortable: false },
+  { key: 'request_source', label: t('usage.attribution.source'), sortable: false },
   { key: 'reasoning_effort', label: t('usage.reasoningEffort'), sortable: false },
   { key: 'endpoint', label: t('usage.endpoint'), sortable: false },
   { key: 'ip_address', label: 'IP', sortable: false },

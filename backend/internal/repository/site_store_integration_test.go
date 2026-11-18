@@ -103,6 +103,7 @@ func TestSiteReplicationBillingRetryPendingOverlayAndRevocation(t *testing.T) {
 	billing := &usageBillingRepository{db: localDB, secondary: true}
 	cmd := service.UsageBillingCommand{RequestID: uuid.NewString(), UserID: user.ID, APIKeyID: key.ID, AccountID: account.ID, Model: "deepseek-v4", BalanceCost: 1.23456789, APIKeyQuotaCost: 1.23456789, APIKeyRateLimitCost: 1.23456789}
 	usage := service.UsageLog{RequestID: cmd.RequestID, UserID: user.ID, APIKeyID: key.ID, AccountID: account.ID, Model: cmd.Model, ActualCost: cmd.BalanceCost, TotalCost: cmd.BalanceCost, CreatedAt: time.Now().UTC(), InputTokens: 100, OutputTokens: 20}
+	usage.ClientContext = &service.UsageClientContext{Client: "codex", SessionID: "site-session", ThreadID: "site-child", ParentThreadID: "site-main", AgentRole: "subagent"}
 	require.NoError(t, billing.StageUsageBilling(ctx, &cmd, &usage))
 	_, err = billing.ApplyStagedUsageBilling(ctx, service.UsageBillingEventKey{RequestID: cmd.RequestID, APIKeyID: key.ID})
 	require.NoError(t, err)
@@ -129,6 +130,9 @@ func TestSiteReplicationBillingRetryPendingOverlayAndRevocation(t *testing.T) {
 	require.Equal(t, "98.76543211", balance)
 	require.NoError(t, primaryDB.QueryRow(`SELECT count(*) FROM usage_logs WHERE user_id=$1`, user.ID).Scan(&count))
 	require.Equal(t, 1, count)
+	storedUsage, err := scanUsageLog(primaryDB.QueryRowContext(ctx, "SELECT "+usageLogSelectColumns+" FROM usage_logs WHERE user_id=$1", user.ID))
+	require.NoError(t, err)
+	require.Equal(t, usage.ClientContext, storedUsage.ClientContext, "secondary billing upload must retain client attribution across lost ACK and replay")
 	response.Version = "v2"
 	response.Rows = snapshot.Rows
 	response.ReceiptDigests = snapshot.ReceiptDigests

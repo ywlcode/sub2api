@@ -250,6 +250,7 @@ func (h *GatewayHandler) recordSystemOneUsage(c *gin.Context, apiKey *service.AP
 	upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
 	quotaPlatform := service.QuotaPlatform(c.Request.Context(), apiKey)
 	sessionID := service.ExtractClientSessionID(c)
+	clientContext := service.ExtractUsageClientContext(c, body)
 	requestPayloadHash := service.HashUsageRequestPayload(body)
 
 	h.submitMandatoryUsageRecordTask(c.Request.Context(), func(ctx context.Context) {
@@ -265,6 +266,7 @@ func (h *GatewayHandler) recordSystemOneUsage(c *gin.Context, apiKey *service.AP
 			UserAgent:          userAgent,
 			IPAddress:          clientIP,
 			SessionID:          sessionID,
+			ClientContext:      clientContext,
 			RequestPayloadHash: requestPayloadHash,
 			APIKeyService:      h.apiKeyService,
 			QuotaPlatform:      quotaPlatform,
