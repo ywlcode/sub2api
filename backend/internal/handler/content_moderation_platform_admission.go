@@ -21,7 +21,7 @@ type moderationPlatformCheck struct {
 // ContentModerationPlatformAdmission is installed after group selection and composite
 // routing. It also covers routes that do not invoke the content audit engine.
 func (h *OpenAIGatewayHandler) ContentModerationPlatformAdmission(c *gin.Context) {
-	if h == nil {
+	if h == nil || middleware2.ResponsesWebSocketGroupPending(c) {
 		c.Next()
 		return
 	}

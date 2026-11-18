@@ -15,7 +15,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func nextWithAPIKeyAdmissionOwner(c *gin.Context, apiKeyService *service.APIKeyService, credential string, trustedClientIP string, key *service.APIKey, googleStyle bool) {
+func apiKeyAdmissionLookup(c *gin.Context, apiKeyService *service.APIKeyService, key *service.APIKey) func(context.Context, string) (*service.APIKey, error) {
 	var lookup func(context.Context, string) (*service.APIKey, error)
 	if apiKeyService != nil {
 		lookup = apiKeyService.GetByKey
@@ -33,7 +33,11 @@ func nextWithAPIKeyAdmissionOwner(c *gin.Context, apiKeyService *service.APIKeyS
 			return apiKeyService.PinAPIKeyGroup(ctx, latest, groupID)
 		}
 	}
-	nextWithAPIKeyAdmissionLookup(c, lookup, credential, trustedClientIP, key, googleStyle)
+	return lookup
+}
+
+func nextWithAPIKeyAdmissionOwner(c *gin.Context, apiKeyService *service.APIKeyService, credential string, trustedClientIP string, key *service.APIKey, googleStyle bool) {
+	nextWithAPIKeyAdmissionLookup(c, apiKeyAdmissionLookup(c, apiKeyService, key), credential, trustedClientIP, key, googleStyle)
 }
 
 // A regional lookup uses the authenticated local stream directly. Sharing the

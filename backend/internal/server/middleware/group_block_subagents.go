@@ -40,18 +40,24 @@ type groupSubagentFrameCheck func([]byte) bool
 func GroupBlockSubagents() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		key, ok := GetAPIKeyFromContext(c)
-		if !ok || key == nil || key.Group == nil || !key.Group.BlockSubagents || c.Request == nil {
+		if !ok || key == nil || key.Group == nil || (!key.Group.BlockSubagents && !ResponsesWebSocketGroupPending(c)) || c.Request == nil {
 			c.Next()
 			return
 		}
+		initialKey := *key
+		initialGroup := *key.Group
+		initialKey.Group = &initialGroup
 		original := c.Copy()
 		original.Request = c.Request.Clone(c.Request.Context())
 		websocket := isResponsesWebSocketRoute(c)
 		check := groupSubagentFrameCheck(func(body []byte) bool {
-			if !service.IsCodexSubagentRequest(original, body) {
+			current := responsesWSFrameKey(c, &initialKey)
+			if current.Group == nil || !current.Group.BlockSubagents || !service.IsCodexSubagentRequest(original, body) {
 				return false
 			}
-			markGroupSubagentRejected(c, original, body, websocket)
+			identity := original.Copy()
+			identity.Set(string(ContextKeyAPIKey), current)
+			markGroupSubagentRejected(c, identity, body, websocket)
 			return true
 		})
 		var body []byte
@@ -63,6 +69,10 @@ func GroupBlockSubagents() gin.HandlerFunc {
 			if !readOK {
 				return
 			}
+		}
+		if ResponsesWebSocketGroupPending(c) {
+			c.Next()
+			return
 		}
 		if check(body) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": gin.H{

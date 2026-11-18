@@ -19,14 +19,16 @@ type groupCodexFrameCheck func(body []byte, headersOnly bool) service.CodexClien
 func GroupCodexCLIOnly(settings *service.SettingService) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		key, ok := GetAPIKeyFromContext(c)
-		if !ok || key == nil || key.Group == nil || !key.Group.CodexCLIOnly || c.Request == nil {
+		if !ok || key == nil || key.Group == nil || (!key.Group.CodexCLIOnly && !ResponsesWebSocketGroupPending(c)) || c.Request == nil {
 			c.Next()
 			return
 		}
 		// Preserve the authenticated employee group across composite routing.
-		group := *key.Group
 		// WS forwarding can add upstream headers between turns. Always identify
 		// the employee using the headers received at ingress.
+		initialKey := *key
+		initialGroup := *key.Group
+		initialKey.Group = &initialGroup
 		clientContext := c.Copy()
 		clientContext.Request = c.Request.Clone(c.Request.Context())
 		check := groupCodexFrameCheck(func(body []byte, headersOnly bool) service.CodexClientRestrictionDetectionResult {
@@ -39,7 +41,8 @@ func GroupCodexCLIOnly(settings *service.SettingService) gin.HandlerFunc {
 				// WS fingerprints are checked on the original response.create frame.
 				policy.EngineFingerprintSignals = nil
 			}
-			return service.DetectCodexGroupClient(clientContext, &group, policy, body)
+			current := responsesWSFrameKey(c, &initialKey)
+			return service.DetectCodexGroupClient(clientContext, current.Group, policy, body)
 		})
 
 		var body []byte
@@ -52,6 +55,10 @@ func GroupCodexCLIOnly(settings *service.SettingService) gin.HandlerFunc {
 			if !readOK {
 				return
 			}
+		}
+		if ResponsesWebSocketGroupPending(c) {
+			c.Next()
+			return
 		}
 		result := check(body, headersOnly)
 		if !result.Matched {

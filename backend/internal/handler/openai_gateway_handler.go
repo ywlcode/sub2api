@@ -3157,17 +3157,33 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "invalid JSON payload")
 		return
 	}
+	reqModel := strings.TrimSpace(gjson.GetBytes(firstMessage, "model").String())
+	if reqModel == "" {
+		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "model is required in first response.create payload")
+		return
+	}
+	// Multi-group handshakes cannot select accounts until the first frame
+	// provides its model. Bind all billing and permission state before use.
+	if middleware2.ResponsesWebSocketGroupPending(c) {
+		selected, selectErr := middleware2.ResolveResponsesWebSocketGroup(c, firstMessage)
+		if selectErr != nil {
+			status := coderws.StatusPolicyViolation
+			if middleware2.ResponsesWebSocketGroupErrorRetryable(selectErr) {
+				status = coderws.StatusTryAgainLater
+			}
+			closeOpenAIClientWS(wsConn, status, "No selected group is available for this request")
+			return
+		}
+		apiKey = selected
+		ctx = c.Request.Context()
+		reqLog = reqLog.With(zap.Any("group_id", apiKey.GroupID))
+	}
 	if middleware2.CheckGroupSubagentFrame(c, firstMessage) {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, middleware2.GroupSubagentsBlockedMessage)
 		return
 	}
 	if result := middleware2.CheckGroupCodexClientFrame(c, firstMessage); result.Enabled && !result.Matched {
 		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, middleware2.GroupCodexClientMessage(result))
-		return
-	}
-	reqModel := strings.TrimSpace(gjson.GetBytes(firstMessage, "model").String())
-	if reqModel == "" {
-		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "model is required in first response.create payload")
 		return
 	}
 	service.SetOpenAIWSRecoveryPrincipal(c, subject.UserID, apiKey.ID)

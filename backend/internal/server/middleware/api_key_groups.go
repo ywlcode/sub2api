@@ -66,14 +66,31 @@ func RefreshModelListingGroups(c *gin.Context) ([]*service.APIKey, error) {
 }
 
 func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subscriptions *service.SubscriptionService, cfg *config.Config, key *service.APIKey, google bool) (*service.APIKey, error) {
+	selected, err := resolveAPIKeyRequestGroup(c, keys, subscriptions, cfg, key, google, nil)
+	if err != nil {
+		status, reason, message := infraerrors.Code(err), infraerrors.Reason(err), infraerrors.Message(err)
+		if status >= 500 {
+			message = "No selected group is currently available for this request"
+		}
+		if google {
+			abortWithGoogleError(c, status, message)
+		} else {
+			AbortWithError(c, status, reason, message)
+		}
+		return nil, err
+	}
+	if selected != nil && isMultiGroupResponsesWSUpgrade(c, key) {
+		c.Set(responsesWSGroupSelectionKey, &responsesWSGroupSelection{keys: keys, subscriptions: subscriptions, cfg: cfg, original: key})
+	}
+	return selected, nil
+}
+
+// frame is supplied only after an authenticated Responses WebSocket has read
+// its first message. The ordinary HTTP and WS selection share every group gate.
+func resolveAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subscriptions *service.SubscriptionService, cfg *config.Config, key *service.APIKey, google bool, frame []byte) (*service.APIKey, error) {
 	var err error
 	key, err = applySecurityPenalty(c, keys, key)
 	if err != nil {
-		if google {
-			abortWithGoogleError(c, infraerrors.Code(err), infraerrors.Message(err))
-		} else {
-			AbortWithError(c, infraerrors.Code(err), infraerrors.Reason(err), infraerrors.Message(err))
-		}
 		return nil, err
 	}
 	if key == nil || c.IsAborted() {
@@ -103,6 +120,16 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 	if len(models) == 0 && c.Query("model") != "" {
 		models = []string{c.Query("model")}
 	}
+	ws := isMultiGroupResponsesWSUpgrade(c, key)
+	if ws {
+		// Query parameters are not authoritative for Responses WS. The model
+		// belongs to the first response.create frame, including duplicate keys.
+		models = nil
+		if frame != nil {
+			body = frame
+			models = requestmodel.FromBodyCandidates(c.FullPath(), "application/json", frame)
+		}
+	}
 	if service.IsAPIKeyModelPolicyPath(c.Request.URL.Path) {
 		models = service.APIKeyModelCandidates(key, models)
 	}
@@ -120,7 +147,10 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 			kind = service.APIKeyGroupKindModelList
 		}
 	}
-	checkBilling := cfg.RunMode != config.RunModeSimple && c.Request.Method != http.MethodGet && !strings.HasSuffix(path, "/count_tokens")
+	if ws && frame == nil {
+		kind = service.APIKeyGroupKindModelList
+	}
+	checkBilling := cfg.RunMode != config.RunModeSimple && (c.Request.Method != http.MethodGet || ws) && !strings.HasSuffix(path, "/count_tokens")
 	penaltyConfig, penaltyErr := keys.SecurityPenaltyConfig(c.Request.Context())
 	if penaltyErr != nil {
 		return nil, infraerrors.ServiceUnavailable("security_penalty_unavailable", "请求权限检查暂时不可用")
@@ -170,7 +200,7 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 					}
 				}
 			}
-			if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
+			if frame == nil && (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead) {
 				policy.EngineFingerprintSignals = nil
 			}
 			if !service.DetectCodexGroupClient(c, group, policy, body).Matched {
@@ -213,16 +243,6 @@ func selectAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subsc
 	if err != nil {
 		if balanceDenied && infraerrors.Reason(err) == "NO_ELIGIBLE_API_KEY_GROUP" {
 			err = infraerrors.Forbidden("INSUFFICIENT_BALANCE", service.InsufficientUserBalanceMessage)
-		}
-		status := infraerrors.Code(err)
-		message, reason := infraerrors.Message(err), infraerrors.Reason(err)
-		if status >= 500 {
-			message = "No selected group is currently available for this request"
-		}
-		if google {
-			abortWithGoogleError(c, status, message)
-		} else {
-			AbortWithError(c, status, reason, message)
 		}
 		return nil, err
 	}
