@@ -725,8 +725,10 @@ func (s *GeminiMessagesCompatService) handleGeminiOpenAIStreamingResponse(
 		// Use the existing bounded line pump for idle streams and cancellation.
 		scanner := bufio.NewScanner(resp.Body)
 		maxLineSize := defaultMaxLineSize
-		if s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
-			maxLineSize = s.cfg.Gateway.MaxLineSize
+		if s.cfg != nil {
+			if size := s.cfg.RequestGateway().MaxLineSize; size > 0 {
+				maxLineSize = size
+			}
 		}
 		scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
 		pump := newAnthropicNativeLinePump(scanner, anthropicNativeStreamInterval(s.cfg))

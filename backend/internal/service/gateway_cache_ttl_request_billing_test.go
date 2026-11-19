@@ -41,12 +41,12 @@ func TestRequestedAnthropicCacheTTL(t *testing.T) {
 }
 
 func TestAccount_IsCacheTTLBillingFromRequestEnabled(t *testing.T) {
-	enabled := map[string]any{cacheTTLBillingFromRequestExtraKey: true}
+	enabled := map[string]any{CacheTTLBillingFromRequestExtraKey: true}
 	require.True(t, (&Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Extra: enabled}).IsCacheTTLBillingFromRequestEnabled())
 	require.False(t, (&Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth, Extra: enabled}).IsCacheTTLBillingFromRequestEnabled())
 	require.False(t, (&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Extra: enabled}).IsCacheTTLBillingFromRequestEnabled())
 	require.False(t, (&Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey}).IsCacheTTLBillingFromRequestEnabled())
-	require.False(t, (&Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Extra: map[string]any{cacheTTLBillingFromRequestExtraKey: "true"}}).IsCacheTTLBillingFromRequestEnabled())
+	require.False(t, (&Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Extra: map[string]any{CacheTTLBillingFromRequestExtraKey: "true"}}).IsCacheTTLBillingFromRequestEnabled())
 	require.False(t, (*Account)(nil).IsCacheTTLBillingFromRequestEnabled())
 }
 
@@ -90,7 +90,7 @@ func TestForward_PassthroughRecordsRequestedCacheTTL(t *testing.T) {
 			}
 			account := newAnthropicAPIKeyAccountForTest()
 			if tc.enabled {
-				account.Extra[cacheTTLBillingFromRequestExtraKey] = true
+				account.Extra[CacheTTLBillingFromRequestExtraKey] = true
 			}
 
 			body := []byte(tc.body)
@@ -129,7 +129,7 @@ func TestRecordUsage_CacheTTLBillingFromRequest(t *testing.T) {
 			apiKey := &APIKey{ID: 10, GroupID: &groupID, Group: &Group{ID: groupID, Platform: PlatformAnthropic, Status: StatusActive, Hydrated: true, RateMultiplier: 1}}
 			account := &Account{ID: 30, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Extra: map[string]any{}}
 			if tc.enabled {
-				account.Extra[cacheTTLBillingFromRequestExtraKey] = true
+				account.Extra[CacheTTLBillingFromRequestExtraKey] = true
 			}
 
 			require.NoError(t, svc.RecordUsage(context.Background(), &RecordUsageInput{
@@ -215,7 +215,7 @@ func TestRecordUsage_CacheTTLBillingFromRequest_AnomalousUpstreamUsage(t *testin
 					InputPrice: &inputPrice, OutputPrice: &outputPrice, CacheWritePrice: &write5m, CacheWrite1hPrice: &write1h,
 				}},
 			}}
-			account := &Account{ID: 30, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Extra: map[string]any{cacheTTLBillingFromRequestExtraKey: true}}
+			account := &Account{ID: 30, Platform: PlatformAnthropic, Type: AccountTypeAPIKey, Extra: map[string]any{CacheTTLBillingFromRequestExtraKey: true}}
 
 			require.NoError(t, svc.RecordUsage(context.Background(), &RecordUsageInput{
 				Result: &ForwardResult{

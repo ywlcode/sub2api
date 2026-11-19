@@ -24,7 +24,7 @@ func TestIssue907WSExhaustionPreservesModelError(t *testing.T) {
 		defer func() { _ = conn.CloseNow() }()
 		c, _ := gin.CreateTestContext(httptest.NewRecorder())
 		c.Request = r
-		closeOpenAIWSFailoverExhausted(c, conn, &service.UpstreamFailoverError{
+		(&OpenAIGatewayHandler{}).closeOpenAIWSFailoverExhausted(c, conn, &service.UpstreamFailoverError{
 			StatusCode: http.StatusBadRequest, Reason: "openai_ws_model_unavailable",
 			ResponseBody: []byte(`{"error":{"code":"model_not_found","message":"private fixture upstream detail"}}`),
 		})

@@ -440,7 +440,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	lifecycle := server.ProvideLifecycle(configConfig, db, redisClient, schedulerSnapshotService)
 	channelMonitorV3Prober := service.ProvideChannelMonitorV3Prober(channelMonitorV3Repository, pelicanGroupTestService, settingService, configConfig)
 	channelMonitorV2Aggregator := service.ProvideChannelMonitorV2Aggregator(channelMonitorV2Repository, db, settingService, configConfig)
-	opsCleanupService := service.ProvideOpsCleanupService(opsRepository, db, configConfig, channelMonitorService, settingRepository, opsService, dashboardAggregationService, auditLogService, contentModerationService, accountTokenGuardRepository, scheduledTestService, pelicanGroupTestService, channelMonitorV3Prober, channelMonitorV2Aggregator)
+	opsCleanupService := service.ProvideOpsCleanupService(opsRepository, db, configConfig, channelMonitorService, settingRepository, opsService, dashboardAggregationService, auditLogService, contentModerationService, scheduledTestService, pelicanGroupTestService, channelMonitorV3Prober, channelMonitorV2Aggregator)
 	engine := server.ProvideRouter(configConfig, handlers, jwtAuthMiddleware, optionalJWTAuthMiddleware, adminAuthMiddleware, apiKeyAuthMiddleware, auditLogMiddleware, stepUpAuthMiddleware, apiKeyService, subscriptionService, opsService, settingService, compositeRouteResolver, redisClient, lifecycle, db, billingCacheService, channelService, pricingService, errorPassthroughService, opsCleanupService)
 	httpServer := server.ProvideHTTPServer(configConfig, engine, lifecycle)
 	autoCreditEmailOutboxRepository, err := repository.ProvideAutoCreditEmailOutboxRepository(configConfig)

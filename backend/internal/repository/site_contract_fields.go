@@ -159,6 +159,7 @@ var siteContractColumns = map[string][]siteColumn{
 		{Name: "image_input_price", Type: "numeric", Nullable: true},
 		{Name: "time_pricing", Type: "jsonb", Nullable: true},
 		{Name: "fast_multiplier", Type: "numeric", Nullable: true},
+		{Name: "ultrafast_multiplier", Type: "numeric", Nullable: true, Optional: true, Default: "null"},
 		{Name: "flex_multiplier", Type: "numeric", Nullable: true},
 		{Name: "cache_write_1h_price", Type: "numeric", Nullable: true},
 		{Name: "cache_write_12h_price", Type: "numeric", Nullable: true, Optional: true, Default: "null"},

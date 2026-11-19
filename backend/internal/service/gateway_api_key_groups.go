@@ -1,9 +1,6 @@
 package service
 
-import (
-	"context"
-	"math"
-)
+import "context"
 
 // ProbeAPIKeyGroup checks scheduler eligibility without reserving slots,
 // registering sessions, setting account errors, or binding sticky accounts.
@@ -63,22 +60,15 @@ func (s *GatewayService) ProbeAPIKeyGroup(ctx context.Context, group *Group, mod
 	if err != nil {
 		return APIKeyGroupAvailability{}, err
 	}
-	minLoad := math.Inf(1)
-	for _, account := range eligible {
-		if account.MaxConcurrency <= 0 {
-			return APIKeyGroupAvailability{Available: true}, nil
-		}
-		load, ok := loads[account.ID]
-		if !ok || load == nil {
-			continue
-		}
-		ratio := float64(load.CurrentConcurrency) / float64(account.MaxConcurrency)
-		if ratio < minLoad {
-			minLoad = ratio
+	return groupAvailabilityFromLoads(eligible, loads), nil
+}
+
+// A full account can still accept queued work in the preferred group.
+func groupAvailabilityFromLoads(accounts []AccountWithConcurrency, loads map[int64]*AccountLoadInfo) APIKeyGroupAvailability {
+	for _, a := range accounts {
+		if a.MaxConcurrency <= 0 || loads[a.ID] != nil {
+			return APIKeyGroupAvailability{Available: true}
 		}
 	}
-	if math.IsInf(minLoad, 1) {
-		return APIKeyGroupAvailability{}, nil
-	}
-	return APIKeyGroupAvailability{Available: true, Busy: minLoad >= 1, Load: minLoad}, nil
+	return APIKeyGroupAvailability{}
 }

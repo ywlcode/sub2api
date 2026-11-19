@@ -85,10 +85,10 @@ func TestAPIKeyMultiGroupSelectionUsesActualGroupAndDoesNotMutateAuthSnapshot(t 
 		3: {ID: 3, Status: StatusActive, RateMultiplier: 0.1},
 	}
 	key := &APIKey{ID: 11, UserID: 7, GroupID: &primary, GroupIDs: []int64{1, 2, 3}, Group: groups[1], User: &User{ID: 7, Balance: 10, UserGroupDeniedModels: []string{"original"}}}
-	svc := &APIKeyService{groupRepo: multiGroupRepoStub{groups: groups}, userGroupRateRepo: multiGroupRateStub{rates: map[int64]float64{2: 0.2}}, groupRouter: multiGroupRouterStub{1: {Available: true, Load: 0.9}, 2: {Available: true}, 3: {Available: true}}}
+	svc := &APIKeyService{groupRepo: multiGroupRepoStub{groups: groups}, userGroupRateRepo: multiGroupRateStub{rates: map[int64]float64{2: 0.2}}, groupRouter: multiGroupRouterStub{1: {Available: true}, 2: {Available: true}, 3: {Available: true}}}
 	got, err := svc.SelectRequestGroup(context.Background(), key, []string{"gpt-5"}, "token", nil, nil, true)
 	require.NoError(t, err)
-	// Priority wins over a lower group multiplier, user override, or lower load.
+	// Priority wins over a lower group multiplier, user override,.
 	require.Equal(t, int64(1), *got.GroupID)
 	require.Same(t, groups[1], got.Group)
 	require.Equal(t, key.GroupIDs, got.GroupIDs)
@@ -110,13 +110,18 @@ func TestAPIKeyMultiGroupSelectionPreservesPriorityWhenBusyAndRejectsRevokedGrou
 	primary := int64(1)
 	groups := map[int64]*Group{1: {ID: 1, Status: StatusActive, RateMultiplier: 0.1}, 2: {ID: 2, Status: StatusActive, RateMultiplier: 0.3}, 3: {ID: 3, Status: StatusActive, RateMultiplier: 0, IsExclusive: true}}
 	key := &APIKey{UserID: 7, GroupID: &primary, GroupIDs: []int64{1, 2, 3}, Group: groups[1], User: &User{ID: 7, Balance: 10}}
-	svc := &APIKeyService{groupRepo: multiGroupRepoStub{groups: groups}, groupRouter: multiGroupRouterStub{1: {Available: true, Busy: true, Load: 1}, 2: {Available: true, Load: 0.1}, 3: {Available: true}}}
+	probe := func(current, limit int) APIKeyGroupAvailability {
+		return groupAvailabilityFromLoads([]AccountWithConcurrency{{ID: 10, MaxConcurrency: limit}}, map[int64]*AccountLoadInfo{10: {CurrentConcurrency: current}})
+	}
+	require.False(t, groupAvailabilityFromLoads([]AccountWithConcurrency{{ID: 10, MaxConcurrency: 2}}, nil).Available)
+	require.True(t, groupAvailabilityFromLoads([]AccountWithConcurrency{{ID: 10, MaxConcurrency: 0}}, nil).Available)
+	svc := &APIKeyService{groupRepo: multiGroupRepoStub{groups: groups}, groupRouter: multiGroupRouterStub{1: probe(10, 10), 2: probe(1, 10), 3: {Available: true}}}
 	got, err := svc.SelectRequestGroup(context.Background(), key, nil, "token", nil, nil, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), *got.GroupID)
 
 	// When all groups are busy, keep the configured order for normal queuing.
-	svc.groupRouter = multiGroupRouterStub{1: {Available: true, Busy: true, Load: 2}, 2: {Available: true, Busy: true, Load: 1}}
+	svc.groupRouter = multiGroupRouterStub{1: probe(20, 10), 2: probe(10, 10)}
 	got, err = svc.SelectRequestGroup(context.Background(), key, nil, "token", nil, nil, true)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), *got.GroupID)
@@ -189,7 +194,7 @@ func TestAPIKeyMultiGroupSelectionFallsThroughExhaustedSubscriptionsToBalance(t 
 	}
 	key := &APIKey{UserID: 7, GroupID: &primary, GroupIDs: []int64{1, 2, 3}, Group: groups[1], User: &User{ID: 7, Balance: 10}}
 	svc := &APIKeyService{groupRepo: multiGroupRepoStub{groups: groups}, userSubRepo: multiGroupSubscriptionStub{subscriptions: subs},
-		groupRouter: multiGroupRouterStub{1: {Available: true, Busy: true}, 2: {Available: true}, 3: {Available: true}}}
+		groupRouter: multiGroupRouterStub{1: {Available: true}, 2: {Available: true}, 3: {Available: true}}}
 	subService := &SubscriptionService{userSubRepo: svc.userSubRepo, now: func() time.Time { return now }}
 	accepts := func(candidate *APIKey) bool {
 		return candidate.Group.IsSubscriptionType() || candidate.User.Balance > 0

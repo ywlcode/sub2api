@@ -91,7 +91,7 @@ func TestSiteContractReviewedColumnsAndCachePricing(t *testing.T) {
 	_, err := p.db.Exec(`UPDATE accounts SET platform='openai' WHERE id=$1`, p.account)
 	require.NoError(t, err)
 	require.NoError(t, p.db.QueryRow(`INSERT INTO channels(name) VALUES('site-12h-contract') RETURNING id`).Scan(&channelID))
-	require.NoError(t, p.db.QueryRow(`INSERT INTO channel_model_pricing(channel_id,cache_write_12h_price) VALUES($1,0.000024) RETURNING id`, channelID).Scan(&priceID))
+	require.NoError(t, p.db.QueryRow(`INSERT INTO channel_model_pricing(channel_id,cache_write_12h_price,ultrafast_multiplier) VALUES($1,0.000024,2.5) RETURNING id`, channelID).Scan(&priceID))
 	legacy := ""
 	for schema := range siteLegacySchemas {
 		legacy = schema
@@ -101,6 +101,14 @@ func TestSiteContractReviewedColumnsAndCachePricing(t *testing.T) {
 	require.NoError(t, err)
 	for _, row := range old.Rows {
 		require.NotContains(t, string(row.Value), "cache_write_12h_price")
+		require.NotContains(t, string(row.Value), "ultrafast_multiplier")
+		if row.Table == "channel_model_pricing" && row.Key == strconv.FormatInt(priceID, 10) {
+			normalized, err := normalizeSiteContractRow(row.Table, row.Value)
+			require.NoError(t, err)
+			var fields map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(normalized, &fields))
+			require.JSONEq(t, "null", string(fields["ultrafast_multiplier"]))
+		}
 		if row.Table == "accounts" {
 			var a service.Account
 			require.NoError(t, json.Unmarshal(row.Value, &a))
@@ -112,9 +120,10 @@ func TestSiteContractReviewedColumnsAndCachePricing(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, current.Full)
 	require.NoError(t, p.local.Install(ctx, site.SyncResponse{Full: true, PrimaryID: "main", Version: current.Version, Rows: current.Rows}))
-	var price float64
-	require.NoError(t, p.replica.QueryRow(`SELECT cache_write_12h_price FROM channel_model_pricing WHERE id=$1`, priceID).Scan(&price))
+	var price, multiplier float64
+	require.NoError(t, p.replica.QueryRow(`SELECT cache_write_12h_price,ultrafast_multiplier FROM channel_model_pricing WHERE id=$1`, priceID).Scan(&price, &multiplier))
 	require.Equal(t, 0.000024, price)
+	require.Equal(t, 2.5, multiplier)
 	var enabled bool
 	require.NoError(t, p.replica.QueryRow(`SELECT schedulable AND extra->'site_secondary_enabled'='true'::jsonb FROM accounts WHERE id=$1`, p.account).Scan(&enabled))
 	require.True(t, enabled)

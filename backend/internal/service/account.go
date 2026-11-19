@@ -2840,7 +2840,7 @@ func (a *Account) IsAnthropicAPIKeyPassthroughEnabled() bool {
 	return ok && enabled
 }
 
-const cacheTTLBillingFromRequestExtraKey = "cache_ttl_billing_from_request"
+const CacheTTLBillingFromRequestExtraKey = "cache_ttl_billing_from_request"
 
 // IsCacheTTLBillingFromRequestEnabled 返回 Anthropic API Key 账号是否按客户端请求的缓存 TTL 计费。
 // 字段：accounts.extra.cache_ttl_billing_from_request。
@@ -2850,7 +2850,7 @@ func (a *Account) IsCacheTTLBillingFromRequestEnabled() bool {
 	if a == nil || a.Platform != PlatformAnthropic || a.Type != AccountTypeAPIKey || a.Extra == nil {
 		return false
 	}
-	enabled, ok := a.Extra[cacheTTLBillingFromRequestExtraKey].(bool)
+	enabled, ok := a.Extra[CacheTTLBillingFromRequestExtraKey].(bool)
 	return ok && enabled
 }
 

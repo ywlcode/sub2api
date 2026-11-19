@@ -180,7 +180,7 @@ func resolveAPIKeyRequestGroup(c *gin.Context, keys *service.APIKeyService, subs
 	balanceDenied := false
 	accepts := func(candidate *service.APIKey) bool {
 		group := candidate.Group
-		// Binding the restricted target must not make the normal cheapest-group
+		// Binding the restricted target must not make the configured group priority
 		// selector send healthy conversations there. Forced penalties returned
 		// above already passed the normal target authorization checks.
 		if penaltyConfig.Applies(key.UserID) && !penaltyConfig.ObserveOnly && penaltyConfig.Policy == "session_route_then_block" && penaltyConfig.TargetGroupID != nil && group.ID == *penaltyConfig.TargetGroupID {

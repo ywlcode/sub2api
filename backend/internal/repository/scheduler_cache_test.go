@@ -114,6 +114,18 @@ func TestSchedulerMetadataAccountKeepsProArgonQuotaIsolation(t *testing.T) {
 	require.Zero(t, metadata.GetRateLimitRemainingTime("gemini-3.8-flash"))
 }
 
+func TestSchedulerMetadataPreservesAnthropicRequestTTLBilling(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		account := service.Account{Platform: service.PlatformAnthropic, Type: service.AccountTypeAPIKey,
+			Extra: map[string]any{service.CacheTTLBillingFromRequestExtraKey: enabled}}
+		_, payload, err := marshalSchedulerCacheAccount(account)
+		require.NoError(t, err)
+		var cached service.Account
+		require.NoError(t, json.Unmarshal([]byte(payload), &cached))
+		require.Equal(t, enabled, cached.IsCacheTTLBillingFromRequestEnabled())
+	}
+}
+
 func TestSchedulerMetadataAccountProjectsUpstreamBillingProbe(t *testing.T) {
 	lastError := strings.Repeat("upstream diagnostic ", 512)
 	probe := map[string]any{

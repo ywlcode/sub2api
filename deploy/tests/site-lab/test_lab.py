@@ -48,9 +48,14 @@ def wait_sync():
 def accounting():
     wait_sync()
     primary = lab.query("primary", "SELECT balance::text, (SELECT coalesce(sum(actual_cost),0)::text FROM usage_logs WHERE user_id=101 AND subscription_id IS NULL) AS usage FROM users WHERE id=101")[0]
-    secondary = lab.sql("secondary", "SELECT balance::text FROM users WHERE id=101;")
     assert Decimal(primary["balance"]) == opening_accounting_basis - Decimal(primary["usage"]), primary
-    assert Decimal(primary["balance"]) == Decimal(secondary), (primary, secondary)
+    # Delivery ACK and configuration sync use independent connections. A debit
+    # on a forwarded request can still await the next balance projection.
+    target = Decimal(primary["balance"])
+    lab.eventually(lambda: Decimal(lab.sql("secondary", "SELECT balance FROM users WHERE id=101")) == target,
+                   timeout=15, label="authoritative balance installed on replica")
+    secondary = lab.sql("secondary", "SELECT balance::text FROM users WHERE id=101;")
+    assert Decimal(secondary) == target
     p = lab.sql("primary", "SELECT count(*) FROM usage_logs WHERE account_id=101 AND request_id LIKE 'site:%';")
     s = lab.sql("secondary", "SELECT count(*) FROM usage_logs;")
     assert p == s, (p, s)
@@ -72,6 +77,7 @@ def expire(label):
 
 def protocols():
     wait_sync()
+    start_error_id = int(lab.sql("secondary", "SELECT coalesce(max(id),0) FROM ops_error_logs"))
     models_before = len([r for r in lab.records() if r.get("kind") == "model"])
     for protocol in ("responses", "chat/completions", "messages"):
         for stream in (False, True):
@@ -116,12 +122,25 @@ def protocols():
     assert r["status"] >= 400, r
     record("upstream_error", response=r)
     wait_sync()
-    p = lab.query("primary", "SELECT id,request_id,error_type,error_message FROM ops_error_logs ORDER BY id")
-    # Unauthenticated ingress errors intentionally stay local so arbitrary
-    # rejected traffic cannot fill the durable billing/delivery queue.
-    s = lab.query("secondary", "SELECT id,request_id,error_type,error_message FROM ops_error_logs WHERE user_id IS NOT NULL ORDER BY id")
-    assert len(p) >= len(s) and any(x["error_type"] == "site_usage_unsettled" for x in p), p
-    record("diagnostics_and_accounting", primary_errors=p, secondary_errors=s, accounting=accounting())
+    # An empty outbox can precede the async ops writer. Match this phase's
+    # individual diagnostics against the imported IDs, not two table sizes.
+    local_query = ("SELECT id,request_id,error_type,error_message FROM ops_error_logs "
+                   f"WHERE user_id=101 AND id>{start_error_id} ORDER BY id")
+    required = {"site_usage_unsettled", "service_unavailable_error", "invalid_request_error"}
+    def local_errors():
+        rows = lab.query("secondary", local_query)
+        return rows if required <= {r["error_type"] for r in rows} else None
+    secondary_errors = lab.eventually(local_errors, timeout=30, label="local diagnostics persisted")
+    ids = ",".join(f"'{int(r['id'])}'" for r in secondary_errors)
+    expected = {int(r["id"]): (r["error_type"], r["error_message"]) for r in secondary_errors}
+    def imported_errors():
+        rows = lab.query("primary", "SELECT m.source_id,e.request_id,e.error_type,e.error_message "
+                         "FROM site_imported_logs m JOIN ops_error_logs e ON e.id::text=m.local_id "
+                         f"WHERE m.table_name='ops_error_logs' AND m.source_id IN ({ids}) AND e.user_id=101")
+        actual = {int(r["source_id"]): (r["error_type"], r["error_message"]) for r in rows}
+        return rows if actual == expected and len(rows) == len(expected) else None
+    primary_errors = lab.eventually(imported_errors, timeout=30, label="every diagnostic imported once")
+    record("diagnostics_and_accounting", primary_errors=primary_errors, secondary_errors=secondary_errors, accounting=accounting())
 
 
 def policy():

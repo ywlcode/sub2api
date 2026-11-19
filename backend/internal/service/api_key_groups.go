@@ -20,8 +20,6 @@ const APIKeyGroupKindModelList = "model_list"
 // group's normal admission and account scheduler still own the final checks.
 type APIKeyGroupAvailability struct {
 	Available bool
-	Busy      bool
-	Load      float64
 }
 
 type APIKeyGroupRouter interface {
