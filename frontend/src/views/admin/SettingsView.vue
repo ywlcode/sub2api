@@ -6684,6 +6684,7 @@
 
         <!-- Tab: General -->
         <div v-show="activeTab === 'general'" class="space-y-6">
+          <SecondaryEgressSettings />
           <!-- Site Settings -->
           <div class="card">
             <div
@@ -9713,6 +9714,7 @@ import { extractApiErrorMessage, extractI18nErrorMessage } from "@/utils/apiErro
 import { useAppStore, useAuthStore } from "@/stores";
 import { formatBalanceRechargeMultiplier } from "@/utils/rechargeBonus";
 import { useAdminSettingsStore } from "@/stores/adminSettings";
+import SecondaryEgressSettings from "@/components/settings/SecondaryEgressSettings.vue";
 import SmartOpsSidebarSettings from "@/components/settings/SmartOpsSidebarSettings.vue";
 import NewFeatureBadge from "@/components/common/NewFeatureBadge.vue";
 import GroupSelector from "@/components/common/GroupSelector.vue";

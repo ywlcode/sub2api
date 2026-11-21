@@ -75,6 +75,11 @@ func (m *Manager) postSync(ctx context.Context, input *SyncRequest, output *Sync
 			timeout = 90 * time.Second // retain the paged-bootstrap export allowance
 		}
 		attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+		// Only control retries may use an explicitly configured bootstrap proxy.
+		// Never recover via a direct connection or the processing proxy.
+		if attempt > 0 && m.cfg.Egress != nil && m.cfg.Egress.bootstrap.forward != nil {
+			attemptCtx = context.WithValue(attemptCtx, bootstrapProxyKey{}, true)
+		}
 		var candidate SyncResponse
 		var transfer siteTransfer
 		transfer, err = m.postSite(attemptCtx, client, SyncPath, input, &candidate)

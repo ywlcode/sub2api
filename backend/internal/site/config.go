@@ -21,10 +21,13 @@ const (
 )
 
 type Config struct {
-	Mode       string `mapstructure:"mode"`
-	ID         string `mapstructure:"id"`
-	PrimaryURL string `mapstructure:"primary_url"`
-	Token      string `mapstructure:"token"`
+	ProcessingProxyURL string        `mapstructure:"processing_proxy_url"`
+	ForwardProxyURL    string        `mapstructure:"forward_proxy_url"`
+	Egress             *EgressRoutes `mapstructure:"-" json:"-" yaml:"-"`
+	Mode               string        `mapstructure:"mode"`
+	ID                 string        `mapstructure:"id"`
+	PrimaryURL         string        `mapstructure:"primary_url"`
+	Token              string        `mapstructure:"token"`
 	// Plain HTTP is permitted only by explicit operator configuration, e.g. a
 	// private encrypted tunnel. Certificates are always verified for HTTPS.
 	AllowHTTP bool   `mapstructure:"allow_http"`

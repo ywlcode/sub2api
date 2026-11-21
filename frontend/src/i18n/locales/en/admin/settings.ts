@@ -749,6 +749,18 @@ export default {
         testResultProvider: 'Provider',
         testNoResults: 'No results found',
       },
+      secondaryEgress: {
+        "title": "Secondary egress proxies",
+        "description": "Applies only to the selected secondary. Leave blank to use its deployment default. A configured proxy never falls back to a direct connection.",
+        "processing": "Local processing proxy",
+        "forward": "Forwarding and sync proxy",
+        "processingHint": "All model providers contacted by the secondary.",
+        "forwardHint": "Forwarded requests, configuration sync and billing delivery to the primary.",
+        "node": "Secondary: {node}",
+        "saved": "Proxy settings saved. The secondary applies them after its next successful sync.",
+        "failed": "Could not read or save the secondary proxies.",
+        "retry": "Retry"
+      },
       site: {
         title: 'Site Settings',
         description: 'Customize site branding',

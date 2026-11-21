@@ -89,11 +89,18 @@ func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db 
 			}
 			return nil
 		}
+		if cfg.IsSecondary() {
+			cfg.Site.Egress, err = site.NewEgressRoutes(site.EgressSettings{Processing: cfg.Site.ProcessingProxyURL, Forward: cfg.Site.ForwardProxyURL})
+			if err != nil {
+				panic(fmt.Errorf("initialize secondary egress: %w", err))
+			}
+		}
 		sites, err := site.New(cfg.Site, store, cfg.RequestGateway().MaxBodySize)
 		if err != nil {
 			panic(err)
 		}
 		if cfg.Site.EffectiveMode() == site.Primary {
+			sites.LoadPeerEgress = settingService.GetPeerEgress
 			if handlers != nil && handlers.Admin != nil {
 				handlers.Admin.SiteReconciliation = adminhandler.NewSiteReconciliationHandler(store)
 			}

@@ -1543,6 +1543,18 @@ export async function updateStreamTimeoutSettings(
 
 // ==================== OpenAI Response Header Timeout ====================
 
+export interface SecondaryEgressSettings {
+  processing_proxy_url: string;
+  forward_proxy_url: string;
+}
+export interface SecondaryEgressRow extends SecondaryEgressSettings { node: string; }
+export async function listSecondaryEgress(): Promise<SecondaryEgressRow[]> {
+  return (await apiClient.get<SecondaryEgressRow[]>("/admin/settings/secondary-egress")).data;
+}
+export async function updateSecondaryEgress(node: string, settings: SecondaryEgressSettings): Promise<SecondaryEgressSettings> {
+  return (await apiClient.put<SecondaryEgressSettings>("/admin/settings/secondary-egress/" + encodeURIComponent(node), settings)).data;
+}
+
 export interface OpenAIResponseHeaderTimeoutSettings {
   enabled: boolean;
   seconds: number;

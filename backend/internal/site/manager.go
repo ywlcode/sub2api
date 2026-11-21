@@ -37,6 +37,8 @@ type peerSnapshot struct {
 }
 
 type Manager struct {
+	forwardPool      *forwardEgressPool
+	LoadPeerEgress   func(context.Context, string) (EgressSettings, error)
 	cfg              Config
 	store            Store
 	syncClients      [syncConnectionPools]*http.Client
@@ -74,6 +76,16 @@ func New(cfg Config, store Store, maxBody int64) (*Manager, error) {
 		return nil, errors.New("site requires the standard HTTP transport")
 	}
 	transport := defaultTransport.Clone()
+	if cfg.EffectiveMode() == Secondary {
+		if cfg.Egress == nil {
+			var err error
+			cfg.Egress, err = NewEgressRoutes(EgressSettings{Processing: cfg.ProcessingProxyURL, Forward: cfg.ForwardProxyURL})
+			if err != nil {
+				return nil, err
+			}
+		}
+		transport.Proxy = cfg.Egress.forwarding(transport.Proxy)
+	}
 	transport.DialContext = transportpolicy.NewDialer(10 * time.Second).DialContext
 	transport.MaxIdleConns = 256
 	transport.MaxIdleConnsPerHost = 128
@@ -91,10 +103,24 @@ func New(cfg Config, store Store, maxBody int64) (*Manager, error) {
 		m.peers[p.ID] = &peerSnapshot{}
 	}
 	if cfg.EffectiveMode() == Secondary {
-		m.forwardTransport = transport.Clone()
-		if _, err := transportpolicy.ConfigureHTTP2(m.forwardTransport, transportpolicy.HTTP2ReadIdleTimeout, transportpolicy.HTTP2PingTimeout, "site_forward"); err != nil {
-			return nil, fmt.Errorf("configure site forwarding transport: %w", err)
+		newForward := func(proxy *url.URL) (*http.Transport, error) {
+			tr := transport.Clone()
+			tr.Proxy = defaultTransport.Proxy // preserve previous behavior only for unconfigured nodes
+			if proxy != nil {
+				tr.Proxy = http.ProxyURL(proxy)
+			}
+			if _, err := transportpolicy.ConfigureHTTP2(tr, transportpolicy.HTTP2ReadIdleTimeout, transportpolicy.HTTP2PingTimeout, "site_forward"); err != nil {
+				return nil, fmt.Errorf("configure site forwarding transport: %w", err)
+			}
+			return tr, nil
 		}
+		initial := cfg.Egress.active.Load().forward
+		var err error
+		m.forwardTransport, err = newForward(initial)
+		if err != nil {
+			return nil, err
+		}
+		m.forwardPool = &forwardEgressPool{routes: cfg.Egress, key: proxyAddress(initial), current: m.forwardTransport, build: newForward}
 		target, _ := url.Parse(cfg.PrimaryURL)
 		m.proxy = &httputil.ReverseProxy{
 			Rewrite: func(r *httputil.ProxyRequest) {
@@ -105,7 +131,7 @@ func New(cfg Config, store Store, maxBody int64) (*Manager, error) {
 					r.Out.Header.Set("X-Request-ID", id)
 				}
 			},
-			Transport: &forwardRoundTripper{base: m.forwardTransport, timeouts: cfg.forwardTimeouts()}, FlushInterval: -1,
+			Transport: &forwardRoundTripper{base: m.forwardPool, timeouts: cfg.forwardTimeouts()}, FlushInterval: -1,
 			ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 				// The forwarding transport records a bounded error category and
 				// request ID; do not log URL errors containing query credentials.
@@ -146,8 +172,8 @@ func (m *Manager) Stop() {
 	if m.deliveryClient != nil {
 		m.deliveryClient.CloseIdleConnections()
 	}
-	if m.forwardTransport != nil {
-		m.forwardTransport.CloseIdleConnections()
+	if m.forwardPool != nil {
+		m.forwardPool.closeIdle()
 	}
 }
 
@@ -196,7 +222,7 @@ func (m *Manager) syncOnce(parent context.Context) error {
 	if err != nil {
 		return err
 	}
-	input := SyncRequest{Protocol: ProtocolVersion, NodeID: m.cfg.ID, ReplicaID: replicaID, PendingDigests: digests, Version: m.version, Schema: m.store.Schema(), PendingIDs: ids}
+	input := SyncRequest{WantEgress: true, Protocol: ProtocolVersion, NodeID: m.cfg.ID, ReplicaID: replicaID, PendingDigests: digests, Version: m.version, Schema: m.store.Schema(), PendingIDs: ids}
 	if _, modern := m.store.(DeliveryStore); !modern {
 		input.Events, err = m.store.Pending(ctx, 128)
 		if err != nil {
@@ -259,10 +285,20 @@ func (m *Manager) syncOnce(parent context.Context) error {
 	if (!output.Full || !pagedStore) && !m.now().Before(started.Add(ReplicaTTL)) {
 		return errors.New("synchronization response expired")
 	}
+	if output.Egress != nil {
+		if err = output.Egress.Validate(); err != nil {
+			return err
+		}
+	}
 	if err = m.store.Install(ctx, output); err != nil {
 		m.current.Store(nil)
 		m.version = ""
 		return err
+	}
+	if output.Egress != nil {
+		if err = m.cfg.Egress.Apply(*output.Egress); err != nil {
+			return err
+		}
 	}
 	m.version, m.primaryID = output.Version, output.PrimaryID
 	m.identityVerified.Store(true)
@@ -294,6 +330,15 @@ func (m *Manager) SyncHandler(c *gin.Context) {
 		c.AbortWithStatus(http.StatusBadRequest)
 		return
 	}
+	var egress *EgressSettings
+	if input.WantEgress && input.Cursor == "" && m.LoadPeerEgress != nil {
+		settings, err := m.LoadPeerEgress(c.Request.Context(), peer.ID)
+		if err != nil {
+			c.AbortWithStatus(http.StatusServiceUnavailable)
+			return
+		}
+		egress = &settings
+	}
 	if store, ok := m.store.(DeliveryStore); ok {
 		if len(input.Events) > 0 {
 			c.AbortWithStatus(http.StatusBadRequest)
@@ -311,7 +356,7 @@ func (m *Manager) SyncHandler(c *gin.Context) {
 			c.AbortWithStatus(http.StatusServiceUnavailable)
 			return
 		}
-		encodeSiteResponse(c, SyncResponse{Protocol: ProtocolVersion, PrimaryID: m.cfg.ID, NodeID: peer.ID, BaseVersion: input.Version, Version: snapshot.Version, Schema: snapshot.Schema, Full: snapshot.Full, Rows: snapshot.Rows, Acknowledged: snapshot.Acknowledged, ReceiptDigests: snapshot.ReceiptDigests, Rejected: snapshot.Rejected, Cursor: snapshot.Cursor})
+		encodeSiteResponse(c, SyncResponse{Egress: egress, Protocol: ProtocolVersion, PrimaryID: m.cfg.ID, NodeID: peer.ID, BaseVersion: input.Version, Version: snapshot.Version, Schema: snapshot.Schema, Full: snapshot.Full, Rows: snapshot.Rows, Acknowledged: snapshot.Acknowledged, ReceiptDigests: snapshot.ReceiptDigests, Rejected: snapshot.Rejected, Cursor: snapshot.Cursor})
 		return
 	}
 	state := m.peers[peer.ID]
@@ -326,7 +371,7 @@ func (m *Manager) SyncHandler(c *gin.Context) {
 		return
 	}
 	version := snapshotVersion(snapshot)
-	output := SyncResponse{Protocol: ProtocolVersion, PrimaryID: m.cfg.ID, NodeID: peer.ID, BaseVersion: input.Version, Version: version, Schema: snapshot.Schema}
+	output := SyncResponse{Egress: egress, Protocol: ProtocolVersion, PrimaryID: m.cfg.ID, NodeID: peer.ID, BaseVersion: input.Version, Version: version, Schema: snapshot.Schema}
 	if state.version != "" && state.version == input.Version {
 		output.Rows = diffRows(state.snapshot.Rows, snapshot.Rows)
 	} else {

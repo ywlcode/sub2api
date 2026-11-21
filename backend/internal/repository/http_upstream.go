@@ -244,6 +244,9 @@ func newHTTPUpstream(cfg *config.Config, provider OpenAIResponseHeaderTimeoutPro
 //   - 调用方必须关闭 resp.Body，否则会导致 inFlight 计数泄漏
 //   - inFlight > 0 的客户端不会被淘汰，确保活跃请求不被中断
 func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	if s.cfg.IsSecondary() {
+		proxyURL = s.cfg.Site.Egress.Processing(proxyURL)
+	}
 	if req != nil {
 		if _, err := service.ValidateOpenAIRequestProxyEgress(req.Context(), accountID, proxyURL); err != nil {
 			return nil, err
@@ -321,6 +324,9 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 // profile 为 nil 时不启用 TLS 指纹，行为与 Do 方法相同。
 // profile 非 nil 时使用指定的 Profile 进行 TLS 指纹伪装。
 func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	if s.cfg.IsSecondary() {
+		proxyURL = s.cfg.Site.Egress.Processing(proxyURL)
+	}
 	if req != nil {
 		if _, err := service.ValidateOpenAIRequestProxyEgress(req.Context(), accountID, proxyURL); err != nil {
 			return nil, err

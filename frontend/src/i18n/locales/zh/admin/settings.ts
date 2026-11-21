@@ -742,6 +742,18 @@ export default {
         testResultProvider: '服务商',
         testNoResults: '无搜索结果',
       },
+      secondaryEgress: {
+        "title": "从站出口代理",
+        "description": "只作用于所选从站。留空沿用从站本机配置；已配置的代理不可用时不会回退直连。",
+        "processing": "从站处理代理",
+        "forward": "从站转发同步代理",
+        "processingHint": "从站本地处理的所有模型上游。",
+        "forwardHint": "转发到主站的请求、配置同步和账单回传。",
+        "node": "从站：{node}",
+        "saved": "从站代理已保存，下次成功同步后生效。",
+        "failed": "无法读取或保存从站代理。",
+        "retry": "重试"
+      },
       site: {
         title: '站点设置',
         description: '自定义站点品牌',

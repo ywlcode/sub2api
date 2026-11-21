@@ -81,6 +81,7 @@ type ReceiptStore interface {
 }
 
 type SyncRequest struct {
+	WantEgress     bool             `json:"want_egress,omitempty"`
 	ReplicaID      string           `json:"replica_id,omitempty"`
 	PendingDigests map[int64]string `json:"pending_digests,omitempty"`
 	Protocol       int              `json:"protocol"`
@@ -94,6 +95,7 @@ type SyncRequest struct {
 }
 
 type SyncResponse struct {
+	Egress         *EgressSettings  `json:"egress,omitempty"`
 	ReceiptDigests map[int64]string `json:"receipt_digests,omitempty"`
 	Protocol       int              `json:"protocol"`
 	PrimaryID      string           `json:"primary_id"`

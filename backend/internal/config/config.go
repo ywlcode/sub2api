@@ -2352,6 +2352,8 @@ func setDefaults() {
 	viper.SetDefault("site.primary_url", "")
 	viper.SetDefault("site.token", "")
 	viper.SetDefault("site.allow_http", false)
+	viper.SetDefault("site.processing_proxy_url", "")
+	viper.SetDefault("site.forward_proxy_url", "")
 	viper.SetDefault("site.peers", []site.Peer{})
 	viper.SetDefault("site.forward_upload_idle_timeout_seconds", 120)
 	viper.SetDefault("site.forward_response_header_timeout_seconds", 600)

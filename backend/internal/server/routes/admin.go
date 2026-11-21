@@ -787,6 +787,8 @@ func registerSettingsRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpA
 		adminSettings.GET("/stream-timeout", h.Admin.Setting.GetStreamTimeoutSettings)
 		adminSettings.PUT("/stream-timeout", h.Admin.Setting.UpdateStreamTimeoutSettings)
 		// OpenAI/Codex 响应头超时配置
+		adminSettings.GET("/secondary-egress", h.Admin.Setting.ListPeerEgress)
+		adminSettings.PUT("/secondary-egress/:node", h.Admin.Setting.UpdatePeerEgress)
 		adminSettings.GET("/openai-response-header-timeout", h.Admin.Setting.GetOpenAIResponseHeaderTimeoutSettings)
 		adminSettings.PUT("/openai-response-header-timeout", h.Admin.Setting.UpdateOpenAIResponseHeaderTimeoutSettings)
 		adminSettings.GET("/account-performance", h.Admin.Setting.GetAccountPerformanceSettings)
