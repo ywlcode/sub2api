@@ -13,7 +13,7 @@ import (
 
 func TestStandaloneSiteSyncDoesNotFallThroughToSPA(t *testing.T) {
 	r := gin.New()
-	configureSites(r, &config.Config{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	configureSites(r, &config.Config{}, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	r.NoRoute(func(c *gin.Context) { c.Data(200, "text/html", []byte("<html>panel</html>")) })
 	for _, method := range []string{http.MethodGet, http.MethodPost, http.MethodPut} {
 		w := httptest.NewRecorder()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -19,7 +20,7 @@ import (
 
 // Keep site wiring separate from the main router so upstream router changes do
 // not share an implementation block with the independent-site control plane.
-func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db *sql.DB, apiKeyService *service.APIKeyService, billingCache *service.BillingCacheService, channels *service.ChannelService, pricing *service.PricingService, errorPassthrough *service.ErrorPassthroughService, settingService *service.SettingService, ops *service.OpsService, handlers *handler.Handlers, cleanup *service.OpsCleanupService) (gin.HandlerFunc, middleware2.ConnectionTraceRecorder, func()) {
+func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db *sql.DB, apiKeyService *service.APIKeyService, billingCache *service.BillingCacheService, channels *service.ChannelService, pricing *service.PricingService, errorPassthrough *service.ErrorPassthroughService, settingService *service.SettingService, ops *service.OpsService, handlers *handler.Handlers, cleanup *service.OpsCleanupService, groups service.GroupRepository) (gin.HandlerFunc, middleware2.ConnectionTraceRecorder, func()) {
 	var siteIngress gin.HandlerFunc
 	var siteRecorder middleware2.ConnectionTraceRecorder
 	start := func() {}
@@ -101,6 +102,30 @@ func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db 
 		}
 		if cfg.Site.EffectiveMode() == site.Primary {
 			sites.LoadPeerEgress = settingService.GetPeerEgress
+			if handlers != nil && handlers.Gateway != nil && groups != nil {
+				sites.LoadCatalog = func(ctx context.Context) (map[int64]site.CatalogGroup, error) {
+					ids, err := store.DiscoveryGroupIDs(ctx)
+					if err != nil {
+						return nil, err
+					}
+					return buildSiteCatalog(ctx, ids, groups.GetByIDLite, handlers.Gateway.BuildSiteCatalog)
+				}
+				sites.AllowDiscovery = func(ctx context.Context) bool {
+					// Active punishments and IP/Redis bans intentionally stay on
+					// the primary. Disabling local discovery preserves that boundary.
+					penalty, err := apiKeyService.SecurityPenaltyConfig(ctx)
+					if err != nil || penalty.Enabled && penalty.RiskControlEnabled && !penalty.ObserveOnly {
+						return false
+					}
+					if settingService.IPRisk != nil {
+						ipPolicy, err := settingService.IPRisk.Config(ctx)
+						if err != nil || ipPolicy.Enabled && !ipPolicy.ObserveOnly || ipPolicy.AnonymousAPI.Enabled {
+							return false
+						}
+					}
+					return true
+				}
+			}
 			if handlers != nil && handlers.Admin != nil {
 				handlers.Admin.SiteReconciliation = adminhandler.NewSiteReconciliationHandler(store)
 			}
@@ -132,4 +157,31 @@ func configureSites(r *gin.Engine, cfg *config.Config, lifecycle *Lifecycle, db 
 		lifecycle.onDrain = append(lifecycle.onDrain, sites.Stop)
 	}
 	return siteIngress, siteRecorder, start
+}
+
+// This runs on the primary's bounded catalog worker, outside the sync/usage
+// transactions. Missing groups/variants naturally keep using primary discovery.
+func buildSiteCatalog(ctx context.Context, ids []int64, get func(context.Context, int64) (*service.Group, error), render func(context.Context, *service.Group) (site.CatalogGroup, error)) (map[int64]site.CatalogGroup, error) {
+	result := make(map[int64]site.CatalogGroup)
+	remaining := 32 << 20
+	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		group, err := get(ctx, id)
+		if err != nil || group == nil || !group.IsActive() {
+			continue
+		}
+		entry, err := render(ctx, group)
+		if err != nil {
+			slog.Warn("site discovery group unavailable", "group", id, "error", err)
+			continue
+		}
+		size := len(entry.Plain) + len(entry.Codex) + len(entry.Union) + len(entry.Policy)
+		if size <= remaining && len(entry.Policy) > 0 && (len(entry.Plain)+len(entry.Codex)+len(entry.Union) > 0) {
+			result[id] = entry
+			remaining -= size
+		}
+	}
+	return result, ctx.Err()
 }

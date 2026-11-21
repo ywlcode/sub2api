@@ -1204,74 +1204,68 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
-	var groupID *int64
+	var group *service.Group
 	var platform string
 
 	if apiKey != nil && apiKey.Group != nil {
-		groupID = &apiKey.Group.ID
-		platform = apiKey.Group.Platform
+		group = apiKey.Group
+		platform = group.Platform
 	}
 	if forcedPlatform, ok := middleware2.GetForcePlatformFromContext(c); ok && strings.TrimSpace(forcedPlatform) != "" {
 		platform = forcedPlatform
 	}
 
-	if platform == service.PlatformOpenAI && apiKey != nil && apiKey.Group != nil &&
-		apiKey.Group.Platform == service.PlatformOpenAI && apiKey.Group.CodexModelsManifestConfig.Enabled {
-		h.pinnedOpenAIModels(c, apiKey.Group)
+	if platform == service.PlatformOpenAI && usesPinnedModelCatalog(group) {
+		h.pinnedOpenAIModels(c, group)
 		return
 	}
 
+	writeModelsListResponse(c, h.plainModelEntries(c.Request.Context(), group, platform))
+}
+
+func usesPinnedModelCatalog(group *service.Group) bool {
+	return group != nil && group.Platform == service.PlatformOpenAI && group.CodexModelsManifestConfig.Enabled
+}
+
+func (h *GatewayHandler) plainModelEntries(ctx context.Context, group *service.Group, platform string) any {
+	var groupID *int64
+	if group != nil {
+		groupID = &group.ID
+	}
 	if platform == service.PlatformComposite {
-		availableModels := h.compositeAvailableModels(c.Request.Context(), groupID, "")
-		if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
-			source := availableModels
-			if source == nil {
-				source = service.DefaultModelIDsForPlatform(service.PlatformComposite)
-			}
-			writeAllowlistedModelsList(c, service.PlatformComposite, apiKey.Group.ModelAllowlist.FilterForListing(source))
-			return
+		models := h.compositeAvailableModels(ctx, groupID, "")
+		if models == nil {
+			models = service.DefaultModelIDsForPlatform(platform)
 		}
-		if availableModels != nil {
-			writeModelsList(c, service.PlatformComposite, availableModels)
-			return
+		if group.ModelAllowlistEnabled() {
+			models = group.ModelAllowlist.FilterForListing(models)
 		}
-		writeModelsList(c, service.PlatformComposite, service.DefaultModelIDsForPlatform(service.PlatformComposite))
-		return
+		return modelsListEntries(platform, models)
 	}
 
 	// Get available models from account configurations for the selected group platform.
-	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
-	if apiKey != nil && apiKey.Group != nil && apiKey.Group.ModelAllowlistEnabled() {
+	availableModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
+	if group.ModelAllowlistEnabled() {
 		source := service.ModelListingSource(platform, availableModels, service.DefaultModelIDsForPlatform(platform))
-		writeAllowlistedModelsList(c, platform, apiKey.Group.ModelAllowlist.FilterForListing(source))
-		return
+		return modelsListEntries(platform, group.ModelAllowlist.FilterForListing(source))
 	}
 
 	if availableModels != nil {
-		writeModelsList(c, platform, availableModels)
-		return
+		return modelsListEntries(platform, availableModels)
 	}
 
-	// Fallback to default models
-	if platform == service.PlatformOpenAI {
-		writeModelsListResponse(c, openai.DefaultModels)
-		return
+	switch platform {
+	case service.PlatformOpenAI:
+		return openai.DefaultModels
+	case service.PlatformGemini:
+		return geminicli.DefaultModels
+	case service.PlatformGrok:
+		return grokModelsListEntries(xai.DefaultModelIDs())
+	case service.PlatformTypeSafe:
+		return modelsListEntries(platform, []string{typesafe.JevLatestModel})
+	default:
+		return claude.DefaultModels
 	}
-
-	if platform == service.PlatformGemini {
-		writeModelsListResponse(c, geminicli.DefaultModels)
-		return
-	}
-	if platform == service.PlatformGrok {
-		writeGrokModelsList(c, xai.DefaultModelIDs())
-		return
-	}
-	if platform == service.PlatformTypeSafe {
-		writeModelsList(c, platform, []string{typesafe.JevLatestModel})
-		return
-	}
-
-	writeModelsListResponse(c, claude.DefaultModels)
 }
 
 // CodexModels returns the effective group model list using the manifest shape
@@ -1288,19 +1282,22 @@ func (h *GatewayHandler) CodexModels(c *gin.Context) {
 	if value, exists := middleware2.GetForcePlatformFromContext(c); exists {
 		forcedPlatform = strings.TrimSpace(value)
 	}
-	modelIDs := h.codexModelIDsForGroup(c.Request.Context(), apiKey.Group, forcedPlatform)
-	modelIDs = service.FilterCodexModelIDsForGroup(modelIDs, apiKey.Group)
-	modelIDs = service.FilterUserGroupDeniedModelIDs(modelIDs, apiKey.DeniedModelsInGroup())
-	body, err := h.gatewayService.BuildCodexModelsManifestForGroup(
-		c.Request.Context(),
-		apiKey.Group,
-		forcedPlatform,
-		modelIDs,
-	)
+	body, err := h.generatedCodexManifest(c.Request.Context(), apiKey.Group, forcedPlatform, apiKey.DeniedModelsInGroup())
 	if err != nil {
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "Failed to build Codex models manifest")
 		return
 	}
+	writeGeneratedCodexManifest(c, body)
+}
+
+func (h *GatewayHandler) generatedCodexManifest(ctx context.Context, group *service.Group, platform string, denied []string) ([]byte, error) {
+	modelIDs := h.codexModelIDsForGroup(ctx, group, platform)
+	modelIDs = service.FilterCodexModelIDsForGroup(modelIDs, group)
+	modelIDs = service.FilterUserGroupDeniedModelIDs(modelIDs, denied)
+	return h.gatewayService.BuildCodexModelsManifestForGroup(ctx, group, platform, modelIDs)
+}
+
+func writeGeneratedCodexManifest(c *gin.Context, body []byte) {
 	etag := service.CodexModelsManifestETag(body)
 	c.Header("ETag", etag)
 	if service.CodexModelsManifestETagMatches(c.GetHeader("If-None-Match"), etag) {
@@ -1395,10 +1392,6 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 	return models
 }
 
-func writeModelsList(c *gin.Context, platform string, modelIDs []string) {
-	writeModelsListResponse(c, modelsListEntries(platform, modelIDs))
-}
-
 func modelsListEntries(platform string, modelIDs []string) any {
 	if platform == service.PlatformOpenAI {
 		return openAIModelsListEntries(modelIDs)
@@ -1418,14 +1411,6 @@ func modelsListEntries(platform string, modelIDs []string) any {
 	return models
 }
 
-func writeAllowlistedModelsList(c *gin.Context, platform string, modelIDs []string) {
-	if platform == service.PlatformOpenAI {
-		writeOpenAIModelsList(c, modelIDs)
-		return
-	}
-	writeModelsList(c, platform, modelIDs)
-}
-
 type grokReasoningEffortOption struct {
 	Value   string `json:"value"`
 	Label   string `json:"label"`
@@ -1437,10 +1422,6 @@ type grokModelListItem struct {
 	SupportsReasoningEffort bool                        `json:"supportsReasoningEffort,omitempty"`
 	ReasoningEffort         string                      `json:"reasoningEffort,omitempty"`
 	ReasoningEfforts        []grokReasoningEffortOption `json:"reasoningEfforts,omitempty"`
-}
-
-func writeGrokModelsList(c *gin.Context, modelIDs []string) {
-	writeModelsListResponse(c, grokModelsListEntries(modelIDs))
 }
 
 func grokModelsListEntries(modelIDs []string) []grokModelListItem {
@@ -1488,10 +1469,6 @@ func grokModelSupportsConfigurableReasoning(modelID string) bool {
 	default:
 		return false
 	}
-}
-
-func writeOpenAIModelsList(c *gin.Context, modelIDs []string) {
-	writeModelsListResponse(c, openAIModelsListEntries(modelIDs))
 }
 
 func openAIModelsListEntries(modelIDs []string) []openai.Model {

@@ -262,6 +262,34 @@ func siteScopedKeys() string {
 func siteScopedUsers() string {
 	return `SELECT user_id FROM api_keys WHERE id IN (` + siteScopedKeys() + `)`
 }
+
+// Discovery publishes public metadata for all groups a replicated key can
+// select, including bindings without a local upstream account. Neither the key
+// itself nor any ungranted account credential is selected by this query.
+func (s *SiteStore) DiscoveryGroupIDs(ctx context.Context) ([]int64, error) {
+	rows, err := s.db.QueryContext(ctx, `WITH scoped AS (
+ SELECT id,group_id FROM api_keys WHERE id IN (`+siteScopedKeys()+`)
+), candidates AS (
+ SELECT group_id FROM scoped UNION
+ SELECT kg.group_id FROM api_key_groups kg JOIN scoped ON scoped.id=kg.api_key_id
+)
+ SELECT g.id FROM groups g JOIN candidates c ON c.group_id=g.id
+ WHERE g.deleted_at IS NULL AND g.status='active' ORDER BY g.id LIMIT 256`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (s *SiteStore) siteFilter(t siteTable) string {
 	switch t.name {
 	case "users":

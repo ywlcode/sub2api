@@ -120,11 +120,17 @@ func RegisterGatewayRoutes(
 		}
 	}
 	codexModelsHandler := func(c *gin.Context) {
+		if h.Gateway.ServeSiteCatalog(c) {
+			return
+		}
 		dispatchCodexModelsGateway(c, h.OpenAIGateway.CodexModels, h.Gateway.CodexModels)
 	}
 	modelsHandler := func(c *gin.Context) {
 		if c.Query("client_version") != "" {
 			codexModelsHandler(c)
+			return
+		}
+		if h.Gateway.ServeSiteCatalog(c) {
 			return
 		}
 		h.Gateway.Models(c)

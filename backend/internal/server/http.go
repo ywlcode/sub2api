@@ -59,6 +59,7 @@ func ProvideRouter(
 	pricing *service.PricingService,
 	errorPassthrough *service.ErrorPassthroughService,
 	opsCleanup *service.OpsCleanupService,
+	groups service.GroupRepository,
 ) *gin.Engine {
 	if cfg.Server.Mode == "release" {
 		gin.SetMode(gin.ReleaseMode)
@@ -144,7 +145,7 @@ func ProvideRouter(
 		}
 	}
 	r.GET("/internal/serverless/probe", manager.ProbeHandler)
-	siteIngress, siteRecorder, startSites := configureSites(r, cfg, lifecycle, db, apiKeyService, billingCache, channels, pricing, errorPassthrough, settingService, opsService, handlers, opsCleanup)
+	siteIngress, siteRecorder, startSites := configureSites(r, cfg, lifecycle, db, apiKeyService, billingCache, channels, pricing, errorPassthrough, settingService, opsService, handlers, opsCleanup, groups)
 	router := SetupRouter(r, handlers, jwtAuth, optionalJWTAuth, adminAuth, apiKeyAuth, auditLog, stepUpAuth, apiKeyService, subscriptionService, opsService, settingService, compositeResolver, cfg, redisClient, siteIngress, siteRecorder)
 	startSites()
 	return router

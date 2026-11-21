@@ -81,6 +81,8 @@ type ReceiptStore interface {
 }
 
 type SyncRequest struct {
+	catalog        string           // optional HTTP header, never part of the configuration/receipt budget
+	observeCatalog func(string)     // withdraw on contrary headers even if the response body is subsequently lost
 	WantEgress     bool             `json:"want_egress,omitempty"`
 	ReplicaID      string           `json:"replica_id,omitempty"`
 	PendingDigests map[int64]string `json:"pending_digests,omitempty"`
@@ -95,6 +97,7 @@ type SyncRequest struct {
 }
 
 type SyncResponse struct {
+	catalog        string           // validated header on this particular configuration page
 	Egress         *EgressSettings  `json:"egress,omitempty"`
 	ReceiptDigests map[int64]string `json:"receipt_digests,omitempty"`
 	Protocol       int              `json:"protocol"`

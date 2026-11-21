@@ -75,26 +75,25 @@ func writeOpenAIModelsResponse(c *gin.Context, manifest *service.OpenAIModelsRes
 	c.Data(http.StatusOK, "application/json", manifest.Body)
 }
 
+func modelsListEnvelope(models any) gin.H {
+	return gin.H{"object": "list", "data": models}
+}
+
 // Both discovery endpoints consume the same final catalogue, after group/platform
 // selection and allowlist filtering. Preserve every field on the selected entry.
 func writeModelsListResponse(c *gin.Context, models any) {
-	response := gin.H{"object": "list", "data": models}
-	denied := deniedModelsForRequest(c)
-	if c.Param("model") == "" && len(denied) == 0 {
-		c.JSON(http.StatusOK, response)
-		return
+	body, err := json.Marshal(modelsListEnvelope(models))
+	if denied := deniedModelsForRequest(c); err == nil && len(denied) > 0 {
+		body, err = removeDeniedCatalogEntries(body, denied)
 	}
-	body, err := json.Marshal(response)
 	if err != nil {
 		writeOpenAIModelsError(c, http.StatusInternalServerError, "api_error", "Failed to encode model catalogue")
 		return
 	}
-	if len(denied) > 0 {
-		if body, err = removeDeniedCatalogEntries(body, denied); err != nil {
-			writeOpenAIModelsError(c, http.StatusInternalServerError, "api_error", "Failed to encode model catalogue")
-			return
-		}
-	}
+	writePlainModelsBody(c, body)
+}
+
+func writePlainModelsBody(c *gin.Context, body []byte) {
 	if c.Param("model") == "" {
 		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
 		return

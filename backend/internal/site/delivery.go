@@ -106,6 +106,9 @@ func (m *Manager) postSite(ctx context.Context, client *http.Client, path string
 		req, finish = traceEventUpload(req, len(input.Events), len(packed))
 		defer func() { finish(err) }()
 	case SyncPath:
+		if input.catalog != "" {
+			req.Header.Set(catalogHeader, input.catalog)
+		}
 		var finish func(error)
 		req, finish = traceSiteTransfer(req, "site synchronization transfer failed", true)
 		defer func() { finish(err) }()
@@ -117,6 +120,19 @@ func (m *Manager) postSite(ctx context.Context, client *http.Client, path string
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return stats, &siteHTTPError{path: path, status: resp.StatusCode}
+	}
+	if page, ok := output.(*SyncResponse); ok && input.catalog != "" {
+		root := resp.Header.Get(catalogHeader)
+		if root == "=" {
+			root = input.catalog
+		}
+		if !validCatalogDigest(root) {
+			root = ""
+		}
+		page.catalog = root
+		if input.observeCatalog != nil {
+			input.observeCatalog(root)
+		}
 	}
 	wire := &countingReader{r: io.LimitReader(resp.Body, maxSyncBody+1)}
 	var reader io.Reader = wire

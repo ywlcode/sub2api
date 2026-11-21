@@ -29,16 +29,24 @@ const maxSyncBody = 32 << 20
 
 type lease struct {
 	expires time.Time // monotonic; never persisted or resurrected after restart
+	catalog *catalogSnapshot
 }
 type peerSnapshot struct {
 	mu       sync.Mutex
 	version  string
 	snapshot Snapshot
+	catalog  catalogGrant // protected by Manager.catalog.mu
 }
 
 type Manager struct {
-	forwardPool      *forwardEgressPool
-	LoadPeerEgress   func(context.Context, string) (EgressSettings, error)
+	forwardPool    *forwardEgressPool
+	LoadPeerEgress func(context.Context, string) (EgressSettings, error)
+	// LoadCatalog reads local/cached data only. Set these hooks before serving.
+	LoadCatalog      func(context.Context) (map[int64]CatalogGroup, error)
+	AllowDiscovery   func(context.Context) bool // optional live veto; never cached
+	catalog          catalogControl
+	catalogCache     catalogBlobCache
+	catalogClient    *http.Client
 	cfg              Config
 	store            Store
 	syncClients      [syncConnectionPools]*http.Client
@@ -99,10 +107,12 @@ func New(cfg Config, store Store, maxBody int64) (*Manager, error) {
 		m.syncClients[i] = &http.Client{Transport: newSiteControlTransport(transport), CheckRedirect: noRedirect}
 	}
 	m.deliveryClient = &http.Client{Transport: newSiteControlTransport(transport), CheckRedirect: noRedirect}
+	m.catalog.init()
 	for _, p := range cfg.Peers {
 		m.peers[p.ID] = &peerSnapshot{}
 	}
 	if cfg.EffectiveMode() == Secondary {
+		m.catalogClient = &http.Client{Transport: newSiteControlTransport(transport), CheckRedirect: noRedirect}
 		newForward := func(proxy *url.URL) (*http.Transport, error) {
 			tr := transport.Clone()
 			tr.Proxy = defaultTransport.Proxy // preserve previous behavior only for unconfigured nodes
@@ -164,6 +174,11 @@ func (m *Manager) Stop() {
 	}
 	m.wg.Wait()
 	m.current.Store(nil)
+	m.catalog.stop()
+	m.catalogCache = catalogBlobCache{}
+	if m.catalogClient != nil {
+		m.catalogClient.CloseIdleConnections()
+	}
 	for _, client := range m.syncClients {
 		if client != nil {
 			client.CloseIdleConnections()
@@ -182,10 +197,39 @@ func (m *Manager) Ready() bool {
 	return l != nil && m.now().Before(l.expires)
 }
 
-func (m *Manager) syncOnce(parent context.Context) error {
+func (m *Manager) syncOnce(parent context.Context) (err error) {
 	m.deliveryGate.Lock()
 	defer m.deliveryGate.Unlock()
 	wallStarted, started := time.Now(), m.now()
+	if !started.Before(m.catalogCache.expires) {
+		m.catalogCache = catalogBlobCache{}
+	}
+	priorLease := m.current.Load()
+	var previous *catalogSnapshot
+	if priorLease != nil {
+		previous = priorLease.catalog
+	}
+	withdraw := func() {
+		if previous == nil {
+			return
+		}
+		m.hideCatalog()
+		d := previous.download
+		if contents := d.ready.Load(); contents != nil && started.Before(priorLease.expires) {
+			m.catalogCache = catalogBlobCache{m.primaryID, d.replica, priorLease.expires, contents.blobs}
+		}
+		d.cancel()
+		previous = nil
+	}
+	if previous != nil && !started.Before(priorLease.expires) {
+		withdraw()
+	}
+	keepOnTransportFailure := false
+	defer func() {
+		if err != nil && !keepOnTransportFailure {
+			withdraw()
+		}
+	}()
 	// Initial paged bootstrap has a larger request budget. Page fetches never
 	// extend the request-start lease, and serving stays closed until installation.
 	timeout := syncAttemptsPerRound * syncAttemptTimeout
@@ -205,7 +249,6 @@ func (m *Manager) syncOnce(parent context.Context) error {
 		}
 	}
 	var ids []int64
-	var err error
 	var digests map[int64]string
 	replicaID := ""
 	if store, ok := m.store.(ReceiptStore); ok {
@@ -222,7 +265,22 @@ func (m *Manager) syncOnce(parent context.Context) error {
 	if err != nil {
 		return err
 	}
+	if previous != nil && previous.download.replica != replicaID {
+		withdraw()
+	}
+	if m.catalogCache.replica != replicaID {
+		m.catalogCache = catalogBlobCache{}
+	}
 	input := SyncRequest{WantEgress: true, Protocol: ProtocolVersion, NodeID: m.cfg.ID, ReplicaID: replicaID, PendingDigests: digests, Version: m.version, Schema: m.store.Schema(), PendingIDs: ids}
+	input.catalog = "-"
+	if previous != nil {
+		input.catalog = previous.download.root
+		input.observeCatalog = func(root string) {
+			if previous != nil && root != previous.download.root {
+				withdraw()
+			}
+		}
+	}
 	if _, modern := m.store.(DeliveryStore); !modern {
 		input.Events, err = m.store.Pending(ctx, 128)
 		if err != nil {
@@ -235,13 +293,23 @@ func (m *Manager) syncOnce(parent context.Context) error {
 		var page SyncResponse
 		transfer, e := m.postSync(ctx, &input, &page)
 		if e != nil {
+			// No new authoritative information: an already complete publication
+			// may ride out a broken connection on its original lease. A page or
+			// response header that already withdrew it always wins.
+			keepOnTransportFailure = retryableSiteSyncError(e) && previous != nil && previous.download.ready.Load() != nil && m.current.Load() == priorLease
 			return e
 		}
 		if page.Protocol != ProtocolVersion || page.NodeID != m.cfg.ID || page.Schema != m.store.Schema() || page.Version == "" || page.PrimaryID == "" || (!page.Full && page.BaseVersion != m.version) {
 			return errors.New("invalid site synchronization response")
 		}
 		if m.primaryID != "" && page.PrimaryID != m.primaryID {
+			withdraw()
+			m.catalogCache = catalogBlobCache{}
 			return errors.New("primary identity changed")
+		}
+		if previous != nil && (page.Full || page.Version != m.version || page.catalog != previous.download.root) {
+			// Withdraw before Install can commit or invalidate auth caches.
+			m.hideCatalog()
 		}
 		if input.Cursor == "" {
 			output = page
@@ -256,6 +324,7 @@ func (m *Manager) syncOnce(parent context.Context) error {
 		stats.DownloadJSONBytes += transfer.downloadJSON
 		stats.DownloadWireBytes += transfer.downloadWire
 		if page.Cursor == "" {
+			output.catalog = page.catalog
 			break
 		}
 		if page.Cursor == input.Cursor {
@@ -310,7 +379,12 @@ func (m *Manager) syncOnce(parent context.Context) error {
 		m.current.Store(nil)
 		return errors.New("bootstrap installed; fresh delta required before serving")
 	}
-	m.current.Store(&lease{expires: started.Add(ReplicaTTL)})
+	view := m.catalogView(previous, output.catalog, replicaID, !output.Full && input.Version == output.Version)
+	if view != nil && view.download.ready.Load() != nil {
+		m.catalogCache = catalogBlobCache{} // a later withdrawal will retain this newer generation
+	}
+	m.current.Store(&lease{expires: started.Add(ReplicaTTL), catalog: view})
+	m.pullCatalog(view)
 	stats.CompletedAt = time.Now().UTC()
 	stats.DurationMS = time.Since(wallStarted).Milliseconds()
 	stats.Full = output.Full
@@ -323,6 +397,10 @@ func (m *Manager) syncOnce(parent context.Context) error {
 func (m *Manager) SyncHandler(c *gin.Context) {
 	peer := m.peer(c)
 	if peer == nil {
+		return
+	}
+	if c.Request.URL.RawQuery == catalogQuery {
+		m.serveCatalog(c, peer)
 		return
 	}
 	var input SyncRequest
@@ -356,7 +434,9 @@ func (m *Manager) SyncHandler(c *gin.Context) {
 			c.AbortWithStatus(http.StatusServiceUnavailable)
 			return
 		}
-		encodeSiteResponse(c, SyncResponse{Egress: egress, Protocol: ProtocolVersion, PrimaryID: m.cfg.ID, NodeID: peer.ID, BaseVersion: input.Version, Version: snapshot.Version, Schema: snapshot.Schema, Full: snapshot.Full, Rows: snapshot.Rows, Acknowledged: snapshot.Acknowledged, ReceiptDigests: snapshot.ReceiptDigests, Rejected: snapshot.Rejected, Cursor: snapshot.Cursor})
+		output := SyncResponse{Egress: egress, Protocol: ProtocolVersion, PrimaryID: m.cfg.ID, NodeID: peer.ID, BaseVersion: input.Version, Version: snapshot.Version, Schema: snapshot.Schema, Full: snapshot.Full, Rows: snapshot.Rows, Acknowledged: snapshot.Acknowledged, ReceiptDigests: snapshot.ReceiptDigests, Rejected: snapshot.Rejected, Cursor: snapshot.Cursor}
+		m.advertiseCatalog(c, peer, &input, &output)
+		encodeSiteResponse(c, output)
 		return
 	}
 	state := m.peers[peer.ID]
@@ -381,23 +461,8 @@ func (m *Manager) SyncHandler(c *gin.Context) {
 	output.Acknowledged = snapshot.Acknowledged
 	state.version = version
 	state.snapshot = snapshot
-	raw, err := json.Marshal(output)
-	if err != nil {
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-	if len(raw) > maxSyncBody {
-		c.AbortWithStatus(http.StatusRequestEntityTooLarge)
-		return
-	}
-	packed, err := compress(raw)
-	if err != nil {
-		c.AbortWithStatus(http.StatusInternalServerError)
-		return
-	}
-	c.Header("Content-Encoding", "gzip")
-	c.Header("Cache-Control", "no-store")
-	c.Data(http.StatusOK, "application/json", packed)
+	m.advertiseCatalog(c, peer, &input, &output)
+	encodeSiteResponse(c, output)
 }
 
 func (m *Manager) Ingress() gin.HandlerFunc {
@@ -423,6 +488,9 @@ func (m *Manager) Ingress() gin.HandlerFunc {
 		if strings.EqualFold(c.GetHeader("Upgrade"), "websocket") {
 			m.proxy.ServeHTTP(c.Writer, c.Request)
 			c.Abort()
+			return
+		}
+		if m.enterDiscovery(c) {
 			return
 		}
 		bodyLimit := m.maxBody

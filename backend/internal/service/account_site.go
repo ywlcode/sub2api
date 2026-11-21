@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"strings"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -74,6 +76,48 @@ func NewSiteModelRouter(accounts []Account, routes []CompositeModelRoute, groups
 		r.keys[key.Key] = key
 	}
 	return r
+}
+
+// CanServeSiteDiscovery is only a routing hint. A key with a shared concurrency
+// slot or an IP ACL must be checked where that slot/client IP was enforced.
+func (k *APIKey) CanServeSiteDiscovery() bool {
+	return k != nil && k.ConcurrencyLimit == 0 && len(k.IPWhitelist) == 0 && len(k.IPBlacklist) == 0
+}
+
+func (r *SiteModelRouter) HasDiscoveryKey(digest string) bool {
+	if r == nil {
+		return false
+	}
+	k, ok := r.keys[digest]
+	if !ok || !k.CanServeSiteDiscovery() || k.GroupID == nil {
+		return false
+	}
+	for _, id := range k.ConfiguredGroupIDs() {
+		if _, present := r.groups[id]; !present {
+			return false
+		}
+	}
+	return true
+}
+
+// SiteCatalogGroupPolicy binds public catalog bytes to the group configuration
+// that shaped them. An independently refreshed catalog is unusable after a
+// whitelist/platform/pinned-source change until both snapshots agree.
+func SiteCatalogGroupPolicy(g *Group) []byte {
+	if g == nil {
+		return nil
+	}
+	fields := struct {
+		Platform  string
+		Allowlist GroupModelAllowlist
+		Manifest  GroupCodexModelsManifestConfig
+	}{g.Platform, g.ModelAllowlist, g.CodexModelsManifestConfig}
+	raw, err := json.Marshal(fields)
+	if err != nil {
+		return nil
+	}
+	sum := sha256.Sum256(raw)
+	return sum[:]
 }
 
 func (r *SiteModelRouter) Match(keyDigest, model, endpoint string) bool {

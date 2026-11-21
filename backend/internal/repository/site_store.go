@@ -701,15 +701,19 @@ func (s *SiteStore) refreshModelRouter(ctx context.Context) error {
 			groups = append(groups, service.Group{ID: g.ID, Platform: g.Platform, Status: g.Status})
 		case "api_keys":
 			var k struct {
-				ID           int64
-				Key          string
-				GroupID      *int64            `json:"group_id"`
-				ModelMapping map[string]string `json:"model_mapping"`
+				ID               int64
+				Key              string
+				GroupID          *int64            `json:"group_id"`
+				ModelMapping     map[string]string `json:"model_mapping"`
+				ConcurrencyLimit int               `json:"concurrency_limit"`
+				IPWhitelist      []string          `json:"ip_whitelist"`
+				IPBlacklist      []string          `json:"ip_blacklist"`
 			}
 			if err := json.Unmarshal(raw, &k); err != nil {
 				return err
 			}
-			keys = append(keys, service.APIKey{ID: k.ID, Key: k.Key, GroupID: k.GroupID, ModelMapping: k.ModelMapping})
+			keys = append(keys, service.APIKey{ID: k.ID, Key: k.Key, GroupID: k.GroupID, ModelMapping: k.ModelMapping,
+				ConcurrencyLimit: k.ConcurrencyLimit, IPWhitelist: k.IPWhitelist, IPBlacklist: k.IPBlacklist})
 		case "api_key_groups":
 			var g struct {
 				KeyID   int64 `json:"api_key_id"`
@@ -739,4 +743,9 @@ func (s *SiteStore) refreshModelRouter(ctx context.Context) error {
 
 func (s *SiteStore) MatchLocalModel(key, model, endpoint string) bool {
 	return s.modelRouter.Load().Match(site.KeyDigest(s.cfg.Token, key), model, endpoint)
+}
+
+func (s *SiteStore) HasDiscoveryKey(key string) bool {
+	return len(key) > 0 && len(key) <= service.MaxAPIKeyCredentialBytes &&
+		s.modelRouter.Load().HasDiscoveryKey(site.KeyDigest(s.cfg.Token, key))
 }

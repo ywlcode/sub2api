@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -13,24 +15,44 @@ import (
 )
 
 func (h *GatewayHandler) multiGroupModels(c *gin.Context, groups []*service.APIKey) {
+	models, err := mergeModelCatalogs(groups, func(key *service.APIKey) ([]json.RawMessage, error) {
+		return h.groupModelCatalog(c, key)
+	})
+	if errors.Is(err, errInvalidModelCatalogEntry) {
+		writeOpenAIModelsError(c, http.StatusBadGateway, "upstream_error", "Invalid model catalogue entry")
+		return
+	}
+	if err != nil {
+		writeOpenAIModelsError(c, http.StatusServiceUnavailable, "api_error", "Model discovery is temporarily unavailable")
+		return
+	}
+	c.JSON(http.StatusOK, modelsListEnvelope(models))
+}
+
+var errInvalidModelCatalogEntry = errors.New("invalid model catalogue entry")
+
+func mergeModelCatalogs(groups []*service.APIKey, read func(*service.APIKey) ([]json.RawMessage, error)) ([]json.RawMessage, error) {
+	for _, key := range groups {
+		if key == nil || key.Group == nil {
+			return nil, errors.New("missing model listing group")
+		}
+	}
 	// Copy before sorting: the authorization context and cached auth objects are
 	// read-only. Lowest group ID wins duplicate metadata, independently of price.
 	groups = append([]*service.APIKey(nil), groups...)
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Group.ID < groups[j].Group.ID })
 	entries := make(map[string]json.RawMessage)
 	for _, key := range groups {
-		catalog, err := h.groupModelCatalog(c, key)
+		catalog, err := read(key)
 		if err != nil {
-			writeOpenAIModelsError(c, http.StatusServiceUnavailable, "api_error", "Model discovery is temporarily unavailable")
-			return
+			return nil, err
 		}
 		for _, raw := range catalog {
 			var entry struct {
 				ID string `json:"id"`
 			}
 			if json.Unmarshal(raw, &entry) != nil || strings.TrimSpace(entry.ID) == "" {
-				writeOpenAIModelsError(c, http.StatusBadGateway, "upstream_error", "Invalid model catalogue entry")
-				return
+				return nil, errInvalidModelCatalogEntry
 			}
 			if !service.UserGroupDeniesModel(key.DeniedModelsInGroup(), entry.ID) {
 				if _, exists := entries[entry.ID]; !exists {
@@ -50,7 +72,7 @@ func (h *GatewayHandler) multiGroupModels(c *gin.Context, groups []*service.APIK
 	}
 	// Per-group deny filtering has already run. Applying the representative
 	// group's deny list here would hide models authorized through another group.
-	c.JSON(http.StatusOK, gin.H{"object": "list", "data": models})
+	return models, nil
 }
 
 func (h *GatewayHandler) groupModelCatalog(c *gin.Context, key *service.APIKey) ([]json.RawMessage, error) {
@@ -59,7 +81,7 @@ func (h *GatewayHandler) groupModelCatalog(c *gin.Context, key *service.APIKey) 
 	if forced, ok := middleware.GetForcePlatformFromContext(c); ok && strings.TrimSpace(forced) != "" {
 		platform = forced
 	}
-	if platform == service.PlatformOpenAI && group.Platform == service.PlatformOpenAI && group.CodexModelsManifestConfig.Enabled {
+	if platform == service.PlatformOpenAI && usesPinnedModelCatalog(group) {
 		if h.openAIGatewayService == nil {
 			return nil, fmt.Errorf("pinned model discovery is unavailable")
 		}
@@ -75,18 +97,31 @@ func (h *GatewayHandler) groupModelCatalog(c *gin.Context, key *service.APIKey) 
 		}
 		return catalog.Data, nil
 	}
-	ids, err := h.gatewayService.GetGroupModelCatalog(c.Request.Context(), group.ID, platform)
+	body, err := h.generatedUnionCatalog(c.Request.Context(), group, platform)
+	if err != nil {
+		return nil, err
+	}
+	return decodeUnionCatalog(body)
+}
+
+func (h *GatewayHandler) generatedUnionCatalog(ctx context.Context, group *service.Group, platform string) ([]byte, error) {
+	ids, err := h.gatewayService.GetGroupModelCatalog(ctx, group.ID, platform)
 	if err != nil {
 		return nil, err
 	}
 	if group.ModelAllowlistEnabled() {
 		ids = group.ModelAllowlist.FilterForListing(ids)
 	}
-	body, err := json.Marshal(modelsListEntries(platform, ids))
-	if err != nil {
+	return json.Marshal(modelsListEntries(platform, ids))
+}
+
+func decodeUnionCatalog(body []byte) ([]json.RawMessage, error) {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(body, &entries); err != nil {
 		return nil, err
 	}
-	var entries []json.RawMessage
-	err = json.Unmarshal(body, &entries)
-	return entries, err
+	if entries == nil {
+		return nil, errors.New("missing model catalogue entries")
+	}
+	return entries, nil
 }
