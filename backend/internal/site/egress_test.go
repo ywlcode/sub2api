@@ -35,17 +35,17 @@ func TestRoleEgressRotationAndControlRecovery(t *testing.T) {
 		require.NoError(t, err)
 		res, err := c.Do(req)
 		require.NoError(t, err)
-		defer res.Body.Close()
+		defer func() { _ = res.Body.Close() }()
 		b, err := io.ReadAll(res.Body)
 		require.NoError(t, err)
 		return string(b)
 	}
-	for _, c := range []*http.Client{m.syncClients[0], m.deliveryClient, {Transport: m.proxy.Transport}} {
+	for _, c := range []*http.Client{m.syncClients[0], m.deliveryClient, m.catalogClient, {Transport: m.proxy.Transport}} {
 		require.Equal(t, "one", read(c, context.Background()))
 	}
 	require.Equal(t, two.URL, m.cfg.Egress.Processing(""))
 	require.NoError(t, m.cfg.Egress.Apply(EgressSettings{Forward: two.URL, Processing: one.URL}))
-	for _, c := range []*http.Client{m.syncClients[0], m.deliveryClient, {Transport: m.proxy.Transport}} {
+	for _, c := range []*http.Client{m.syncClients[0], m.deliveryClient, m.catalogClient, {Transport: m.proxy.Transport}} {
 		require.Equal(t, "two", read(c, context.Background()))
 	}
 	require.Equal(t, one.URL, m.cfg.Egress.Processing(""))
@@ -83,25 +83,25 @@ func TestForwardProxyRotationKeepsLiveHTTP2Stream(t *testing.T) {
 		count := new(atomic.Int32)
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method != "CONNECT" {
-				http.Error(w, "CONNECT only", 405)
+				http.Error(w, "CONNECT only", http.StatusMethodNotAllowed)
 				return
 			}
 			dst, err := net.Dial("tcp", origin.Listener.Addr().String())
 			if err != nil {
-				http.Error(w, "dial", 502)
+				http.Error(w, "dial", http.StatusBadGateway)
 				return
 			}
 			conn, buf, err := http.NewResponseController(w).Hijack()
 			if err != nil {
-				dst.Close()
+				_ = dst.Close()
 				return
 			}
 			count.Add(1)
 			_, _ = buf.WriteString("HTTP/1.1 200 OK\r\n\r\n")
 			_ = buf.Flush()
-			go func() { _, _ = io.Copy(dst, conn); dst.Close() }()
+			go func() { _, _ = io.Copy(dst, conn); _ = dst.Close() }()
 			_, _ = io.Copy(conn, dst)
-			conn.Close()
+			_ = conn.Close()
 		})), count
 	}
 	a, na := tunnel()
@@ -111,7 +111,9 @@ func TestForwardProxyRotationKeepsLiveHTTP2Stream(t *testing.T) {
 	m, err := New(Config{Mode: Secondary, ID: "office", Token: strings.Repeat("x", 32), PrimaryURL: origin.URL, ForwardProxyURL: a.URL}, &deliveryTestStore{}, 1<<20)
 	require.NoError(t, err)
 	defer m.Stop()
-	roots := origin.Client().Transport.(*http.Transport).TLSClientConfig.RootCAs
+	originTransport, ok := origin.Client().Transport.(*http.Transport)
+	require.True(t, ok)
+	roots := originTransport.TLSClientConfig.RootCAs
 	m.forwardTransport.TLSClientConfig.RootCAs = roots
 	build := m.forwardPool.build
 	m.forwardPool.build = func(u *url.URL) (*http.Transport, error) {
@@ -124,12 +126,12 @@ func TestForwardProxyRotationKeepsLiveHTTP2Stream(t *testing.T) {
 	c := &http.Client{Transport: m.proxy.Transport, Timeout: 10 * time.Second}
 	stream, err := c.Get(origin.URL + "/stream")
 	require.NoError(t, err)
-	defer stream.Body.Close()
+	defer func() { _ = stream.Body.Close() }()
 	require.NoError(t, m.cfg.Egress.Apply(EgressSettings{Forward: b.URL}))
 	resp, err := c.Get(origin.URL + "/next")
 	require.NoError(t, err)
 	_, err = io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
+	require.NoError(t, resp.Body.Close())
 	require.NoError(t, err)
 	require.EqualValues(t, 1, na.Load())
 	require.EqualValues(t, 1, nb.Load())

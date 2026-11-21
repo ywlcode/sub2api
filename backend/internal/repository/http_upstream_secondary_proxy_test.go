@@ -23,7 +23,7 @@ func TestSecondaryProcessingProxyAllProviders(t *testing.T) {
 		res, err := client.Do(req, "http://127.0.0.1:2", 19, 2)
 		require.NoError(t, err)
 		data, err := io.ReadAll(res.Body)
-		res.Body.Close()
+		require.NoError(t, res.Body.Close())
 		require.NoError(t, err)
 		require.Equal(t, dest, string(data))
 	}
