@@ -65,7 +65,7 @@ func TestOpenAIResponsesCodexPageContextReachesUpstream(t *testing.T) {
 				w := httptest.NewRecorder()
 				c, _ := gin.CreateTestContext(w)
 				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(
-					fmt.Sprintf(`{"model":%q,"stream":%t,"input":[%s,{"role":"user","content":"hello"}]}`, model, stream, codexPageContextInput)))
+					fmt.Sprintf(`{"model":%q,"stream":%t,"input":[%s,{"type":"function_call_output","namespace":"agent","name":"ide_context","output":"selection"},{"role":"user","content":"hello"}]}`, model, stream, codexPageContextInput)))
 				c.Request.Header.Set("Content-Type", "application/json")
 				groupID := int64(3132)
 				c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
@@ -81,6 +81,8 @@ func TestOpenAIResponsesCodexPageContextReachesUpstream(t *testing.T) {
 				require.Equal(t, "user", gjson.GetBytes(upstream.body, "input.0.role").String())
 				require.Equal(t, `{"page_id":null}`, gjson.GetBytes(upstream.body, "input.0.content.1.text").String())
 				require.Equal(t, "Companion Page snapshot part 1 of 1:\n{\"page_id\":null,\"document_view\":null}", gjson.GetBytes(upstream.body, "input.1.content.1.text").String())
+				require.Equal(t, "user", gjson.GetBytes(upstream.body, "input.2.role").String())
+				require.Equal(t, "<external_ide_context>selection</external_ide_context>", gjson.GetBytes(upstream.body, "input.2.content.0.text").String())
 				require.False(t, gjson.GetBytes(upstream.body, `input.#(type=="function_call_output")`).Exists())
 				require.Contains(t, w.Body.String(), "resp_page_context")
 			})

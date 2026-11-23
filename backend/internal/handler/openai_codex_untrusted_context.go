@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -10,12 +11,17 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-// Codex Desktop injects Companion Page context as agent function_call_output
-// items without a corresponding model call. Preserve their text as user context
-// before ordinary tool-output validation, including when replaying tool history.
-// Unrecognized outputs and items carrying a call identity remain untouched.
+var codexAdditionalContextNames = []string{
+	"browser_info", "browser_tabs", "goal_objective", "ide_context",
+	"proposed_plan", "untrusted_content", "untrusted_context",
+}
+
+var codexContextCandidateNames = append([]string{"codex_apps_open_page", "codex_apps_selected_page_part_"}, codexAdditionalContextNames...)
+
+// Codex Desktop and IDE clients send standalone text context as tool output.
+// Only recognized context without a tool call identity is converted to user input.
 func normalizeCodexUntrustedContext(body []byte) ([]byte, bool) {
-	if !mayContainCodexCallOutputCandidate(body, "codex_apps_open_page", "codex_apps_selected_page_part_", "browser_info", "goal_objective", "untrusted_context") {
+	if !mayContainCodexCallOutputCandidate(body, codexContextCandidateNames...) {
 		return body, false
 	}
 	input := gjson.GetBytes(body, "input")
@@ -38,10 +44,10 @@ func normalizeCodexUntrustedContext(body []byte) ([]byte, bool) {
 			return true
 		}
 		name, output := item.Get("name").String(), item.Get("output").String()
-		text := "<external_" + name + ">\n" + output + "\n</external_" + name + ">"
-		if name == "browser_info" || name == "goal_objective" || name == "untrusted_context" {
-			text = "<external_" + name + ">" + output + "</external_" + name + ">"
+		if !slices.Contains(codexAdditionalContextNames, name) {
+			output = "\n" + output + "\n"
 		}
+		text := "<external_" + name + ">" + output + "</external_" + name + ">"
 		message, err := json.Marshal(map[string]any{
 			"type": "message",
 			"role": "user",
@@ -84,7 +90,7 @@ func isCodexContext(item gjson.Result) bool {
 		return false
 	}
 	name := item.Get("name").String()
-	if name == "browser_info" || name == "goal_objective" || name == "untrusted_context" {
+	if slices.Contains(codexAdditionalContextNames, name) {
 		return strings.TrimSpace(output.String()) != ""
 	}
 	if name == "codex_apps_open_page" {
