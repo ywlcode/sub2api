@@ -2,6 +2,8 @@
 
 This directory contains files for deploying Sub2API on Linux servers and Apple-silicon Macs.
 
+主站和独立站各自生成 Excel 并按月发给运维邮箱，安装与对账口径见[使用月报](monthly-usage/README.md)。
+
 网页注册额度、登录失败封禁及可信代理升级要求见 [网页认证 IP 防护](AUTH_IP_GUARD.md)。
 
 全量与定时精简备份的保留范围、计费恢复保障和测试方式见 [数据库备份](BACKUP.md)。

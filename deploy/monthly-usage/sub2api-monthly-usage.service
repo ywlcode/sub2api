@@ -1,0 +1,19 @@
+[Unit]
+Description=Mail previous calendar month's aggregated Sub2API usage
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -B /opt/sub2api-monthly-usage/report.py scheduled
+StateDirectory=sub2api-monthly-usage
+StateDirectoryMode=0700
+UMask=0077
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+TimeoutStartSec=45min
+Restart=on-failure
+RestartSec=1h
+RestartPreventExitStatus=78
