@@ -2,6 +2,7 @@
 
 import csv
 import io
+import json
 from decimal import Decimal
 from pathlib import Path
 import subprocess
@@ -39,11 +40,12 @@ class MonthlyUsageSQL(unittest.TestCase):
             "007_add_user_allowed_groups.sql", "012_add_user_subscription_soft_delete.sql",
             "014_drop_legacy_allowed_groups.sql", "018_user_attributes.sql", "075_add_usage_log_upstream_model.sql",
             "077_add_usage_log_requested_model.sql", "089_usage_log_image_output_tokens.sql",
-            "179_usage_log_image_input_tokens.sql",
+            "179_usage_log_image_input_tokens.sql", "181_prompt_audit.sql", "293_security_penalties.sql",
         ]
-        setup = [MIGRATIONS / name for name in migrations] + [HERE / "test_sql_fixture.sql"]
         subprocess.run([*cls.psql, "-f", "-"], check=True,
-                       input=b"\n".join(path.read_bytes() for path in setup))
+                       input=b"\n".join((MIGRATIONS / name).read_bytes() for name in migrations))
+        subprocess.run([*cls.psql, "-c", "CREATE DATABASE empty_report TEMPLATE postgres"], check=True)
+        subprocess.run([*cls.psql, "-f", "-"], check=True, input=(HERE / "test_sql_fixture.sql").read_bytes())
         subprocess.run([*cls.psql, "-c", "ALTER DATABASE postgres SET timezone = 'America/Los_Angeles'",
                         "-c", "ALTER DATABASE postgres SET datestyle = 'SQL, DMY'"], check=True)
 
@@ -79,6 +81,59 @@ class MonthlyUsageSQL(unittest.TestCase):
 
     def test_empty_month(self):
         self.assertEqual(self.export("2024-04-01"), [HEADER])
+
+    def headcounts(self, month, database="postgres", setup=None):
+        if setup:
+            # 在单独的可回滚事务中改变策略，再以报表读者执行同一查询。
+            args = ["-c", "BEGIN", "-c", setup, "-c", "SET LOCAL ROLE report_reader"]
+        else:
+            args = ["-U", "postgres" if database == "empty_report" else "report_reader",
+                    "-c", "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"]
+        raw = subprocess.check_output([*self.psql, "-At", "-v", f"month={month}", "-d", database,
+                                       *args, "-f", "-", "-c", "ROLLBACK"],
+                                      input=(HERE / "headcounts.sql").read_bytes())
+        self.assertTrue(raw.endswith(b"\n"))
+        self.assertEqual(raw.count(b"\n"), 1)
+        counts = json.loads(raw)
+        self.assertIsInstance(counts, dict)
+        self.assertTrue(all(type(n) is int and n > 0 for n in counts.values()))
+        return counts
+
+    def test_department_headcounts(self):
+        expected = {"公司/研发": 1, "运维": 4, '仅注册"部门"\n二组': 1, "": 1, "处罚到期": 1, "会话限制": 1}
+        self.assertEqual(self.headcounts("2024-02-01"), expected)
+        self.assertEqual(self.headcounts("2024-03-01"), {**expected, "三月新增": 1})
+
+    def test_empty_database_headcounts(self):
+        self.assertEqual(self.headcounts("2024-02-01", database="empty_report"), {})
+
+    def test_inactive_user_block_policy(self):
+        for update in [
+            "UPDATE settings SET value='false' WHERE key='risk_control_enabled'",
+            """UPDATE settings SET value='{"enabled":false,"observe_only":false,"policy":"user_block"}'
+               WHERE key='security_penalty_config'""",
+            """UPDATE settings SET value='{"enabled":true,"observe_only":true,"policy":"user_block"}'
+               WHERE key='security_penalty_config'""",
+            """UPDATE settings SET value='{"enabled":true,"observe_only":false,"policy":"session_block"}'
+               WHERE key='security_penalty_config'""",
+        ]:
+            with self.subTest(update=update):
+                counts = self.headcounts("2024-02-01", setup=update)
+                self.assertEqual(counts["网关封禁"], 1)
+                self.assertEqual(counts["会话限制"], 1)
+
+    def test_both_exports_share_read_only_transaction(self):
+        month = "2024-02-01"
+        script = b"\n".join([b"BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;",
+                             (HERE / "usage.sql").read_bytes(), (HERE / "headcounts.sql").read_bytes(),
+                             b"COMMIT;"])
+        raw = subprocess.check_output([*self.psql, "-At", "-U", "report_reader", "-d", "postgres",
+                                       "-v", f"month={month}", "-f", "-"], input=script)
+        csv_body, json_line, end = raw.rsplit(b"\n", 2)
+        self.assertEqual(end, b"")
+        rows = list(csv.reader(io.StringIO(csv_body.decode(), newline=""), strict=True))
+        self.assertEqual(rows, self.export(month))
+        self.assertEqual(json.loads(json_line), self.headcounts(month))
 
 
 if __name__ == "__main__":

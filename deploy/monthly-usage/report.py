@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import smtplib
 import ssl
 import subprocess
@@ -87,10 +88,16 @@ def render(state, site, month, revision=None):
     with tempfile.TemporaryDirectory(prefix=".build-", dir=state) as tmp:
         tmp = Path(tmp)
         src = tmp / "usage.csv"
-        with src.open("wb") as f:
-            db((HERE / "usage.sql").read_text(), month, f)
+        # The first result is one JSON line (IDs are not exported); the rest is COPY CSV.
+        sql = "\n".join(("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;",
+                         (HERE / "headcounts.sql").read_text(), (HERE / "usage.sql").read_text(), "COMMIT;"))
+        with tempfile.TemporaryFile(dir=tmp) as snapshot, src.open("wb") as f:
+            db(sql, month, snapshot)
+            snapshot.seek(0)
+            registered = json.loads(snapshot.readline())
+            shutil.copyfileobj(snapshot, f)
         xlsx = tmp / "out.xlsx"
-        summary = build_workbook(xlsx, month, {site: src})[site]
+        summary = build_workbook(xlsx, month, {site: src}, registered=registered)[site]
         with xlsx.open("rb") as f:
             os.fsync(f.fileno())
         os.replace(xlsx, filename)
@@ -133,6 +140,8 @@ def deliver(state, site, month, recipient, smtp_factory=None, *, revision=None, 
     msg["Date"], msg["Message-ID"] = formatdate(localtime=False), make_msgid(domain=sender.rsplit('@', 1)[1])
     msg.set_content(f"{SITE[site]} {site} · {month}（北京时间）{version}。附件含明细、部门月汇总、用户月汇总。 "
                     "三张表均来自可归属用户的用量日志。总 Token 含未单列的缓存创建量；费用为用户扣费的美元等值（含订阅用量）。"
+                    "部门 Token 用 B（十亿）、用户 Token 用 M（百万）；两张汇总表按部门或用户合计后舍去美元小数。"
+                    "注册人数含截至月底已注册的零请求用户；部门、启用、删除及整账号封禁均按本次导出时状态判断。"
                     + ("\n" + note if note else ""))
     msg.add_attachment(path.read_bytes(), maintype="application",
                        subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=path.name)

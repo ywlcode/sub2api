@@ -22,11 +22,15 @@ except ImportError:
 
 HEADER = ("usage_day,user_id,username,profile_name,department,used_groups,model,"
           "requests,input_tokens,output_tokens,cache_read_tokens,total_tokens,actual_cost").split(",")
-METRICS = ["请求数", "输入 Token", "输出 Token", "缓存读取 Token", "总 Token", "用户扣费（美元）"]
+TOKENS = ["输入 Token", "输出 Token", "缓存读取 Token", "总 Token"]
+COST = "用户扣费（美元）"
+METRICS = ["请求数", *TOKENS, COST]
 SHEETS = ["明细", "部门月汇总", "用户月汇总"]
 DETAIL = ["站点", "用量日期", "用户 ID", "用户名", "当前真实姓名", "当前所属部门", "使用分组", "模型", *METRICS]
-DEPARTMENTS = ["站点", "当前所属部门", "活跃用户数", *METRICS]
-USERS = ["站点", "用户 ID", "用户名", "当前真实姓名", "当前所属部门", *METRICS]
+DEPARTMENTS = ["站点", "当前所属部门", "注册且未被封禁人数", "活跃用户数", "请求数",
+               *(f"{label} (B)" for label in TOKENS), COST]
+USERS = ["站点", "用户 ID", "用户名", "当前真实姓名", "当前所属部门", "请求数",
+         *(f"{label} (M)" for label in TOKENS), COST]
 MONTH = "2024-02"
 SITE = "测试站"
 USER_ID = "0001234567890123456789"
@@ -58,17 +62,43 @@ class WorkbookTest(unittest.TestCase):
                 writer.writerow(HEADER)
             writer.writerows(rows)
 
-    def build(self):
-        return workbook.build_workbook(self.xlsx, MONTH, {SITE: self.src})
+    def build(self, registered=None):
+        return workbook.build_workbook(self.xlsx, MONTH, {SITE: self.src},
+                                       registered={} if registered is None else registered)
+
+    def worksheet(self, sheet):
+        with ZipFile(self.xlsx) as archive:
+            return ET.fromstring(archive.read(f"xl/worksheets/sheet{sheet}.xml"))
 
     def cells(self, sheet):
-        with ZipFile(self.xlsx) as archive:
-            document = ET.fromstring(archive.read(f"xl/worksheets/sheet{sheet}.xml"))
+        document = self.worksheet(sheet)
         return [[(cell.get("t", "n"), cell.findtext(f"{NS}is/{NS}t", cell.findtext(f"{NS}v")))
                  for cell in row] for row in document.iter(f"{NS}row")]
 
     def values(self, sheet):
         return [[value for _, value in row] for row in self.cells(sheet)]
+
+    def metric_rows(self, sheet):
+        # Compare the six metrics at the precision a spreadsheet reader can recover.
+        # An exact text cell is valid for values beyond Excel's numeric precision.
+        rows = []
+        for row in self.cells(sheet)[1:]:
+            labels = [value for _, value in row[:-6]]
+            metrics = [Decimal(str(float(value))) if kind == "n" else Decimal(value)
+                       for kind, value in row[-6:]]
+            rows.append([*labels, *metrics])
+        return rows
+
+    def widths(self, sheet):
+        document = self.worksheet(sheet)
+        headers = self.values(sheet)[0]
+        defaults = document.find(f"{NS}sheetFormatPr")
+        default = float(defaults.get("defaultColWidth", 8.43)) if defaults is not None else 8.43
+        widths = [default] * len(headers)
+        for column in document.iter(f"{NS}col"):
+            for pos in range(int(column.get("min")) - 1, min(int(column.get("max")), len(headers))):
+                widths[pos] = float(column.get("width", default))
+        return dict(zip(headers, widths))
 
     def assert_summary(self, summary, **expected):
         # report.py consumes a JSON-serializable mapping. Extra summary fields are allowed.
@@ -85,14 +115,15 @@ class WorkbookTest(unittest.TestCase):
 
     def test_monthly_rollups_count_ids_and_keep_department_paths_together(self):
         # The 26 total includes 11 cache creation tokens absent from the three visible components.
-        first = record()
+        first = record(actual_cost="0.9876543219")
         second = record(usage_day="2024-02-29", model="second", requests="1", input_tokens="2",
-                        output_tokens="4", cache_read_tokens="6", total_tokens="13", actual_cost="0.02")
-        same_name = record(user_id="98")
-        unassigned = record(user_id="99", username="无部门用户", department="", profile_name="")
+                        output_tokens="4", cache_read_tokens="6", total_tokens="13", actual_cost="0.92")
+        same_name = record(user_id="98", actual_cost="0.9876543219")
+        unassigned = record(user_id="99", username="无部门用户", department="", profile_name="",
+                            actual_cost="-1.9")
         self.write(first, same_name, unassigned, second)
         self.assert_summary(self.build(), rows=4, users=3, departments=2, requests=7,
-                            total_tokens=91, actual_cost="0.0570370367")
+                            total_tokens=91, actual_cost="0.9953086438")
 
         detail = self.values(1)[1:]
         self.assertEqual(len(detail), 4)
@@ -102,47 +133,84 @@ class WorkbookTest(unittest.TestCase):
         self.assertEqual(unassigned_detail[:5], [SITE, *unassigned[:4]])
         self.assertEqual(unassigned_detail[6:], unassigned[5:])
 
-        self.assertCountEqual(self.values(2)[1:], [
-            [SITE, DEPARTMENT, "2", "5", "8", "14", "20", "65", "0.0446913578"],
-            [SITE, "未填写部门", "1", *unassigned[-6:]],
-        ])
-        users = self.values(3)[1:]
+        # The department spends 2.8953086438, while its two users separately truncate to 1 and 0.
+        with self.subTest(sheet="部门月汇总"):
+            self.assertCountEqual(self.metric_rows(2), [
+                [SITE, DEPARTMENT, "0", "2", 5, Decimal("8e-9"), Decimal("14e-9"),
+                 Decimal("20e-9"), Decimal("65e-9"), 2],
+                [SITE, "未填写部门", "0", "1", 2, Decimal("3e-9"), Decimal("5e-9"),
+                 Decimal("7e-9"), Decimal("26e-9"), -1],
+            ])
+        users = self.metric_rows(3)
         self.assertEqual(len(users), 3)
         self.assertCountEqual([row for row in users if row[1] != "99"], [
-            [SITE, USER_ID, "同名用户", "王五", DEPARTMENT, "3", "5", "9", "13", "39", "0.0323456789"],
-            [SITE, "98", "同名用户", "王五", DEPARTMENT, *same_name[-6:]],
+            [SITE, USER_ID, "同名用户", "王五", DEPARTMENT, 3, Decimal("5e-6"), Decimal("9e-6"),
+             Decimal("13e-6"), Decimal("39e-6"), 1],
+            [SITE, "98", "同名用户", "王五", DEPARTMENT, 2, Decimal("3e-6"), Decimal("5e-6"),
+             Decimal("7e-6"), Decimal("26e-6"), 0],
         ])
         unassigned_user, = [row for row in users if row[1] == "99"]
         self.assertEqual(unassigned_user[:4], [SITE, *unassigned[1:4]])
-        self.assertEqual(unassigned_user[5:], unassigned[-6:])
+        self.assertEqual(unassigned_user[5:], [2, Decimal("3e-6"), Decimal("5e-6"),
+                                               Decimal("7e-6"), Decimal("26e-6"), -1])
 
-    def test_exact_cost_and_large_token_count_on_every_sheet(self):
-        tokens = 9007199254740993
-        cost = "123456789012345.123456789012345678"
+    def test_registered_counts_and_usage_cover_the_union_of_departments(self):
+        self.write(record(), record(model="second"), record(user_id="2", department=""),
+                   record(user_id="3", department="仅有用量"))
+        self.build(registered={DEPARTMENT: 7, "": 4, "仅有注册": 5})
+        rows = self.metric_rows(2)
+        self.assertCountEqual([row[:5] for row in rows], [
+            [SITE, DEPARTMENT, "7", "1", 4], [SITE, "未填写部门", "4", "1", 2],
+            [SITE, "仅有用量", "0", "1", 2], [SITE, "仅有注册", "5", "0", 0],
+        ])
+        inactive, = [row for row in rows if row[1] == "仅有注册"]
+        self.assertEqual(inactive[-6:], [0] * 6)
+        self.assertEqual(len(self.metric_rows(1)), 4)
+        self.assertEqual(len(self.metric_rows(3)), 3)
+        self.assertEqual(self.worksheet(2).find(f"{NS}autoFilter").get("ref"), "A1:J5")
+
+    def test_no_usage_still_lists_registered_departments(self):
+        self.write()
+        self.build(registered={"": 2, "研发": 3})
+        self.assertCountEqual(self.metric_rows(2), [
+            [SITE, "未填写部门", "2", "0", *([0] * 6)],
+            [SITE, "研发", "3", "0", *([0] * 6)],
+        ])
+        self.assertEqual(self.values(1), [DETAIL])
+        self.assertEqual(self.values(3), [USERS])
+
+    def test_registered_is_a_required_keyword_argument(self):
+        self.write()
+        with self.assertRaises(TypeError):
+            workbook.build_workbook(self.xlsx, MONTH, {SITE: self.src})
+        with self.assertRaises(TypeError):
+            workbook.build_workbook(self.xlsx, MONTH, {SITE: self.src}, {})
+
+    def test_exact_cost_and_large_token_counts_on_every_sheet(self):
+        inputs, outputs, cached = 2**53 + 1, 10**20 + 17, 10**30 + 31
+        total = inputs + outputs + cached + 11
+        cost = "12345678901234568.999999999999999999"
         penny_fraction = "0.000000000000000001"
-        combined = "123456789012345.123456789012345679"
-        self.write(record(total_tokens=str(tokens), actual_cost=cost),
+        combined = 12345678901234569
+        self.write(record(input_tokens=str(inputs), output_tokens=str(outputs),
+                          cache_read_tokens=str(cached), total_tokens=str(total), actual_cost=cost),
                    record(model="second", actual_cost=penny_fraction))
         with localcontext() as context:
             context.prec = 5
             summary = self.build()
         self.assert_summary(summary, rows=2, users=1, departments=1, requests=4,
-                            total_tokens=tokens + 26, actual_cost=combined)
-        # A numeric Excel cell is read as a double. XML can contain digits the cell loses.
-        # Compare the value a reader can recover, including exact text cells for large values.
-        def read_number(cell):
-            kind, raw = cell
-            return Decimal(str(float(raw))) if kind == "n" else Decimal(raw)
-
-        expected = [
-            [(tokens, Decimal(cost)), (26, Decimal(penny_fraction))],
-            [(tokens + 26, Decimal(combined))],
-            [(tokens + 26, Decimal(combined))],
-        ]
-        for sheet, metrics in enumerate(expected, 1):
+                            total_tokens=total + 26, actual_cost=combined)
+        self.assertCountEqual([row[-6:] for row in self.metric_rows(1)], [
+            [2, inputs, outputs, cached, total, Decimal(cost)],
+            [2, 3, 5, 7, 26, Decimal(penny_fraction)],
+        ])
+        totals = (inputs + 3, outputs + 5, cached + 7, total + 26)
+        for sheet, places in ((2, 9), (3, 6)):
             with self.subTest(sheet=SHEETS[sheet - 1]):
-                self.assertCountEqual([(read_number(row[-2]), read_number(row[-1]))
-                                       for row in self.cells(sheet)[1:]], metrics)
+                # Construct expected decimals exactly, even beyond the default context precision.
+                scaled = [Decimal(f"{count}e-{places}") for count in totals]
+                row, = self.metric_rows(sheet)
+                self.assertEqual(row[-6:], [4, *scaled, combined])
 
     def test_empty_month_has_only_the_requested_sheets_and_headers(self):
         self.write()
@@ -154,6 +222,63 @@ class WorkbookTest(unittest.TestCase):
         for index, header in enumerate((DETAIL, DEPARTMENTS, USERS), 1):
             with self.subTest(sheet=SHEETS[index - 1]):
                 self.assertEqual(self.values(index), [header])
+                widths = self.widths(index)
+                for label in header:
+                    # These headers consist of ASCII and full-width Chinese text/punctuation.
+                    label_width = sum(1 if ch.isascii() else 2 for ch in label)
+                    self.assertGreaterEqual(widths[label], label_width - 1, label)
+
+    def test_department_column_adapts_to_ascii_and_chinese_on_each_sheet(self):
+        samples = ("A", "A" * 18, "部" * 18)
+        measurements = []
+        for name in samples:
+            self.write(record(user_id="1", department="短"), record(user_id="2", department=name))
+            self.build()
+            measurements.append([self.widths(i)["当前所属部门"] for i in (1, 2, 3)])
+        for sheet, (short, ascii_width, chinese_width) in zip(SHEETS, zip(*measurements)):
+            with self.subTest(sheet=sheet):
+                self.assertLess(short, ascii_width)
+                self.assertLess(ascii_width, chinese_width)
+                self.assertGreaterEqual(ascii_width, 17)
+                self.assertGreaterEqual(chinese_width, 34)
+
+    def test_long_department_is_preserved_and_wraps_within_the_width_cap(self):
+        name = "研发/Research/" * 80
+        self.write(record(department=name))
+        self.build()
+        with ZipFile(self.xlsx) as archive:
+            styles = ET.fromstring(archive.read("xl/styles.xml")).find(f"{NS}cellXfs")
+        for index, sheet in enumerate(SHEETS, 1):
+            with self.subTest(sheet=sheet):
+                header, row = self.values(index)
+                position = header.index("当前所属部门")
+                self.assertEqual(row[position], name)
+                width = self.widths(index)["当前所属部门"]
+                self.assertGreaterEqual(width, 35)
+                self.assertLessEqual(width, 41)
+                address = f"{chr(ord('A') + position)}2"
+                cell = self.worksheet(index).find(f".//{NS}c[@r='{address}']")
+                style = styles[int(cell.get("s", "0"))]
+                alignment = style.find(f"{NS}alignment")
+                self.assertIsNotNone(alignment, address)
+                self.assertIn(alignment.get("wrapText"), ("1", "true"), address)
+
+    def test_numeric_width_uses_values_on_its_own_sheet(self):
+        def measure(requests, cost):
+            self.write(record(actual_cost=cost), record(requests=requests, actual_cost="-" + cost))
+            self.build()
+            return [self.widths(i) for i in (1, 2, 3)]
+
+        small = measure("1", "1")
+        large = measure("123456789012345", "123456789012345678901234567890.1")
+        # Requests grow on all sheets. The two costs cancel on both summaries.
+        for index, sheet in enumerate(SHEETS):
+            with self.subTest(sheet=sheet):
+                self.assertGreater(large[index]["请求数"], small[index]["请求数"])
+                if index == 0:
+                    self.assertGreater(large[index][COST], small[index][COST])
+                else:
+                    self.assertEqual(large[index][COST], small[index][COST])
 
     def test_text_is_literal_and_report_is_private(self):
         name = " 王<&>\n五 "
@@ -222,9 +347,9 @@ class WorkbookTest(unittest.TestCase):
         self.write()
         original = self.src.read_bytes()
         with self.assertRaises(ValueError):
-            workbook.build_workbook(self.xlsx, MONTH, {SITE: self.src, "other": self.src})
+            workbook.build_workbook(self.xlsx, MONTH, {SITE: self.src, "other": self.src}, registered={})
         with self.assertRaises(ValueError):
-            workbook.build_workbook(self.src, MONTH, {SITE: self.src})
+            workbook.build_workbook(self.src, MONTH, {SITE: self.src}, registered={})
         self.xlsx.symlink_to(self.src)
         with self.assertRaises(ValueError):
             self.build()

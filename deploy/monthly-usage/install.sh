@@ -14,7 +14,7 @@ if cfg.get('site') not in ('boscserver','ecosserver') or not cfg.get('recipient'
     raise SystemExit("configure authoritative site, single recipient and first_month")
 PY
 install -d -m 0755 /opt/sub2api-monthly-usage
-install -m 0644 usage.sql workbook.py report.py /opt/sub2api-monthly-usage/
+install -m 0644 usage.sql headcounts.sql workbook.py report.py /opt/sub2api-monthly-usage/
 install -m 0644 sub2api-monthly-usage.service sub2api-monthly-usage.timer /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now sub2api-monthly-usage.timer

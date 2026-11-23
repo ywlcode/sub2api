@@ -5,17 +5,48 @@ INSERT INTO users (id, username, email, password_hash) VALUES
     (4, '无属性', 'plain@example.invalid', 'unused'),
     (5, E'\tAlice+dev@Example.invalid ', 'account5@example.invalid', 'unused'),
     (6, '@小周', 'account6@example.invalid', 'unused');
+UPDATE users SET created_at = CASE
+    WHEN id = 3 THEN '2024-02-29 15:59:59.999999Z'::timestamptz
+    WHEN id IN (5, 6) THEN '2024-05-01 00:00Z'::timestamptz
+    ELSE '2023-01-01 00:00Z'::timestamptz END;
+INSERT INTO users (id, email, password_hash, created_at, deleted_at, status, role) VALUES
+    (7, 'removed@example.invalid', 'unused', '2024-01-01Z', '2024-03-15Z', 'active', 'user'),
+    (8, 'disabled@example.invalid', 'unused', '2024-01-01Z', NULL, 'disabled', 'user'),
+    (9, 'march@example.invalid', 'unused', '2024-02-29 16:00Z', NULL, 'active', 'user'),
+    (10, 'blocked@example.invalid', 'unused', '2024-01-01Z', NULL, 'active', 'user'),
+    (11, 'expired@example.invalid', 'unused', '2024-01-01Z', NULL, 'active', 'user'),
+    (12, 'session@example.invalid', 'unused', '2024-01-01Z', NULL, 'active', 'user'),
+    (13, 'exempt@example.invalid', 'unused', '2024-01-01Z', NULL, 'active', 'user'),
+    (14, 'trusted@example.invalid', 'unused', '2024-01-01Z', NULL, 'active', 'user'),
+    (15, 'admin@example.invalid', 'unused', '2024-01-01Z', NULL, 'active', 'admin');
 INSERT INTO user_attribute_definitions (id, key, name, type, deleted_at) VALUES
     (1, 'dingtalk_name', '姓名', 'text', NULL),
     (2, 'dingtalk_department', '组织路径', 'text', NULL),
     (3, 'department', '部门', 'text', NULL),
     (4, 'dingtalk_name', '旧姓名', 'text', now()),
-    (5, 'dingtalk_email', '其他邮箱', 'email', NULL);
+    (5, 'dingtalk_email', '其他邮箱', 'email', NULL),
+    (6, 'dingtalk_department', '旧组织', 'text', now());
 INSERT INTO user_attribute_values (user_id, attribute_id, value) VALUES
     (1, 1, '钉钉姓名'), (1, 2, '公司/研发'), (1, 3, '备用部门'),
     (1, 4, '过期姓名'), (1, 5, 'excluded@example.invalid'),
     (2, 2, '   '), (2, 3, '运维'),
     (5, 1, '小林'), (6, 1, E' "Zhou Li"@example.invalid\n');
+INSERT INTO user_attribute_values (user_id, attribute_id, value) VALUES
+    (2, 6, '已删组织'), (3, 3, E'  仅注册"部门"\n二组  '),
+    (7, 3, '已删'), (8, 3, '停用'), (9, 3, '三月新增'), (10, 3, '网关封禁'),
+    (11, 3, '处罚到期'), (12, 3, '会话限制'), (13, 3, '运维'), (14, 3, '运维'), (15, 3, '运维');
+UPDATE settings SET value =
+    '{"enabled":true,"observe_only":false,"policy":"user_block","exempt_user_ids":[13]}'
+    WHERE key = 'security_penalty_config';
+INSERT INTO settings (key, value) VALUES
+    ('risk_control_enabled', 'true'), ('cyber_policy_user_allowlist', U&'99,\3000+014');
+INSERT INTO security_penalty_subjects (user_id, scope, subject_key, policy, strike_count, blocked_until)
+VALUES (10, 'user', 'user', 'user_block', 3, now() + interval '1 day'),
+       (11, 'user', 'user', 'user_block', 3, '2024-03-02Z'),
+       (12, 'session', 'fixture-session', 'session_block', 3, now() + interval '1 day'),
+       (13, 'user', 'user', 'user_block', 3, now() + interval '1 day'),
+       (14, 'user', 'user', 'user_block', 3, now() + interval '1 day'),
+       (15, 'user', 'user', 'user_block', 3, now() + interval '1 day');
 INSERT INTO groups (id, name) VALUES
     (10, 'B'), (11, 'A'), (12, 'old'), (13, 'plan-A'), (14, 'plan-B'),
     (15, 'expired'), (16, 'suspended'), (17, 'removed');
@@ -59,7 +90,10 @@ CREATE ROLE report_reader LOGIN;
 GRANT SELECT (created_at, user_id, requested_model, model, group_id, input_tokens,
               output_tokens, cache_creation_tokens, cache_read_tokens, actual_cost)
     ON usage_logs TO report_reader;
-GRANT SELECT (id, username) ON users TO report_reader;
+GRANT SELECT (id, username, created_at, deleted_at, status, role) ON users TO report_reader;
+GRANT SELECT (user_id, scope, subject_key, policy, strike_count, blocked_until)
+    ON security_penalty_subjects TO report_reader;
+GRANT SELECT (key, value) ON settings TO report_reader;
 GRANT SELECT (id, name) ON groups TO report_reader;
 GRANT SELECT (id, key, deleted_at) ON user_attribute_definitions TO report_reader;
 GRANT SELECT (user_id, attribute_id, value) ON user_attribute_values TO report_reader;

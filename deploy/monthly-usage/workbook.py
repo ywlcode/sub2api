@@ -5,11 +5,13 @@ from __future__ import annotations
 import csv
 import os
 import re
+import shutil
+from unicodedata import combining, east_asian_width
 from dataclasses import dataclass
 from datetime import date
 from decimal import Context, Decimal, Inexact
 from pathlib import Path
-from tempfile import NamedTemporaryFile
+from tempfile import NamedTemporaryFile, SpooledTemporaryFile
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
@@ -21,8 +23,12 @@ COLUMNS = (
 METRICS = ("请求数", "输入 Token", "输出 Token", "缓存读取 Token", "总 Token", "用户扣费（美元）")
 IDENTITY = ("用户 ID", "用户名", "当前真实姓名", "当前所属部门")
 DETAIL = ("站点", "用量日期", *IDENTITY, "使用分组", "模型", *METRICS)
-DEPARTMENT = ("站点", "当前所属部门", "活跃用户数", *METRICS)
-USER = ("站点", *IDENTITY, *METRICS)
+def _monthly_headers(unit):
+    return (METRICS[0], *(f"{name} ({unit})" for name in METRICS[1:-1]), METRICS[-1])
+
+
+DEPARTMENT = ("站点", "当前所属部门", "注册且未被封禁人数", "活跃用户数", *_monthly_headers("B"))
+USER = ("站点", *IDENTITY, *_monthly_headers("M"))
 SHEETS = ("明细", "部门月汇总", "用户月汇总")
 MAX_ROWS = 1_048_576  # includes header
 MAX_TEXT = 32_767
@@ -86,6 +92,11 @@ class Totals:
         return (self.requests, self.input_tokens, self.output_tokens,
                 self.cache_read_tokens, self.total_tokens, self.actual_cost)
 
+    def monthly(self, exponent, arithmetic):
+        # Scale after aggregation. Keep all token digits in the cell and truncate USD toward zero.
+        return (self.requests, *(arithmetic.scaleb(Decimal(n), exponent) for n in self.cells()[1:-1]),
+                int(self.actual_cost))
+
 
 def _details(month, site, source, users, overall, arithmetic):
     yield DETAIL
@@ -116,60 +127,86 @@ def _details(month, site, source, users, overall, arithmetic):
             raise ValueError(f"{site!r}, CSV line {reader.line_num}: {exc}") from exc
 
 
-def _sheet(archive, index, widths, rows):
-    """Stream worksheet XML straight into the zip; only one row is buffered."""
-    with archive.open(f"xl/worksheets/sheet{index}.xml", "w", force_zip64=True) as part:
-        def write(xml):
-            part.write(xml.encode("utf-8"))
+def _line_width(text):
+    return sum(0 if combining(c) else 2 if east_asian_width(c) in ("F", "W") else 1 for c in text)
 
-        write(f'{XML_DECL}<worksheet xmlns="{XMLNS}">')
-        write('<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" '
-              'topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
-              '</sheetView></sheetViews>')
-        write("<cols>")
-        for col, width in enumerate(widths, 1):
-            write(f'<col min="{col}" max="{col}" width="{width}" customWidth="1"/>')
-        write("</cols><sheetData>")
+
+def _sheet(archive, index, rows, scratch):
+    """Measure displayed cells as we write; <cols> must precede <sheetData> in XLSX."""
+    widths = []
+    cap = 38
+    with SpooledTemporaryFile(max_size=1024 * 1024, dir=scratch) as data:
         for row_num, row in enumerate(rows, 1):
             if row_num > MAX_ROWS:
                 raise ValueError(f"{SHEETS[index - 1]} exceeds Excel row limit ({MAX_ROWS} including header)")
-            cells = []
+            if row_num == 1:
+                widths = [7] * len(row)
+            cells, height = [], 1
             for col, value in enumerate(row):
-                ref = f"{chr(ord('A') + col)}{row_num}"  # all report sheets fit within A:Z
+                ref = f"{chr(ord('A') + col)}{row_num}"
                 if not isinstance(value, str):
                     _check_range(value)
-                    # Preserve outliers beyond Excel's 15 significant digits in the same cell.
                     plain = format(value, "f") if isinstance(value, Decimal) else str(value)
                     if len(plain.lstrip("-").replace(".", "").strip("0")) > 15:
                         value = plain
                 if isinstance(value, str):
-                    style = ' s="1"' if row_num == 1 else ""
+                    line_widths = [_line_width(line) for line in value.splitlines()] or [0]
+                    span = max(line_widths)
+                    header = row_num == 1
+                    wrap = not header and (span + 2 > cap or len(line_widths) > 1)
+                    style = ' s="1"' if header else ' s="6"' if wrap else ""
                     cells.append(f'<c r="{ref}"{style} t="inlineStr"><is><t xml:space="preserve">'
                                  f'{_text(value)}</t></is></c>')
+                    if wrap:
+                        height = max(height, min(6, sum(max(1, (w + cap - 3) // (cap - 2)) for w in line_widths)))
+                    width = min(cap, span + (4 if header else 2))
                 else:
-                    style = 3 if isinstance(value, Decimal) else 2
+                    if isinstance(value, int):
+                        style, displayed = 2, format(value, ",d")
+                    elif index == 1:  # original USD amount
+                        style = 3
+                        whole, fraction = format(value, ",.10f").split(".")
+                        displayed = whole + "." + fraction.rstrip("0").ljust(2, "0")
+                    elif value and value.copy_abs() < Decimal("0.001"):
+                        style, displayed = 5, format(value, ",.9f").rstrip("0")
+                    else:
+                        style, displayed = 4, format(value, ",.3f") if value else "0"
                     cells.append(f'<c r="{ref}" s="{style}" t="n"><v>{value}</v></c>')
-            write(f'<row r="{row_num}">{"".join(cells)}</row>')
-        write("</sheetData>")
-        last = chr(ord("A") + len(widths) - 1)
-        write(f'<autoFilter ref="A1:{last}{row_num}"/>')
-        write("</worksheet>")
+                    width = min(255, len(displayed) + 2)
+                widths[col] = max(widths[col], width)
+            ht = f' ht="{height * 15}" customHeight="1"' if height > 1 else ""
+            data.write(f'<row r="{row_num}"{ht}>{"".join(cells)}</row>'.encode())
+        data.seek(0)
+        with archive.open(f"xl/worksheets/sheet{index}.xml", "w", force_zip64=True) as part:
+            cols = "".join(f'<col min="{i}" max="{i}" width="{w}" customWidth="1"/>'
+                           for i, w in enumerate(widths, 1))
+            part.write((f'{XML_DECL}<worksheet xmlns="{XMLNS}"><sheetViews><sheetView workbookViewId="0">'
+                        '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
+                        f'</sheetView></sheetViews><cols>{cols}</cols><sheetData>').encode())
+            shutil.copyfileobj(data, part)
+            last = chr(ord("A") + len(widths) - 1)
+            part.write(f'</sheetData><autoFilter ref="A1:{last}{row_num}"/></worksheet>'.encode())
     return row_num - 1
 
 
 # Currency uses at least two decimals and can show the ledger's ten decimal places.
 _STYLES = f"""<styleSheet xmlns="{XMLNS}">
-<numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00########"/></numFmts>
+<numFmts count="3"><numFmt numFmtId="164" formatCode="#,##0.00########"/>
+<numFmt numFmtId="165" formatCode="#,##0.000;-#,##0.000;0"/>
+<numFmt numFmtId="166" formatCode="0.000######"/></numFmts>
 <fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>
 <font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font></fonts>
 <fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>
 <fill><patternFill patternType="solid"><fgColor rgb="FF25476A"/><bgColor indexed="64"/></patternFill></fill></fills>
 <borders count="1"><border/></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<cellXfs count="7"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
 <xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
 <xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
-<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1"/></xf></cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>"""
 
@@ -201,7 +238,7 @@ def _package(archive):
                      f'<Relationships xmlns="{PKG_REL}">{"".join(relationships)}</Relationships>')
 
 
-def build_workbook(output: Path, month: str, sources: dict[str, Path]) -> dict:
+def build_workbook(output: Path, month: str, sources: dict[str, Path], *, registered: dict[str, int]) -> dict:
     """Write one site's three sheets from a single private COPY snapshot."""
     if not re.fullmatch(r"[0-9]{4}-(?:0[1-9]|1[0-2])", month) or month.startswith("0000"):
         raise ValueError("month must be YYYY-MM")
@@ -210,6 +247,9 @@ def build_workbook(output: Path, month: str, sources: dict[str, Path]) -> dict:
     site, source = next(iter(sources.items()))
     if not isinstance(site, str) or not site.strip():
         raise ValueError("site must be a nonempty name")
+    if not isinstance(registered, dict) or any(not isinstance(k, str) or type(v) is not int or v < 0
+                                               for k, v in registered.items()):
+        raise ValueError("invalid registered headcounts")
     output = Path(output)
     if output.is_symlink() or output.resolve() == Path(source).resolve():
         raise ValueError("output must be separate from the source and cannot be a symlink")
@@ -223,12 +263,11 @@ def build_workbook(output: Path, month: str, sources: dict[str, Path]) -> dict:
     try:
         with tmp, ZipFile(tmp, "w", compression=ZIP_DEFLATED) as archive:
             _package(archive)
-            rows = _sheet(archive, 1, (17, 15, 16, 26, 24, 54, 33, 34, 18, 22, 22, 22, 22, 23),
-                          _details(month, site, source, users, total, arithmetic))
+            rows = _sheet(archive, 1, _details(month, site, source, users, total, arithmetic), output.parent)
             # Each account contributes its complete usage to exactly one department.
             # DingTalk stores an organization path; a parent is not a second allocation.
-            departments = {}
-            counts = {}
+            departments = {dept: Totals() for dept in registered}
+            counts = dict.fromkeys(registered, 0)
             for (_, _, department), usage in users.values():
                 if department not in departments:
                     departments[department] = Totals()
@@ -239,16 +278,15 @@ def build_workbook(output: Path, month: str, sources: dict[str, Path]) -> dict:
             def department_rows():
                 yield DEPARTMENT
                 for key, usage in sorted(departments.items(), key=lambda item: (-item[1].total_tokens, item[0])):
-                    yield (site, key or "未填写部门", counts[key], *usage.cells())
+                    yield (site, key or "未填写部门", registered.get(key, 0), counts[key], *usage.monthly(-9, arithmetic))
 
             def user_rows():
                 yield USER
                 for uid, (identity, usage) in sorted(users.items(), key=lambda item: (-item[1][1].total_tokens, item[0])):
-                    yield (site, uid, *identity, *usage.cells())
+                    yield (site, uid, *identity, *usage.monthly(-6, arithmetic))
 
-            widths = (18, 22, 22, 22, 22, 23)
-            _sheet(archive, 2, (17, 54, 18, *widths), department_rows())
-            _sheet(archive, 3, (17, 16, 26, 24, 54, *widths), user_rows())
+            _sheet(archive, 2, department_rows(), output.parent)
+            _sheet(archive, 3, user_rows(), output.parent)
         os.replace(tmp.name, output)
     finally:
         Path(tmp.name).unlink(missing_ok=True)
