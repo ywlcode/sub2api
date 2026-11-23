@@ -13,7 +13,7 @@ import (
 
 var codexAdditionalContextNames = []string{
 	"browser_info", "browser_tabs", "goal_objective", "ide_context",
-	"proposed_plan", "untrusted_content", "untrusted_context",
+	"proposed_plan", "terminal_info", "untrusted_content", "untrusted_context",
 }
 
 var codexContextCandidateNames = append([]string{"codex_apps_open_page", "codex_apps_selected_page_part_"}, codexAdditionalContextNames...)
@@ -91,7 +91,16 @@ func isCodexContext(item gjson.Result) bool {
 	}
 	name := item.Get("name").String()
 	if slices.Contains(codexAdditionalContextNames, name) {
-		return strings.TrimSpace(output.String()) != ""
+		switch name {
+		case "proposed_plan":
+			// A nonempty plan may end with a chunk containing only whitespace.
+			return output.String() != ""
+		case "untrusted_content":
+			// Codex uses this fallback even when the context string is empty.
+			return true
+		default:
+			return strings.TrimSpace(output.String()) != ""
+		}
 	}
 	if name == "codex_apps_open_page" {
 		return validCodexPageSnapshot(output.String())

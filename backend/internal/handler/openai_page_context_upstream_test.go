@@ -55,7 +55,7 @@ func TestNormalizeCodexPageContextFirstMessage(t *testing.T) {
 }
 
 var codexAdditionalContextTestNames = []string{
-	"browser_info", "goal_objective", "untrusted_context", "ide_context", "untrusted_content", "proposed_plan", "browser_tabs",
+	"browser_info", "goal_objective", "untrusted_context", "ide_context", "untrusted_content", "proposed_plan", "browser_tabs", "terminal_info",
 }
 
 func TestNormalizeCodexAdditionalUntrustedContext(t *testing.T) {
@@ -90,6 +90,22 @@ func TestNormalizeCodexAdditionalUntrustedContext(t *testing.T) {
 	}
 }
 
+func TestNormalizeCodexAdditionalUntrustedContextBlankOutputs(t *testing.T) {
+	for _, name := range codexAdditionalContextTestNames {
+		for _, output := range []string{"", " \t\n"} {
+			body := pageContextRequest(t, pageContextItem(name, output))
+			got, changed := normalizeCodexUntrustedContext(body)
+			want := name == "untrusted_content" || (name == "proposed_plan" && output != "")
+			require.Equal(t, want, changed, "name=%s output=%q", name, output)
+			if want {
+				require.Equal(t, "<external_"+name+">"+output+"</external_"+name+">", gjson.GetBytes(got, "input.0.content.0.text").String())
+			} else {
+				require.Equal(t, body, got)
+			}
+		}
+	}
+}
+
 func TestNormalizeCodexAdditionalUntrustedContextPreservesRealAndMalformedOutputs(t *testing.T) {
 	for _, name := range codexAdditionalContextTestNames {
 		for _, override := range []map[string]any{
@@ -101,7 +117,6 @@ func TestNormalizeCodexAdditionalUntrustedContextPreservesRealAndMalformedOutput
 			{"namespace": nil},
 			{"namespace": 42},
 			{"output": []any{map[string]any{"type": "encrypted_content", "encrypted_content": "sealed"}}},
-			{"output": " "},
 			{"output": nil},
 		} {
 			item := pageContextItem(name, "context")
