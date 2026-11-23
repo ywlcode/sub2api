@@ -99,16 +99,18 @@ WHERE model = 'mapped' AND group_id = 12;
 
 -- 同一用户、日期和请求模型；账号当前平台为 openai，历史快照独立于账号及模型名。
 INSERT INTO usage_logs (user_id, api_key_id, account_id, created_at, model, platform,
-                        input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, actual_cost)
+                        group_id, input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, actual_cost)
 VALUES
-    (1,1,1,'2024-06-01 01:00Z','deepseek','openai',   2147483647,2,3,4,9000000000.0000000001),
-    (1,1,1,'2024-06-01 01:00Z','deepseek','openai',   10,20,30,40,0.0000000002),
-    (1,1,1,'2024-06-01 01:00Z','deepseek','deepseek', 5,6,7,8,0.1200000001),
-    (1,1,1,'2024-06-01 01:00Z','deepseek',NULL,       1,0,0,0,1),
-    (1,1,1,'2024-06-01 01:00Z','deepseek','anthropic',1,0,0,0,1),
-    (1,1,1,'2024-06-01 01:00Z','deepseek','OpenAI',   1,0,0,0,1),
-    (1,1,1,'2024-06-01 01:00Z','deepseek','deepseek ',1,0,0,0,1),
-    (1,1,1,'2024-06-02 01:00Z','deepseek','deepseek', 0,0,0,0,0);
+    (1,1,1,'2024-06-01 01:00Z','deepseek','openai',      11, 2147483647,2,3,4,9000000000.0000000001),
+    (1,1,1,'2024-06-01 01:00Z','deepseek','openai',      10, 10,20,30,40,0.0000000002),
+    (1,1,1,'2024-06-01 01:00Z','deepseek','deepseek',    11, 5,6,7,8,0.1200000001),
+    (1,1,1,'2024-06-01 01:00Z','deepseek',NULL,          12, 1,0,0,0,1),
+    (1,1,1,'2024-06-01 01:00Z','deepseek','anthropic', NULL, 1,0,0,0,1),
+    (1,1,1,'2024-06-01 01:00Z','deepseek',E'\tOpenAI\r',11, 1,0,0,0,1),
+    (1,1,1,'2024-06-01 01:00Z','deepseek','deepseek ',   10, 1,0,0,0,1),
+    (1,1,1,'2024-06-01 01:00Z','deepseek',E' \t\n',     14, 2,0,0,0,0.0000000008),
+    (1,1,1,'2024-06-02 01:00Z','deepseek','deepseek',  NULL, 0,0,0,0,0),
+    (1,1,1,'2024-06-30 16:00Z','deepseek',U&'\3000 Lab-X/42 \00A0',NULL, 4,3,2,1,0);
 
 -- 使用列级授权执行导出，使读取邮箱、原始费用或权限/订阅关系的查询在测试时失败。
 CREATE ROLE report_reader LOGIN;

@@ -67,10 +67,10 @@ func TestPythonWorkbookParity(t *testing.T) {
 	}
 	var rows []Row
 	for _, v := range input.Rows {
-		if len(v) != 15 {
+		if len(v) != 14 {
 			t.Fatalf("fixture row has %d columns", len(v))
 		}
-		rows = append(rows, Row{v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13], v[14]})
+		rows = append(rows, Row{v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12], v[13]})
 	}
 	var output bytes.Buffer
 	if err := Build(&output, input.Site, input.Registered, walkRows(rows...)); err != nil {
@@ -104,7 +104,10 @@ func TestEmptyMonth(t *testing.T) {
 		t.Fatal(err)
 	}
 	parts := zipParts(t, out.Bytes())
-	for file, end := range map[string]string{"sheet1": "N1", "sheet2": "J1", "sheet3": "J1", "sheet4": "K1"} {
+	if len(parts) != 7 {
+		t.Fatal("empty month should have only two worksheets")
+	}
+	for file, end := range map[string]string{"sheet1": "N1", "sheet2": "K1"} {
 		xml := string(parts["xl/worksheets/"+file+".xml"])
 		if strings.Count(xml, "<row ") != 1 || !strings.Contains(xml, `<autoFilter ref="A1:`+end+`"/>`) {
 			t.Errorf("%s: expected header only with filter through %s", file, end)
@@ -127,9 +130,9 @@ func TestInvalidInput(t *testing.T) {
 		"invalid decimal scale": func(r *Row) { r.ActualCost = "0e-32768" },
 		"below minimum":         func(r *Row) { r.ActualCost = "2.22507385850720139e-308" },
 		"above maximum":         func(r *Row) { r.ActualCost = "-9.999999999999991e307" },
-		"truncated platform":    func(r *Row) { r.OpenAIUsage = `["1","2","3","4","5"]` },
-		"invalid platform cost": func(r *Row) { r.DeepSeekUsage = `["1","0","0","0","0","NaN"]` },
-		"empty platform count":  func(r *Row) { r.DeepSeekUsage = `["0","0","0","0","0","0"]` },
+		"truncated platform":    func(r *Row) { r.PlatformUsage = `{"future":["1","2","3","4","5"]}` },
+		"invalid platform cost": func(r *Row) { r.PlatformUsage = `{"future":["1","0","0","0","0","NaN"]}` },
+		"empty platform count":  func(r *Row) { r.PlatformUsage = `{"future":["0","0","0","0","0","0"]}` },
 	} {
 		t.Run(label, func(t *testing.T) {
 			r := base
@@ -202,7 +205,7 @@ func TestLayoutWithRareWideDepartments(t *testing.T) {
 	for i := range rows {
 		id := fmt.Sprintf("%04d", i)
 		rows[i] = Row{Day: "2024-02-01", UserID: id, Department: "测试部门" + id,
-			Requests: "1", InputTokens: "2", OutputTokens: "3", CacheReadTokens: "4", TotalTokens: "10", ActualCost: "0.97"}
+			Requests: "1", InputTokens: "2", OutputTokens: "3", CacheReadTokens: "4", TotalTokens: "10", ActualCost: "0.97", PlatformUsage: `{"new":["1","2","3","4","10","0.97"]}`}
 	}
 	rows[0].Department = strings.Repeat("宽", 100)
 	for _, r := range rows {
@@ -213,7 +216,7 @@ func TestLayoutWithRareWideDepartments(t *testing.T) {
 		t.Fatal(err)
 	}
 	parts := zipParts(t, out.Bytes())
-	for i, col := range []int{6, 2, 2, 5} {
+	for i, col := range []int{6, 2, 5} {
 		xml := parts[fmt.Sprintf("xl/worksheets/sheet%d.xml", i+1)]
 		if !bytes.Contains(xml, []byte(fmt.Sprintf(`<col min="%d" max="%d" width="19" customWidth="1"/>`, col, col))) {
 			t.Fatalf("sheet %d: unexpected department width", i+1)

@@ -13,7 +13,7 @@ HERE = Path(__file__).resolve().parent
 MIGRATIONS = HERE.parents[1] / "backend" / "migrations"
 HEADER = (
     "usage_day,user_id,username,profile_name,department,used_groups,model,requests,"
-    "input_tokens,output_tokens,cache_read_tokens,total_tokens,actual_cost,openai_usage,deepseek_usage"
+    "input_tokens,output_tokens,cache_read_tokens,total_tokens,actual_cost,platform_usage"
 ).split(",")
 
 
@@ -75,19 +75,27 @@ class MonthlyUsageSQL(unittest.TestCase):
             with self.subTest(key=(want[0], want[1], want[6])):
                 self.assertEqual(row[:12], list(map(str, want[:-1])))
                 self.assertEqual(Decimal(row[12]), Decimal(want[-1]))
-                self.assertEqual(row[13:], ["", ""])
+                self.assertEqual(row[13:], [""])
 
     def test_historical_platforms_share_one_detail_row(self):
         header, mixed, free = self.export("2024-06-01")
         self.assertEqual(header, HEADER)
-        self.assertEqual(mixed[:7], ["2024-06-01", "1", '张,"三"\n甲', "钉钉姓名", "公司/研发", "", "deepseek"])
-        self.assertEqual(mixed[7:13], ["7", "2147483666", "28", "52", "2147483786", "9000000004.1200000004"])
-        self.assertEqual(json.loads(mixed[13]),
-                         ["2", "2147483657", "22", "44", "2147483756", "9000000000.0000000003"])
-        self.assertEqual(json.loads(mixed[14]), ["1", "5", "6", "8", "26", "0.1200000001"])
+        self.assertEqual(mixed[:7], ["2024-06-01", "1", '张,"三"\n甲', "钉钉姓名", "公司/研发", "A, B, old, plan-B", "deepseek"])
+        self.assertEqual(mixed[7:13], ["8", "2147483668", "28", "52", "2147483788", "9000000004.1200000012"])
+        self.assertEqual(json.loads(mixed[13]), {
+            "openai": ["3", "2147483658", "22", "44", "2147483757", "9000000001.0000000003"],
+            "deepseek": ["2", "6", "6", "8", "27", "1.1200000001"],
+            "anthropic": ["1", "1", "0", "0", "1", "1.0000000000"],
+        })
         self.assertEqual(free[0], "2024-06-02")
-        self.assertEqual(free[13], "")
-        self.assertEqual(json.loads(free[14]), ["1", "0", "0", "0", "0", "0.0000000000"])
+        self.assertEqual(json.loads(free[13]), {"deepseek": ["1", "0", "0", "0", "0", "0.0000000000"]})
+
+    def test_custom_platform_first_seen_at_next_month_boundary(self):
+        header, only = self.export("2024-07-01")
+        self.assertEqual(header, HEADER)
+        self.assertEqual(only[0], "2024-07-01")
+        self.assertEqual(only[7:13], ["1", "4", "3", "1", "10", "0.0000000000"])
+        self.assertEqual(json.loads(only[13]), {"lab-x/42": only[7:13]})
 
     def test_email_names_are_blank(self):
         header, *rows = self.export("2024-05-01")

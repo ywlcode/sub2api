@@ -13,6 +13,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"text/template"
 	"time"
 	"unicode"
 )
@@ -21,8 +22,8 @@ import (
 type Row struct {
 	Day, UserID, Username, RealName, Department, Groups, Model                    string
 	Requests, InputTokens, OutputTokens, CacheReadTokens, TotalTokens, ActualCost string
-	// Optional platform subtotals from the same detail row (six decimal strings).
-	OpenAIUsage, DeepSeekUsage string
+	// Historical platform ID -> six decimal strings; empty when no request had a platform.
+	PlatformUsage string
 }
 
 var metricHeaders = [...]string{"请求数", "输入 Token", "输出 Token", "缓存读取 Token", "总 Token", "用户扣费（美元）"}
@@ -50,7 +51,7 @@ type profile struct {
 type user struct {
 	profile
 	totals
-	activeOn [len(departmentSheetNames)]bool
+	activeOn map[string]bool
 }
 
 type department struct {
@@ -75,10 +76,8 @@ type snapshot struct {
 	site, month string
 	users       map[string]*user
 	details     *sheet
-	departments [len(departmentSheetNames)]map[string]*department // OpenAI, DeepSeek
+	departments map[string]map[string]*department // platform ID -> department
 }
-
-var departmentSheetNames = [...]string{"部门OpenAI平台月汇总", "部门Deepseek平台月汇总"}
 
 func (s *snapshot) appendDetail(r Row) error {
 	day, err := time.Parse(time.DateOnly, r.Day)
@@ -111,29 +110,40 @@ func (s *snapshot) appendDetail(r Row) error {
 		return err
 	}
 	u.add(metrics)
-	for i, raw := range [...]string{r.OpenAIUsage, r.DeepSeekUsage} {
-		if raw == "" { // No usage on this platform; the full detail row still counts above.
-			continue
-		}
-		var fields []string
-		if err := json.Unmarshal([]byte(raw), &fields); err != nil || len(fields) != len(metricHeaders) {
-			return fmt.Errorf("%s: expected six platform metrics", departmentSheetNames[i])
+	if r.PlatformUsage == "" {
+		return nil
+	}
+	var subtotals map[string][]string
+	if err := json.Unmarshal([]byte(r.PlatformUsage), &subtotals); err != nil || subtotals == nil {
+		return fmt.Errorf("expected platform usage object")
+	}
+	for id, fields := range subtotals {
+		if strings.TrimSpace(id) == "" || len(fields) != len(metricHeaders) {
+			return fmt.Errorf("platform %q: expected a nonblank ID and six metrics", id)
 		}
 		m, err := parseTotals(fields)
 		if err != nil {
-			return fmt.Errorf("%s: %w", departmentSheetNames[i], err)
+			return fmt.Errorf("platform %q: %w", id, err)
 		}
 		if m.counts[0].IsZero() {
-			return fmt.Errorf("%s: expected positive request count", departmentSheetNames[i])
+			return fmt.Errorf("platform %q: expected positive request count", id)
 		}
-		d := s.departments[i][r.Department]
+		depts := s.departments[id]
+		if depts == nil {
+			depts = make(map[string]*department)
+			s.departments[id] = depts
+		}
+		d := depts[r.Department]
 		if d == nil {
 			d = &department{}
-			s.departments[i][r.Department] = d
+			depts[r.Department] = d
 		}
-		if !u.activeOn[i] {
+		if !u.activeOn[id] {
+			if u.activeOn == nil {
+				u.activeOn = make(map[string]bool)
+			}
 			d.active++
-			u.activeOn[i] = true
+			u.activeOn[id] = true
 		}
 		d.add(m)
 	}
@@ -160,19 +170,12 @@ func BuildContext(ctx context.Context, w io.Writer, site string, registered map[
 	if strings.TrimFunc(site, func(r rune) bool { return unicode.IsSpace(r) || (0x1c <= r && r <= 0x1f) }) == "" {
 		return fmt.Errorf("monthlyusage: site must be a nonempty name")
 	}
-	var platforms [len(departmentSheetNames)]map[string]*department
-	for i := range platforms {
-		platforms[i] = make(map[string]*department, len(registered))
-	}
-	for dept, count := range registered {
+	for _, count := range registered {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 		if count < 0 {
 			return fmt.Errorf("monthlyusage: negative registered headcount")
-		}
-		for _, depts := range platforms {
-			depts[dept] = &department{}
 		}
 	}
 
@@ -187,12 +190,12 @@ func BuildContext(ctx context.Context, w io.Writer, site string, registered map[
 	}
 	defer func() { _ = f.Close() }()
 	body := bufio.NewWriter(f)
-	details, err := newSheet(body, detailHeaders, note)
+	details, err := newSheet(body, "明细", detailHeaders, note)
 	if err != nil {
 		return err
 	}
 	users := make(map[string]*user)
-	snapshot := snapshot{site: site, users: users, details: details, departments: platforms}
+	snapshot := snapshot{site: site, users: users, details: details, departments: make(map[string]map[string]*department)}
 	var rowErr error
 	err = walk(func(r Row) error {
 		if rowErr == nil {
@@ -214,8 +217,15 @@ func BuildContext(ctx context.Context, w io.Writer, site string, registered map[
 	}
 
 	sheets := []*sheet{details}
-	for i, depts := range platforms {
-		deptSheet, err := newSheet(body, departmentHeaders, note)
+	titles := make(map[string]bool)
+	for _, id := range slices.Sorted(maps.Keys(snapshot.departments)) {
+		depts := snapshot.departments[id]
+		for dept := range registered {
+			if depts[dept] == nil {
+				depts[dept] = &department{}
+			}
+		}
+		deptSheet, err := newSheet(body, departmentSheetName(id, titles), departmentHeaders, note)
 		if err != nil {
 			return err
 		}
@@ -230,12 +240,12 @@ func BuildContext(ctx context.Context, w io.Writer, site string, registered map[
 			}
 			counts := []number{integer(registered[key]), integer(d.active)}
 			if err := deptSheet.row([]string{site, label}, d.numbers(counts, -9, false)); err != nil {
-				return fmt.Errorf("%s: %w", departmentSheetNames[i], err)
+				return fmt.Errorf("%s: %w", deptSheet.name, err)
 			}
 		}
 		sheets = append(sheets, deptSheet)
 	}
-	userSheet, err := newSheet(body, userHeaders, note)
+	userSheet, err := newSheet(body, "用户月汇总", userHeaders, note)
 	if err != nil {
 		return err
 	}
@@ -255,25 +265,41 @@ func BuildContext(ctx context.Context, w io.Writer, site string, registered map[
 	return writeWorkbook(ctx, w, f, append(sheets, userSheet))
 }
 
-//go:embed parts/*.xml
+//go:embed parts/*
 var parts embed.FS
+
+var metadata = template.Must(template.New("").Funcs(template.FuncMap{
+	"attr": strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;").Replace,
+}).ParseFS(parts, "parts/*.tmpl"))
 
 func writeWorkbook(ctx context.Context, w io.Writer, spool io.ReaderAt, sheets []*sheet) error {
 	z := zip.NewWriter(w)
+	type sheetRef struct {
+		ID   int
+		Name string
+	}
+	refs := make([]sheetRef, len(sheets))
+	for i, s := range sheets {
+		refs[i] = sheetRef{i + 1, s.name}
+	}
 	for _, part := range [][2]string{
-		{"content-types.xml", "[Content_Types].xml"}, {"root-rels.xml", "_rels/.rels"},
-		{"workbook.xml", "xl/workbook.xml"}, {"styles.xml", "xl/styles.xml"},
-		{"workbook-rels.xml", "xl/_rels/workbook.xml.rels"},
+		{"content-types.xml.tmpl", "[Content_Types].xml"}, {"root-rels.xml", "_rels/.rels"},
+		{"workbook.xml.tmpl", "xl/workbook.xml"}, {"styles.xml", "xl/styles.xml"},
+		{"workbook-rels.xml.tmpl", "xl/_rels/workbook.xml.rels"},
 	} {
-		data, err := parts.ReadFile("parts/" + part[0])
-		if err != nil {
-			return err
-		}
 		entry, err := z.Create(part[1])
 		if err != nil {
 			return err
 		}
-		if _, err = entry.Write(data); err != nil {
+		if strings.HasSuffix(part[0], ".tmpl") {
+			err = metadata.ExecuteTemplate(entry, part[0], refs)
+		} else {
+			var data []byte
+			if data, err = parts.ReadFile("parts/" + part[0]); err == nil {
+				_, err = entry.Write(data)
+			}
+		}
+		if err != nil {
 			return err
 		}
 	}

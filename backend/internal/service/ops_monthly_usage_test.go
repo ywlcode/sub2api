@@ -273,7 +273,7 @@ func (s monthlyWorkbookMailTestStore) BuildMonthlyUsageReportWithCoverage(ctx co
 	const note = "历史覆盖无法确认：仅含现存明细。"
 	return note, monthlyusage.BuildContext(ctx, w, label, map[string]int64{"研发": 2}, note, func(row func(monthlyusage.Row) error) error {
 		return row(monthlyusage.Row{Day: month + "-28", UserID: "07", Username: "测试用户", Department: "研发", Model: "test-model", Requests: "4", InputTokens: "8000000000", OutputTokens: "2000000", CacheReadTokens: "1000", TotalTokens: "8002001000", ActualCost: "12.51",
-			OpenAIUsage: `["1","8000000000","0","0","8000000000","12"]`, DeepSeekUsage: `["3","0","2000000","1000","2001000","0.51"]`})
+			PlatformUsage: `{"gemini":["1","8000000000","0","0","8000000000","12"],"future":["3","0","2000000","1000","2001000","0.51"]}`})
 	})
 }
 
@@ -307,7 +307,7 @@ func TestMonthlyUsagePrimaryDeliversReadableWorkbook(t *testing.T) {
 	book, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	require.NoError(t, err)
 	for path, wants := range map[string][]string{
-		"xl/workbook.xml":          {"部门OpenAI平台月汇总", "部门Deepseek平台月汇总"},
+		"xl/workbook.xml":          {"部门Future平台月汇总", "部门Gemini平台月汇总"},
 		"xl/worksheets/sheet1.xml": {"test-model"},
 		"xl/worksheets/sheet2.xml": {"注册且未被封禁人数", "输入 Token (B)"},
 		"xl/worksheets/sheet3.xml": {"注册且未被封禁人数", "输入 Token (B)"},

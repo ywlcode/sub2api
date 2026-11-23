@@ -46,7 +46,7 @@ func TestMonthlyUsageReadFailureRollsBackBeforeOutput(t *testing.T) {
 	mock.ExpectQuery("WITH penalty_config").WithArgs("2024-02-01", int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"counts"}).AddRow("{}"))
 	failure := errors.New("read interrupted")
-	mock.ExpectQuery("WITH daily_usage").WithArgs("2024-02-01", int64(0), monthlyUsageEmailPattern).
+	mock.ExpectQuery("WITH usage_buckets").WithArgs("2024-02-01", int64(0), monthlyUsageEmailPattern).
 		WillReturnRows(sqlmock.NewRows([]string{"usage_day"}).AddRow("day").RowError(0, failure)).
 		RowsWillBeClosed()
 	mock.ExpectRollback()

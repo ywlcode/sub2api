@@ -159,10 +159,10 @@ func (r *opsRepository) snapshotMonthlyUsage(ctx context.Context, date string, d
 	var firstDay, lastDay string
 	for rows.Next() {
 		var row monthlyusage.Row
-		var username, realName, department, groups, openAIUsage, deepSeekUsage sql.NullString
+		var username, realName, department, groups, platformUsage sql.NullString
 		if err := rows.Scan(&row.Day, &row.UserID, &username, &realName, &department, &groups,
 			&row.Model, &row.Requests, &row.InputTokens, &row.OutputTokens, &row.CacheReadTokens,
-			&row.TotalTokens, &row.ActualCost, &openAIUsage, &deepSeekUsage); err != nil {
+			&row.TotalTokens, &row.ActualCost, &platformUsage); err != nil {
 			return nil, err
 		}
 		if firstDay == "" {
@@ -171,7 +171,7 @@ func (r *opsRepository) snapshotMonthlyUsage(ctx context.Context, date string, d
 		lastDay = row.Day
 		row.Username, row.RealName = username.String, realName.String
 		row.Department, row.Groups = department.String, groups.String
-		row.OpenAIUsage, row.DeepSeekUsage = openAIUsage.String, deepSeekUsage.String
+		row.PlatformUsage = platformUsage.String
 		if err := encoder.Encode(row); err != nil {
 			return nil, err
 		}

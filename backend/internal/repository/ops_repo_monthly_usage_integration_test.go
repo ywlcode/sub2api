@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"encoding/gob"
 	"io"
+	"io/fs"
 	"strings"
 	"sync"
 	"testing"
@@ -76,9 +77,9 @@ CREATE TABLE usage_logs AS SELECT id AS user_id, ' '::text AS requested_model, '
 INSERT INTO usage_logs (user_id, model, created_at, platform, input_tokens, output_tokens,
                         cache_creation_tokens, cache_read_tokens, actual_cost) VALUES
     (1, 'fixture-model', '2024-02-29 16:00Z', 'openai',    3, 4, 5, 6, 9000000000.0000000001),
-    (1, 'fixture-model', '2024-02-29 16:00Z', 'openai',    1, 2, 3, 4, 0.0000000002),
+    (1, 'fixture-model', '2024-02-29 16:00Z', E'\tOpenAI ', 1, 2, 3, 4, 0.0000000002),
     (1, 'fixture-model', '2024-02-29 16:00Z', 'deepseek',  0, 0, 0, 0, 0),
-    (1, 'fixture-model', '2024-02-29 16:00Z', 'anthropic', 1, 1, 1, 1, 1)`)
+    (1, 'fixture-model', '2024-02-29 16:00Z', 'Lab-X/42', 1, 1, 1, 1, 1)`)
 		require.NoError(t, err)
 		var spool bytes.Buffer
 		_, err = repo.snapshotMonthlyUsage(ctx, "2024-03-01", 0, &spool)
@@ -93,8 +94,11 @@ INSERT INTO usage_logs (user_id, model, created_at, platform, input_tokens, outp
 		require.Equal(t, "18", detail.CacheReadTokens)
 		require.Equal(t, "68", detail.TotalTokens)
 		require.Equal(t, "9000000001.1000000004", detail.ActualCost)
-		require.JSONEq(t, `["2","4","6","10","28","9000000000.0000000003"]`, detail.OpenAIUsage)
-		require.JSONEq(t, `["1","0","0","0","0","0"]`, detail.DeepSeekUsage)
+		require.JSONEq(t, `{
+            "openai": ["2","4","6","10","28","9000000000.0000000003"],
+            "deepseek": ["1","0","0","0","0","0"],
+            "lab-x/42": ["1","1","1","1","4","1"]
+        }`, detail.PlatformUsage)
 		require.ErrorIs(t, reader.Decode(&detail), io.EOF)
 	})
 
@@ -174,7 +178,10 @@ CREATE OR REPLACE VIEW user_attribute_values AS
 	require.Contains(t, notice, "2024-02-10（UTC）日汇总全站 83 笔，现存 0 笔")
 	book, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
 	require.NoError(t, err)
-	for _, sheet := range []string{"sheet1", "sheet2", "sheet3", "sheet4"} {
+	sheets, err := fs.ReadDir(book, "xl/worksheets")
+	require.NoError(t, err)
+	require.Len(t, sheets, 2, "February has no historical platform IDs")
+	for _, sheet := range []string{"sheet1", "sheet2"} {
 		part, err := book.Open("xl/worksheets/" + sheet + ".xml")
 		require.NoError(t, err)
 		body, err := io.ReadAll(part)

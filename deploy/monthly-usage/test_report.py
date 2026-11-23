@@ -93,7 +93,7 @@ class Reports(unittest.TestCase):
                     self.render_record.unlink()
                 elif kind == "old version":
                     record = json.loads(self.render_record.read_text())
-                    record["version"] = "three-sheets-admin-filter-v1"
+                    record["version"] = "four-sheets-platform-departments-v1"
                     self.render_record.write_text(json.dumps(record))
                 elif kind == "altered file":
                     self.path.write_bytes(b"stale data")

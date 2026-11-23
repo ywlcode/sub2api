@@ -309,7 +309,7 @@ func sendMonthlyUsageOnce(ctx context.Context, store OpsMonthlyUsageRepository, 
 }
 
 func sendMonthlyUsageAttachment(ctx context.Context, send monthlyUsageSender, month, siteName, to, coverage string, file []byte) (bool, error) {
-	body := fmt.Sprintf("%s · %s（北京时间）。本月报不含导出时为管理员的账号。明细和用户月汇总（Token 单位 M）涵盖所有平台。两张部门月汇总按请求记录的平台分别统计 OpenAI 和 DeepSeek（Token 单位 B）。各汇总表的扣费均按汇总后取整数美元。", siteName, month)
+	body := fmt.Sprintf("%s · %s（北京时间）。本月报不含导出时为管理员的账号。明细和用户月汇总（Token 单位 M）涵盖所有平台。每个当月有请求记录的平台各有一张部门月汇总（Token 单位 B）；未记录平台的请求仅计入明细和用户月汇总。各汇总表的扣费均按汇总后取整数美元。", siteName, month)
 	if coverage != "" {
 		body += "\n" + coverage
 	}

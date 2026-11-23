@@ -45,6 +45,7 @@ func (c column) width(rows int) int {
 }
 
 type sheet struct {
+	name      string
 	body      *bufio.Writer
 	columns   []column
 	rows      int
@@ -52,8 +53,8 @@ type sheet struct {
 	size      int64 // length of this sheet's row XML in the shared spool
 }
 
-func newSheet(body *bufio.Writer, headers []string, note string) (*sheet, error) {
-	s := &sheet{body: body, columns: make([]column, len(headers)), headerRow: 1}
+func newSheet(body *bufio.Writer, name string, headers []string, note string) (*sheet, error) {
+	s := &sheet{name: name, body: body, columns: make([]column, len(headers)), headerRow: 1}
 	for i, label := range headers {
 		c := &s.columns[i]
 		if bounds, ok := textBounds[label]; ok {

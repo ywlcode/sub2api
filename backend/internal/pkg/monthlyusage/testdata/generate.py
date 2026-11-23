@@ -23,12 +23,10 @@ with TemporaryDirectory() as tmp:
     workbook.build_workbook(HERE / "reference.xlsx", "2024-02", {case["site"]: csv_path},
                             registered=case["registered"])
 
-# These five OPC parts are independent of report data, including the complete style table.
+# Only the root relationship and styles are independent of the set of platforms.
 with ZipFile(HERE / "reference.xlsx") as book:
     for source, name in [
-        ("[Content_Types].xml", "content-types.xml"), ("_rels/.rels", "root-rels.xml"),
-        ("xl/workbook.xml", "workbook.xml"), ("xl/styles.xml", "styles.xml"),
-        ("xl/_rels/workbook.xml.rels", "workbook-rels.xml"),
+        ("_rels/.rels", "root-rels.xml"), ("xl/styles.xml", "styles.xml"),
     ]:
         (PACKAGE / "parts" / name).write_bytes(book.read(source))
 

@@ -20,10 +20,9 @@ from zipfile import ZIP_DEFLATED, ZipFile
 METRIC_COLUMNS = (
     "requests", "input_tokens", "output_tokens", "cache_read_tokens", "total_tokens", "actual_cost",
 )
-PLATFORM_COLUMNS = ("openai_usage", "deepseek_usage")
 COLUMNS = (
     "usage_day", "user_id", "username", "profile_name", "department", "used_groups", "model",
-    *METRIC_COLUMNS, *PLATFORM_COLUMNS,
+    *METRIC_COLUMNS, "platform_usage",
 )
 METRICS = ("请求数", "输入 Token", "输出 Token", "缓存读取 Token", "总 Token", "用户扣费（美元）")
 IDENTITY = ("用户 ID", "用户名", "当前真实姓名", "当前所属部门")
@@ -34,7 +33,6 @@ def _monthly_headers(unit):
 
 DEPARTMENT = ("站点", "当前所属部门", "注册且未被封禁人数", "活跃用户数", *_monthly_headers("B"))
 USER = ("站点", *IDENTITY, *_monthly_headers("M"))
-SHEETS = ("明细", "部门OpenAI平台月汇总", "部门Deepseek平台月汇总", "用户月汇总")
 MAX_ROWS = 1_048_576  # includes header
 MAX_TEXT = 32_767
 XMLNS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -113,21 +111,27 @@ def _parse_totals(values):
     return Totals(*(_number(raw, key) for raw, key in zip(values, METRIC_COLUMNS)))
 
 
-def _add_platform_usage(groups, column, raw, department, uid, arithmetic):
+def _add_platform_usage(platform_departments, raw, department, uid, arithmetic):
     if not raw:  # COPY represents SQL NULL as an empty field.
         return
-    values = json.loads(raw)
-    if (not isinstance(values, list) or len(values) != len(METRIC_COLUMNS)
-            or not all(isinstance(value, str) for value in values)):
-        raise ValueError(f"expected six decimal strings in {column}")
-    metrics = _parse_totals(values)
-    if metrics.requests == 0:
-        raise ValueError(f"expected positive request count in {column}")
-    if department not in groups:
-        groups[department] = Department()
-    entry = groups[department]
-    entry.usage.add(metrics, arithmetic)
-    entry.active.add(uid)
+    platforms = json.loads(raw)
+    if not isinstance(platforms, dict):
+        raise ValueError("expected a platform_usage object")
+    for platform, values in platforms.items():
+        if not platform.strip():
+            raise ValueError("expected a nonblank platform ID")
+        if (not isinstance(values, list) or len(values) != len(METRIC_COLUMNS)
+                or not all(isinstance(value, str) for value in values)):
+            raise ValueError(f"expected six decimal strings for {platform!r}")
+        metrics = _parse_totals(values)
+        if metrics.requests == 0:
+            raise ValueError(f"expected positive request count for {platform!r}")
+        departments = platform_departments.setdefault(platform, {})
+        if department not in departments:
+            departments[department] = Department()
+        entry = departments[department]
+        entry.usage.add(metrics, arithmetic)
+        entry.active.add(uid)
 
 
 def _details(month, site, source, users, overall, platform_departments, arithmetic):
@@ -154,8 +158,7 @@ def _details(month, site, source, users, overall, platform_departments, arithmet
                     raise ValueError("inconsistent user profile in monthly snapshot")
                 usage.add(metrics, arithmetic)
                 overall.add(metrics, arithmetic)
-                for column, raw in zip(PLATFORM_COLUMNS, row[13:]):
-                    _add_platform_usage(platform_departments[column], column, raw, department, uid, arithmetic)
+                _add_platform_usage(platform_departments, row[13], department, uid, arithmetic)
                 yield (site, raw_day, uid, *identity, group, model, *metrics.cells())
         except (ValueError, csv.Error) as exc:
             raise ValueError(f"{site!r}, CSV line {reader.line_num}: {exc}") from exc
@@ -200,12 +203,12 @@ def _sheet_widths(headers, samples, numeric):
     return widths
 
 
-def _sheet(archive, index, rows, scratch):
+def _sheet(archive, index, name, rows, scratch):
     """Measure displayed cells as we write; <cols> must precede <sheetData> in XLSX."""
     with SpooledTemporaryFile(max_size=1024 * 1024, dir=scratch) as data:
         for row_num, row in enumerate(rows, 1):
             if row_num > MAX_ROWS:
-                raise ValueError(f"{SHEETS[index - 1]} exceeds Excel row limit ({MAX_ROWS} including header)")
+                raise ValueError(f"{name} exceeds Excel row limit ({MAX_ROWS} including header)")
             if row_num == 1:
                 headers = row
                 samples = [[0] * (_TEXT_BOUNDS[label][1] + 1) if label in _TEXT_BOUNDS else None
@@ -292,11 +295,32 @@ _STYLES = f"""<styleSheet xmlns="{XMLNS}">
 </styleSheet>"""
 
 
-def _package(archive):
+def _department_sheet_names(platforms):
+    used = set()
+    for platform in platforms:
+        label = "OpenAI" if platform == "openai" else re.sub(
+            r"^[a-z]", lambda m: m.group().upper(), platform)
+        label = re.sub(r"[\x00-\x1f\ufffe\uffff\[\]:*?/\\]", "_", label)
+        encoded = label.encode("utf-16-le")
+        number = 1
+        while True:
+            suffix = (f"~{number}" if number > 1 else "") + "平台月汇总"
+            # Prefix and suffix are all single UTF-16 units. Drop a split surrogate pair.
+            budget = 31 - len("部门") - len(suffix)
+            middle = encoded[:2 * budget].decode("utf-16-le", errors="ignore")
+            name = f"部门{middle}{suffix}"
+            if name.casefold() not in used:
+                used.add(name.casefold())
+                yield name
+                break
+            number += 1
+
+
+def _package(archive, sheet_names):
     mime = "application/vnd.openxmlformats-officedocument.spreadsheetml"
     archive.writestr("xl/styles.xml", XML_DECL + _STYLES)
     overrides = "".join(f'<Override PartName="/xl/worksheets/sheet{i}.xml" '
-                        f'ContentType="{mime}.worksheet+xml"/>' for i in range(1, len(SHEETS) + 1))
+                        f'ContentType="{mime}.worksheet+xml"/>' for i in range(1, len(sheet_names) + 1))
     archive.writestr("[Content_Types].xml", XML_DECL +
                      '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
                      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
@@ -309,7 +333,8 @@ def _package(archive):
                      '</Relationships>')
     sheets = []
     relationships = [f'<Relationship Id="styles" Type="{DOC_REL}/styles" Target="styles.xml"/>']
-    for i, name in enumerate(SHEETS, 1):
+    for i, name in enumerate(sheet_names, 1):
+        name = escape(name, {'"': "&quot;"})
         sheets.append(f'<sheet name="{name}" sheetId="{i}" r:id="rId{i}"/>')
         relationships.append(f'<Relationship Id="rId{i}" Type="{DOC_REL}/worksheet" '
                              f'Target="worksheets/sheet{i}.xml"/>')
@@ -320,7 +345,7 @@ def _package(archive):
 
 
 def build_workbook(output: Path, month: str, sources: dict[str, Path], *, registered: dict[str, int]) -> dict:
-    """Write one site's four sheets from a single private COPY snapshot."""
+    """Write one site's detail, active platform and user sheets from a single private COPY snapshot."""
     if not re.fullmatch(r"[0-9]{4}-(?:0[1-9]|1[0-2])", month) or month.startswith("0000"):
         raise ValueError("month must be YYYY-MM")
     if len(sources) != 1:
@@ -343,14 +368,15 @@ def build_workbook(output: Path, month: str, sources: dict[str, Path], *, regist
     tmp = NamedTemporaryFile(dir=output.parent, prefix=".monthly-usage-", delete=False)
     try:
         with tmp, ZipFile(tmp, "w", compression=ZIP_DEFLATED) as archive:
-            _package(archive)
-            platform_departments = {column: {dept: Department() for dept in registered}
-                                    for column in PLATFORM_COLUMNS}
+            platform_departments = {}
+            sheet_names = ["明细"]
             details = _details(month, site, source, users, total, platform_departments, arithmetic)
-            rows = _sheet(archive, 1, details, output.parent)
+            rows = _sheet(archive, 1, sheet_names[0], details, output.parent)
 
             def department_rows(departments):
                 yield DEPARTMENT
+                for key in registered.keys() - departments.keys():
+                    departments[key] = Department()
                 for key, entry in sorted(departments.items(), key=lambda item: (-item[1].usage.total_tokens, item[0])):
                     yield (site, key or "未填写部门", registered.get(key, 0), len(entry.active),
                            *entry.usage.monthly(-9, arithmetic))
@@ -360,9 +386,13 @@ def build_workbook(output: Path, month: str, sources: dict[str, Path], *, regist
                 for uid, (identity, usage) in sorted(users.items(), key=lambda item: (-item[1][1].total_tokens, item[0])):
                     yield (site, uid, *identity, *usage.monthly(-6, arithmetic))
 
-            for index, column in enumerate(PLATFORM_COLUMNS, 2):
-                _sheet(archive, index, department_rows(platform_departments[column]), output.parent)
-            _sheet(archive, 4, user_rows(), output.parent)
+            platforms = sorted(platform_departments)
+            for platform, name in zip(platforms, _department_sheet_names(platforms)):
+                sheet_names.append(name)
+                _sheet(archive, len(sheet_names), name, department_rows(platform_departments.pop(platform)), output.parent)
+            sheet_names.append("用户月汇总")
+            _sheet(archive, len(sheet_names), sheet_names[-1], user_rows(), output.parent)
+            _package(archive, sheet_names)
         os.replace(tmp.name, output)
     finally:
         Path(tmp.name).unlink(missing_ok=True)

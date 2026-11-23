@@ -722,7 +722,7 @@ export default {
         monthlyUsage: '月度评估报告（Excel）',
         emailConfigUpgradeRequired: '请先升级后端并重新加载页面，再编辑邮件配置或发送月报。',
         emailConfigReloadRequired: '未能确认保存结果，请重新加载并核对邮件配置。',
-        monthlyUsageHint: '北京时间每月 1 日 06:15 发送上月用量 Excel。部门按 OpenAI 和 DeepSeek 分表汇总，明细和用户月汇总包含所有平台。所有工作表均排除导出时为管理员的账号。',
+        monthlyUsageHint: '北京时间每月 1 日 06:15 发送上月用量 Excel。当月有请求的平台各生成一张部门汇总表，明细和用户月汇总包含所有平台。所有工作表均排除导出时为管理员的账号。',
         monthlyDepartment: {
           label: '月报部门字段',
           automatic: '自动（优先钉钉部门，其次所属部门）',

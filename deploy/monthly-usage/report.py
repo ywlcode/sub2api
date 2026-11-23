@@ -26,7 +26,7 @@ HERE = Path(__file__).resolve().parent
 TZ = ZoneInfo("Asia/Shanghai")
 SITE = {"boscserver": "主站", "ecosserver": "独立站"}
 # Bump when the workbook format or the SQL's population/aggregation changes.
-ARCHIVE_VERSION = "four-sheets-platform-departments-v1"
+ARCHIVE_VERSION = "dynamic-platform-departments-v2"
 SMTP_CONFIG = """
 SELECT json_object_agg(key, value) FROM settings WHERE key IN
  ('smtp_host','smtp_port','smtp_from','smtp_username','smtp_password');
@@ -159,10 +159,10 @@ def deliver(state, site, month, recipient, smtp_factory=None, *, revision=None, 
     msg["Subject"] = f"Sub2API {SITE[site]}（{site}）使用月报 · {month}{version}"
     msg["From"], msg["To"] = sender, recipient
     msg["Date"], msg["Message-ID"] = formatdate(localtime=False), make_msgid(domain=sender.rsplit('@', 1)[1])
-    msg.set_content(f"{SITE[site]} {site} · {month}（北京时间）{version}。附件含明细、部门OpenAI平台月汇总、部门Deepseek平台月汇总和用户月汇总。"
+    msg.set_content(f"{SITE[site]} {site} · {month}（北京时间）{version}。附件含明细和用户月汇总；当月有请求且平台 ID 非空的每个平台另有一张部门汇总表。"
                     "明细及用户汇总覆盖全部平台，部门汇总仅含对应平台用量。总 Token 含未单列的缓存创建量；费用为用户扣费的美元等值（含订阅用量）。"
                     "部门 Token 用 B（十亿）、用户 Token 用 M（百万）；汇总表按平台内部门或全平台用户合计后舍去美元小数。"
-                    "两张部门表采用相同的注册人数，含截至月底已注册的零请求用户；活跃人数按平台去重，含零扣费请求。部门、启用、删除及整账号封禁均按本次导出时状态判断。"
+                    "各平台部门表采用相同的注册人数，含截至月底已注册的零请求用户；活跃人数按平台去重，含零扣费请求。部门、启用、删除及整账号封禁均按本次导出时状态判断。"
                     + ("\n" + note if note else ""))
     msg.add_attachment(attachment_bytes(state, site, month, revision), maintype="application",
                        subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=path.name)
