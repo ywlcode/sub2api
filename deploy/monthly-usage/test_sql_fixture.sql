@@ -2,7 +2,9 @@ INSERT INTO users (id, username, email, password_hash) VALUES
     (1, E'张,"三"\n甲', 'test@example.invalid', 'unused'),
     (2, '', '', 'unused'),
     (3, '无用量', 'idle@example.invalid', 'unused'),
-    (4, '无属性', 'plain@example.invalid', 'unused');
+    (4, '无属性', 'plain@example.invalid', 'unused'),
+    (5, E'\tAlice+dev@Example.invalid ', 'account5@example.invalid', 'unused'),
+    (6, '@小周', 'account6@example.invalid', 'unused');
 INSERT INTO user_attribute_definitions (id, key, name, type, deleted_at) VALUES
     (1, 'dingtalk_name', '姓名', 'text', NULL),
     (2, 'dingtalk_department', '组织路径', 'text', NULL),
@@ -12,7 +14,8 @@ INSERT INTO user_attribute_definitions (id, key, name, type, deleted_at) VALUES
 INSERT INTO user_attribute_values (user_id, attribute_id, value) VALUES
     (1, 1, '钉钉姓名'), (1, 2, '公司/研发'), (1, 3, '备用部门'),
     (1, 4, '过期姓名'), (1, 5, 'excluded@example.invalid'),
-    (2, 2, '   '), (2, 3, '运维');
+    (2, 2, '   '), (2, 3, '运维'),
+    (5, 1, '小林'), (6, 1, E' "Zhou Li"@example.invalid\n');
 INSERT INTO groups (id, name) VALUES
     (10, 'B'), (11, 'A'), (12, 'old'), (13, 'plan-A'), (14, 'plan-B'),
     (15, 'expired'), (16, 'suspended'), (17, 'removed');
@@ -29,7 +32,8 @@ VALUES (1, 14, now() - interval '7 days', 'infinity', 'active', NULL),
 INSERT INTO accounts (id, name, platform, type) VALUES (1, 'fixture', 'openai', 'apikey');
 INSERT INTO api_keys (id, user_id, key, name, group_id) VALUES
     (1, 1, 'fixture-one', 'one', 11), (2, 2, 'fixture-two', 'two', NULL),
-    (4, 4, 'fixture-four', 'four', NULL);
+    (4, 4, 'fixture-four', 'four', NULL), (5, 5, 'fixture-five', 'five', NULL),
+    (6, 6, 'fixture-six', 'six', NULL);
 INSERT INTO usage_logs (
     user_id, api_key_id, account_id, created_at, model, requested_model, group_id,
     input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens, total_cost, actual_cost
@@ -43,7 +47,19 @@ INSERT INTO usage_logs (
     (4,4,1,'2024-02-01 01:00Z','client',NULL,NULL,     0,0,0,0,0,0),
     (1,1,1,'2024-02-01 16:00Z','client',NULL,11,       6,7,8,9,0,0),
     (1,1,1,'2024-02-29 15:59:59.999999Z','client',NULL,NULL, 1,1,1,1,0,0),
-    (1,1,1,'2024-02-29 16:00Z','outside',NULL,11,       8,8,8,8,8,8);
+    (1,1,1,'2024-02-29 16:00Z','outside',NULL,11,       8,8,8,8,8,8),
+    (5,5,1,'2024-05-01 01:00Z','client',NULL,NULL,      0,0,0,0,0,0),
+    (6,6,1,'2024-05-01 01:00Z','client',NULL,NULL,      0,0,0,0,0,0);
 UPDATE usage_logs SET upstream_model = 'upstream', cache_creation_5m_tokens = 3,
                       image_input_tokens = 100, image_output_tokens = 200
 WHERE model = 'mapped' AND group_id = 12;
+
+-- 使用列级授权执行导出，使读取邮箱、原始费用或权限/订阅关系的查询在测试时失败。
+CREATE ROLE report_reader LOGIN;
+GRANT SELECT (created_at, user_id, requested_model, model, group_id, input_tokens,
+              output_tokens, cache_creation_tokens, cache_read_tokens, actual_cost)
+    ON usage_logs TO report_reader;
+GRANT SELECT (id, username) ON users TO report_reader;
+GRANT SELECT (id, name) ON groups TO report_reader;
+GRANT SELECT (id, key, deleted_at) ON user_attribute_definitions TO report_reader;
+GRANT SELECT (user_id, attribute_id, value) ON user_attribute_values TO report_reader;

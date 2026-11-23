@@ -1,4 +1,5 @@
 import json
+from email import message_from_bytes, policy
 import smtplib
 import tempfile
 import unittest
@@ -46,6 +47,24 @@ class Reports(unittest.TestCase):
         self.smtp.return_value.data.assert_called_once()
         self.smtp.return_value.rcpt.assert_called_once_with("to@example.invalid")
         self.assertIn(b"Sub2API-boscserver-2026-10.xlsx", self.smtp.return_value.data.call_args.args[0])
+
+    def test_manual_revision_has_independent_receipt_and_attachment(self):
+        self.send()
+        original = self.marker.read_bytes()
+        revised = report.archive(self.state, self.site, self.month, 2)
+        revised.write_bytes(b"updated workbook")
+        for _ in range(2):
+            report.deliver(self.state, self.site, self.month, "to@example.invalid", self.smtp,
+                           revision=2, note="历史差额未计入。")
+        self.send()
+        self.assertEqual(self.smtp.return_value.data.call_count, 2)
+        message = message_from_bytes(self.smtp.return_value.data.call_args.args[0], policy=policy.default)
+        self.assertIn("修订版 2", message["Subject"])
+        self.assertIn("历史差额未计入。", message.get_body().get_content())
+        attachment, = message.iter_attachments()
+        self.assertEqual(attachment.get_filename(), revised.name)
+        self.assertEqual(attachment.get_payload(decode=True), b"updated workbook")
+        self.assertEqual(self.marker.read_bytes(), original)
 
     def test_socket_failure_during_data_is_never_retried(self):
         self.smtp.return_value.data.side_effect = smtplib.SMTPServerDisconnected()

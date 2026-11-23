@@ -11,9 +11,8 @@ import unittest
 HERE = Path(__file__).resolve().parent
 MIGRATIONS = HERE.parents[1] / "backend" / "migrations"
 HEADER = (
-    "usage_day,user_id,username,email,used_groups,allowed_groups,subscription_groups,"
-    "model,requests,input_tokens,output_tokens,cache_creation_tokens,cache_read_tokens,"
-    "total_tokens,total_cost,actual_cost,profile_name,department"
+    "usage_day,user_id,username,profile_name,department,used_groups,model,requests,"
+    "input_tokens,output_tokens,cache_read_tokens,total_tokens,actual_cost"
 ).split(",")
 
 
@@ -49,32 +48,34 @@ class MonthlyUsageSQL(unittest.TestCase):
                         "-c", "ALTER DATABASE postgres SET datestyle = 'SQL, DMY'"], check=True)
 
     def export(self, month):
-        result = subprocess.check_output([*self.psql, "-v", f"month={month}", "-f", "-"],
+        result = subprocess.check_output([*self.psql, "-U", "report_reader", "-d", "postgres",
+                                          "-v", f"month={month}", "-f", "-"],
                                          input=(HERE / "usage.sql").read_bytes())
         return list(csv.reader(io.StringIO(result.decode("utf-8"), newline=""), strict=True))
 
     def test_leap_month(self):
         header, *rows = self.export("2024-02-01")
         self.assertEqual(header, HEADER)
-        user = ['张,"三"\n甲', "test@example.invalid"]
-        memberships = ["A, B", "plan-A, plan-B"]
+        user = ['张,"三"\n甲', "钉钉姓名", "公司/研发"]
         expected = [
-            ["2024-02-01", "1", *user, "B, old", *memberships, "client",
-             3, 2147483650, 6, 7, 13, 2147483676, "1.5000000003", "0.2500000003"],
-            ["2024-02-01", "1", *user, "", *memberships, "other", 1, 0, 0, 0, 0, 0, "1.5", "0"],
-            ["2024-02-01", "2", "", "", "", "", "", "client", 1, 0, 0, 0, 0, 0, "0", "0"],
-            ["2024-02-01", "4", "无属性", "plain@example.invalid", "", "", "", "client",
-             1, 0, 0, 0, 0, 0, "0", "0"],
-            ["2024-02-02", "1", *user, "A", *memberships, "client", 1, 6, 7, 8, 9, 30, "0", "0"],
-            ["2024-02-29", "1", *user, "", *memberships, "client", 1, 1, 1, 1, 1, 4, "0", "0"],
+            ["2024-02-01", "1", *user, "B, old", "client",
+             3, 2147483650, 6, 13, 2147483676, "0.2500000003"],
+            ["2024-02-01", "1", *user, "", "other", 1, 0, 0, 0, 0, "0"],
+            ["2024-02-01", "2", "", "", "运维", "", "client", 1, 0, 0, 0, 0, "0"],
+            ["2024-02-01", "4", "无属性", "", "", "", "client", 1, 0, 0, 0, 0, "0"],
+            ["2024-02-02", "1", *user, "A", "client", 1, 6, 7, 9, 30, "0"],
+            ["2024-02-29", "1", *user, "", "client", 1, 1, 1, 1, 4, "0"],
         ]
-        profiles = {"1": ["钉钉姓名", "公司/研发"], "2": ["", "运维"], "4": ["", ""]}
         self.assertEqual(len(rows), len(expected))
         for row, want in zip(rows, expected):
-            with self.subTest(key=(want[0], want[1], want[7])):
-                self.assertEqual(row[:14], list(map(str, want[:14])))
-                self.assertEqual(list(map(Decimal, row[14:16])), list(map(Decimal, want[14:])))
-                self.assertEqual(row[16:], profiles[want[1]])
+            with self.subTest(key=(want[0], want[1], want[6])):
+                self.assertEqual(row[:-1], list(map(str, want[:-1])))
+                self.assertEqual(Decimal(row[-1]), Decimal(want[-1]))
+
+    def test_email_names_are_blank(self):
+        header, *rows = self.export("2024-05-01")
+        self.assertEqual(header, HEADER)
+        self.assertEqual([row[1:4] for row in rows], [["5", "", "小林"], ["6", "@小周", ""]])
 
     def test_empty_month(self):
         self.assertEqual(self.export("2024-04-01"), [HEADER])

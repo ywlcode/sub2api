@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Scheduled monthly mail from one authoritative Sub2API ledger. No pip dependencies."""
 import argparse
-import csv
 from datetime import date, datetime, timedelta
 from email import policy
 from email.headerregistry import Address
@@ -24,14 +23,6 @@ from workbook import build_workbook
 HERE = Path(__file__).resolve().parent
 TZ = ZoneInfo("Asia/Shanghai")
 SITE = {"boscserver": "主站", "ecosserver": "独立站"}
-DAILY = """
-COPY (SELECT to_char(bucket_date, 'YYYY-MM-DD') AS day, total_requests AS requests,
-      (input_tokens::numeric+output_tokens+cache_creation_tokens+cache_read_tokens) AS total_tokens,
-      actual_cost
-  FROM usage_dashboard_daily
- WHERE bucket_date >= :'month'::date AND bucket_date < :'month'::date + INTERVAL '1 month'
- ORDER BY bucket_date) TO STDOUT WITH CSV HEADER;
-"""
 SMTP_CONFIG = """
 SELECT json_object_agg(key, value) FROM settings WHERE key IN
  ('smtp_host','smtp_port','smtp_from','smtp_username','smtp_password');
@@ -86,23 +77,20 @@ def write_state(path, value):
     sync_dir(path.parent)
 
 
-def archive(state, site, month):
-    return state / f"Sub2API-{site}-{month}.xlsx"
+def archive(state, site, month, revision=None):
+    suffix = f"-r{revision}" if revision is not None else ""
+    return state / f"Sub2API-{site}-{month}{suffix}.xlsx"
 
 
-def render(state, site, month):
-    filename = archive(state, site, month)
+def render(state, site, month, revision=None):
+    filename = archive(state, site, month, revision)
     with tempfile.TemporaryDirectory(prefix=".build-", dir=state) as tmp:
         tmp = Path(tmp)
         src = tmp / "usage.csv"
         with src.open("wb") as f:
             db((HERE / "usage.sql").read_text(), month, f)
-        with (tmp / "dashboard.csv").open("wb") as f:
-            db(DAILY, month, f)
-        with (tmp / "dashboard.csv").open(newline="", encoding="utf-8") as f:
-            daily = list(csv.DictReader(f))
         xlsx = tmp / "out.xlsx"
-        summary = build_workbook(xlsx, month, {site: src}, reconciliation={site: daily})[site]
+        summary = build_workbook(xlsx, month, {site: src})[site]
         with xlsx.open("rb") as f:
             os.fsync(f.fileno())
         os.replace(xlsx, filename)
@@ -124,8 +112,8 @@ class Uncertain(RuntimeError):
     pass
 
 
-def deliver(state, site, month, recipient, smtp_factory=None):
-    path = archive(state, site, month)
+def deliver(state, site, month, recipient, smtp_factory=None, *, revision=None, note=None):
+    path = archive(state, site, month, revision)
     marker = path.with_suffix(".delivery.json")
     if marker.exists():
         record = json.loads(marker.read_text())
@@ -134,16 +122,18 @@ def deliver(state, site, month, recipient, smtp_factory=None):
             return
         raise Uncertain(f"check SMTP records before retry: {site} {month}")
     if not path.exists():
-        render(state, site, month)
+        render(state, site, month, revision)
     cfg = json.loads(db(SMTP_CONFIG))
     sender = mailbox(cfg["smtp_from"].strip())
     recipient = mailbox(recipient)
     msg = EmailMessage(policy=policy.SMTP)
-    msg["Subject"] = f"Sub2API {SITE[site]}（{site}）使用月报 · {month}"
+    version = f"（修订版 {revision}）" if revision is not None else ""
+    msg["Subject"] = f"Sub2API {SITE[site]}（{site}）使用月报 · {month}{version}"
     msg["From"], msg["To"] = sender, recipient
     msg["Date"], msg["Message-ID"] = formatdate(localtime=False), make_msgid(domain=sender.rsplit('@', 1)[1])
-    msg.set_content(f"{SITE[site]} {site} · {month}（北京时间）。附件按用户、日期、请求模型汇总，"
-                    "含用户资料、分组、Token 和美元计费用量。每日对账页单列仪表盘与可归属明细的差额。")
+    msg.set_content(f"{SITE[site]} {site} · {month}（北京时间）{version}。附件含明细、部门月汇总、用户月汇总。 "
+                    "三张表均来自可归属用户的用量日志。总 Token 含未单列的缓存创建量；费用为用户扣费的美元等值（含订阅用量）。"
+                    + ("\n" + note if note else ""))
     msg.add_attachment(path.read_bytes(), maintype="application",
                        subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=path.name)
     wire = msg.as_bytes()
@@ -192,7 +182,13 @@ def main():
     parser.add_argument("month", nargs="?")
     parser.add_argument("--config", type=Path, default=Path("/etc/sub2api-monthly-usage.json"))
     parser.add_argument("--state", type=Path, default=Path("/var/lib/sub2api-monthly-usage"))
+    parser.add_argument("--revision", type=int, help="separately tracked manual correction (2 or higher)")
+    parser.add_argument("--note", help="additional accounting context for the correction email")
     a = parser.parse_args()
+    if a.revision is not None and (a.action == "scheduled" or a.revision < 2):
+        parser.error("use revision 2 or higher with render or send")
+    if a.note and (a.action != "send" or a.revision is None):
+        parser.error("a note is only valid when sending a manual revision")
     os.umask(0o077)
     cfg = json.loads(a.config.read_text())
     site = cfg["site"]
@@ -214,12 +210,12 @@ def main():
         uncertain = failed = False
         for month in due:
             if a.action == "render":
-                if archive(a.state, site, month).with_suffix(".delivery.json").exists():
+                if archive(a.state, site, month, a.revision).with_suffix(".delivery.json").exists():
                     parser.error("already submitted; render to a separate --state for corrections")
-                render(a.state, site, month)
+                render(a.state, site, month, a.revision)
             else:
                 try:
-                    deliver(a.state, site, month, recipient)
+                    deliver(a.state, site, month, recipient, revision=a.revision, note=a.note)
                 except Uncertain as exc:
                     print(str(exc), file=sys.stderr)
                     uncertain = True

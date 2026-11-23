@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import calendar
 import csv
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from decimal import Context, Decimal, Inexact
 from pathlib import Path
@@ -16,20 +15,15 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 
 COLUMNS = (
-    "usage_day", "user_id", "username", "email", "used_groups", "allowed_groups",
-    "subscription_groups", "model", "requests", "input_tokens", "output_tokens",
-    "cache_creation_tokens", "cache_read_tokens", "total_tokens", "total_cost", "actual_cost",
-    "profile_name", "department",
+    "usage_day", "user_id", "username", "profile_name", "department", "used_groups", "model",
+    "requests", "input_tokens", "output_tokens", "cache_read_tokens", "total_tokens", "actual_cost",
 )
-DETAIL = (
-    "站点", "用量日期", "用户 ID", "用户名", "邮箱", "使用分组", "允许分组", "订阅分组",
-    "模型", "请求数", "输入 Token", "输出 Token", "缓存创建 Token", "缓存读取 Token",
-    "总 Token", "总费用", "实际费用", "当前真实姓名", "当前所属部门", "精确原值",
-)
-SUMMARY = ("站点", "明细行数", "请求数", "总 Token", "总费用", "实际费用", "用户数", "精确原值")
-DAILY = ("站点", "日期", "日志请求数", "仪表盘请求数", "请求数差额", "日志总 Token",
-         "仪表盘总 Token", "总 Token 差额", "日志实际费用", "仪表盘实际费用", "实际费用差额", "对账状态", "精确原值")
-SHEETS = ("说明", "按站点汇总", "明细", "每日对账")
+METRICS = ("请求数", "输入 Token", "输出 Token", "缓存读取 Token", "总 Token", "用户扣费（美元）")
+IDENTITY = ("用户 ID", "用户名", "当前真实姓名", "当前所属部门")
+DETAIL = ("站点", "用量日期", *IDENTITY, "使用分组", "模型", *METRICS)
+DEPARTMENT = ("站点", "当前所属部门", "活跃用户数", *METRICS)
+USER = ("站点", *IDENTITY, *METRICS)
+SHEETS = ("明细", "部门月汇总", "用户月汇总")
 MAX_ROWS = 1_048_576  # includes header
 MAX_TEXT = 32_767
 XMLNS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -71,131 +65,67 @@ def _number(raw, field):
     return value
 
 
-def _with_exact_values(prefix, names, values, suffix=()):
-    exact = []
-    for name, value in zip(names, values):
-        if isinstance(value, str):  # missing dashboard measurement
-            continue
-        _check_range(value)  # summary sums can exceed the range of individual rows
-        plain = format(value, "f") if isinstance(value, Decimal) else str(value)
-        digits = plain.lstrip("-").replace(".", "").strip("0")
-        if len(digits) > 15:
-            exact.append(f"{name}={plain}")
-    return (*prefix, *values, *suffix, "\n".join(exact))
-
-
 @dataclass
-class _DailyUsage:
+class Totals:
     requests: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
     total_tokens: int = 0
     actual_cost: Decimal = Decimal(0)
 
+    def add(self, other, arithmetic):
+        self.requests += other.requests
+        self.input_tokens += other.input_tokens
+        self.output_tokens += other.output_tokens
+        self.cache_read_tokens += other.cache_read_tokens
+        self.total_tokens += other.total_tokens
+        self.actual_cost = arithmetic.add(self.actual_cost, other.actual_cost)
 
-@dataclass
-class _SiteUsage:
-    rows: int = 0
-    users: set = field(default_factory=set)
-    total_cost: Decimal = Decimal(0)
-    days: dict = field(default_factory=dict)
-
-
-def _day(raw, month):
-    if not isinstance(raw, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", raw):
-        raise ValueError("day must be YYYY-MM-DD")
-    day = date.fromisoformat(raw)
-    if raw[:7] != month:
-        raise ValueError("day outside report month")
-    return day
+    def cells(self):
+        return (self.requests, self.input_tokens, self.output_tokens,
+                self.cache_read_tokens, self.total_tokens, self.actual_cost)
 
 
-def _details(month, site, source, usage, arithmetic):
+def _details(month, site, source, users, overall, arithmetic):
     yield DETAIL
     with Path(source).open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.reader(stream, strict=True)
         try:
             if tuple(next(reader, ())) != COLUMNS:
-                raise ValueError("missing or invalid CSV HEADER (including column order)")
+                raise ValueError("missing or invalid CSV header")
             for row in reader:
                 if len(row) != len(COLUMNS):
-                    raise ValueError(f"expected {len(COLUMNS)} columns, got {len(row)}")
-                day = _day(row[0], month)
-                names = COLUMNS[8:16]
-                numbers = tuple(_number(raw, name) for raw, name in zip(row[8:16], names))
-                requests = numbers[0]
-                total_tokens, total_cost, actual_cost = numbers[-3:]
-                log = usage.days.setdefault(day, _DailyUsage())
-                log.requests += requests
-                log.total_tokens += total_tokens
-                log.actual_cost = arithmetic.add(log.actual_cost, actual_cost)
-                usage.rows += 1
-                if row[1]:
-                    usage.users.add(row[1])
-                usage.total_cost = arithmetic.add(usage.total_cost, total_cost)
-                yield _with_exact_values((site, *row[:8]), names, numbers, row[16:])
+                    raise ValueError("unexpected column count")
+                raw_day, uid, username, profile, department, group, model = row[:7]
+                if not raw_day.startswith(month + "-") or date.fromisoformat(raw_day).isoformat() != raw_day:
+                    raise ValueError("invalid day or day outside month")
+                if not uid:
+                    raise ValueError("missing user ID")
+                identity = (username, profile, department)
+                metrics = Totals(*(_number(raw, key) for raw, key in zip(row[7:], COLUMNS[7:])))
+                if uid not in users:
+                    users[uid] = (identity, Totals())
+                existing, usage = users[uid]
+                if identity != existing:
+                    raise ValueError("inconsistent user profile in monthly snapshot")
+                usage.add(metrics, arithmetic)
+                overall.add(metrics, arithmetic)
+                yield (site, raw_day, uid, *identity, group, model, *metrics.cells())
         except (ValueError, csv.Error) as exc:
             raise ValueError(f"{site!r}, CSV line {reader.line_num}: {exc}") from exc
 
 
-@dataclass
-class _Comparison:
-    comparable_days: int = 0
-    different_days: int = 0
-    net: _DailyUsage = field(default_factory=_DailyUsage)
-
-
-def _daily_rows(month, site, logs, history, comparison, arithmetic):
-    yield DAILY
-    dashboard = {}
-    for record in history:
-        day = _day(record["day"], month)
-        if day in dashboard:
-            raise ValueError(f"duplicate dashboard day: {day}")
-        dashboard[day] = _DailyUsage(
-            _number(str(record["requests"]), "requests"),
-            _number(str(record["total_tokens"]), "total_tokens"),
-            _number(record["actual_cost"], "actual_cost"),
-        )
-    first = date.fromisoformat(month + "-01")
-    for n in range(1, calendar.monthrange(first.year, first.month)[1] + 1):
-        day = first.replace(day=n)
-        log = logs.get(day, _DailyUsage())
-        other = dashboard.get(day)
-        if day not in logs and other is None:
-            state = "未见记录"
-            values = ("未见记录", "未知", "未知") * 3
-        elif other is None:
-            state = "仪表盘未知"
-            values = (log.requests, "未知", "未知", log.total_tokens, "未知", "未知",
-                      log.actual_cost, "未知", "未知")
-        else:
-            req = other.requests - log.requests
-            tokens = other.total_tokens - log.total_tokens
-            cost = arithmetic.subtract(other.actual_cost, log.actual_cost)
-            different = bool(req or tokens or cost)
-            state = "有差额" if different else "相符"
-            if day not in logs:
-                state += "（仅仪表盘有记录）"
-            values = (log.requests, other.requests, req, log.total_tokens, other.total_tokens, tokens,
-                      log.actual_cost, other.actual_cost, cost)
-            comparison.comparable_days += 1
-            comparison.different_days += different
-            comparison.net.requests += req
-            comparison.net.total_tokens += tokens
-            comparison.net.actual_cost = arithmetic.add(comparison.net.actual_cost, cost)
-        yield _with_exact_values((site, day.isoformat()), DAILY[2:-2], values, (state,))
-
-
-def _sheet(archive, index, widths, rows, *, table=True):
+def _sheet(archive, index, widths, rows):
     """Stream worksheet XML straight into the zip; only one row is buffered."""
     with archive.open(f"xl/worksheets/sheet{index}.xml", "w", force_zip64=True) as part:
         def write(xml):
             part.write(xml.encode("utf-8"))
 
         write(f'{XML_DECL}<worksheet xmlns="{XMLNS}">')
-        if table:
-            write('<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" '
-                  'topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
-                  '</sheetView></sheetViews>')
+        write('<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" '
+              'topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
+              '</sheetView></sheetViews>')
         write("<cols>")
         for col, width in enumerate(widths, 1):
             write(f'<col min="{col}" max="{col}" width="{width}" customWidth="1"/>')
@@ -206,21 +136,47 @@ def _sheet(archive, index, widths, rows, *, table=True):
             cells = []
             for col, value in enumerate(row):
                 ref = f"{chr(ord('A') + col)}{row_num}"  # all report sheets fit within A:Z
+                if not isinstance(value, str):
+                    _check_range(value)
+                    # Preserve outliers beyond Excel's 15 significant digits in the same cell.
+                    plain = format(value, "f") if isinstance(value, Decimal) else str(value)
+                    if len(plain.lstrip("-").replace(".", "").strip("0")) > 15:
+                        value = plain
                 if isinstance(value, str):
-                    cells.append(f'<c r="{ref}" t="inlineStr"><is><t xml:space="preserve">'
+                    style = ' s="1"' if row_num == 1 else ""
+                    cells.append(f'<c r="{ref}"{style} t="inlineStr"><is><t xml:space="preserve">'
                                  f'{_text(value)}</t></is></c>')
                 else:
-                    cells.append(f'<c r="{ref}" t="n"><v>{value}</v></c>')
+                    style = 3 if isinstance(value, Decimal) else 2
+                    cells.append(f'<c r="{ref}" s="{style}" t="n"><v>{value}</v></c>')
             write(f'<row r="{row_num}">{"".join(cells)}</row>')
         write("</sheetData>")
-        if table:
-            last = chr(ord("A") + len(widths) - 1)
-            write(f'<autoFilter ref="A1:{last}{row_num}"/>')
+        last = chr(ord("A") + len(widths) - 1)
+        write(f'<autoFilter ref="A1:{last}{row_num}"/>')
         write("</worksheet>")
+    return row_num - 1
+
+
+# Currency uses at least two decimals and can show the ledger's ten decimal places.
+_STYLES = f"""<styleSheet xmlns="{XMLNS}">
+<numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00########"/></numFmts>
+<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>
+<font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font></fonts>
+<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>
+<fill><patternFill patternType="solid"><fgColor rgb="FF25476A"/><bgColor indexed="64"/></patternFill></fill></fills>
+<borders count="1"><border/></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
+<xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
+</styleSheet>"""
 
 
 def _package(archive):
     mime = "application/vnd.openxmlformats-officedocument.spreadsheetml"
+    archive.writestr("xl/styles.xml", XML_DECL + _STYLES)
     overrides = "".join(f'<Override PartName="/xl/worksheets/sheet{i}.xml" '
                         f'ContentType="{mime}.worksheet+xml"/>' for i in range(1, len(SHEETS) + 1))
     archive.writestr("[Content_Types].xml", XML_DECL +
@@ -228,12 +184,13 @@ def _package(archive):
                      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
                      '<Default Extension="xml" ContentType="application/xml"/>'
                      f'<Override PartName="/xl/workbook.xml" ContentType="{mime}.sheet.main+xml"/>'
+                     f'<Override PartName="/xl/styles.xml" ContentType="{mime}.styles+xml"/>'
                      f'{overrides}</Types>')
     archive.writestr("_rels/.rels", XML_DECL + f'<Relationships xmlns="{PKG_REL}">'
                      f'<Relationship Id="rId1" Type="{DOC_REL}/officeDocument" Target="xl/workbook.xml"/>'
                      '</Relationships>')
     sheets = []
-    relationships = []
+    relationships = [f'<Relationship Id="styles" Type="{DOC_REL}/styles" Target="styles.xml"/>']
     for i, name in enumerate(SHEETS, 1):
         sheets.append(f'<sheet name="{name}" sheetId="{i}" r:id="rId{i}"/>')
         relationships.append(f'<Relationship Id="rId{i}" Type="{DOC_REL}/worksheet" '
@@ -244,13 +201,8 @@ def _package(archive):
                      f'<Relationships xmlns="{PKG_REL}">{"".join(relationships)}</Relationships>')
 
 
-def build_workbook(output: Path, month: str, sources: dict[str, Path], reconciliation=None) -> dict:
-    """Publish one site's XLSX and return {site: totals} with exact decimal strings.
-
-    Requires UTF-8 COPY CSV with its exact header. Optional reconciliation
-    maps each site to daily dashboard records (day, requests, total_tokens,
-    actual_cost). Missing days remain unknown. Invalid input preserves prior output.
-    """
+def build_workbook(output: Path, month: str, sources: dict[str, Path]) -> dict:
+    """Write one site's three sheets from a single private COPY snapshot."""
     if not re.fullmatch(r"[0-9]{4}-(?:0[1-9]|1[0-2])", month) or month.startswith("0000"):
         raise ValueError("month must be YYYY-MM")
     if len(sources) != 1:
@@ -265,54 +217,41 @@ def build_workbook(output: Path, month: str, sources: dict[str, Path], reconcili
     # integer digits. Seven extra digits cover summing a full worksheet.
     arithmetic = Context(prec=MAX_TEXT + 308 + 7)
     arithmetic.traps[Inexact] = True
-    usage = _SiteUsage()
+    users = {}
+    total = Totals()
     tmp = NamedTemporaryFile(dir=output.parent, prefix=".monthly-usage-", delete=False)
     try:
         with tmp, ZipFile(tmp, "w", compression=ZIP_DEFLATED) as archive:
             _package(archive)
-            _sheet(archive, 3, (20, 15, 22, 24, 36, 24, 24, 24, 30, 15, 20, 20, 20, 20,
-                                20, 22, 22, 22, 24, 55), _details(month, site, source, usage, arithmetic))
-            actual = Decimal(0)
-            for log in usage.days.values():
-                actual = arithmetic.add(actual, log.actual_cost)
-            total = dict(rows=usage.rows, requests=sum(log.requests for log in usage.days.values()),
-                         total_tokens=sum(log.total_tokens for log in usage.days.values()),
-                         total_cost=usage.total_cost, actual_cost=actual, users=len(usage.users))
-            summary_row = _with_exact_values((site,), total.keys(), total.values())
-            _sheet(archive, 2, (20, 14, 18, 22, 22, 22, 14, 55), (SUMMARY, summary_row))
-            history = reconciliation.get(site, ()) if reconciliation is not None else ()
-            comparison = _Comparison()
-            _sheet(archive, 4, (20, 15, 16, 18, 16, 22, 22, 22, 22, 22, 22, 30, 55),
-                   _daily_rows(month, site, usage.days, history, comparison, arithmetic))
-            net = comparison.net
-            net_values = (net.requests, net.total_tokens, net.actual_cost)
-            if not comparison.comparable_days:
-                net_values = ("未知",) * 3
-            notes = [
-                ("月度用量报告", month),
-                ("站点", site),
-                ("本月日志", f"{usage.rows} 条明细" if usage.rows else "本月无用量日志记录"),
-                ("可对账天数", comparison.comparable_days),
-                ("其中有差额的天数", comparison.different_days if comparison.comparable_days else "未知"),
-                ("净差项目", "仪表盘 − 日志（仅可对账日）", "精确原值"),
-                *(_with_exact_values((label,), (label,), (value,)) for label, value in
-                  zip(("净差请求数", "净差 Token", "净差实际费用（美元）"), net_values)),
-                ("分组", "使用分组是该用户当天在该模型上实际使用的组。"),
-                ("允许分组", "导出时显式授权给该用户的组，未列公开组。"),
-                ("订阅分组", "导出时仍有效的订阅组。"),
-                ("明细", "每行对应一天、一个用户和一个模型。真实姓名和部门取导出时的资料，缺失时留空。"),
-                ("汇总", "按日志汇总。请求数累计各行请求，用户数按非空用户 ID 去重。"),
-                ("金额", "总费用为原始费用，实际费用为用户计费金额，单位均为美元。计费额包含订阅用量，不等同于现金收支。"),
-                ("每日对账", "按北京时间逐日对比独立仪表盘历史汇总与用量日志。差额 = 仪表盘 − 日志。"),
-                ("历史差额", "差额无法分配给具体用户或模型，不计入用户明细和日志汇总。"),
-                ("未知", "缺少当日仪表盘记录时，仪表盘数值和差额均为未知。已有记录中的零保留为零。"),
-                ("未见记录", "日志和仪表盘均无记录时标为“未见记录”。仅有仪表盘记录时，当日日志合计按零参与对账。"),
-                ("数值精度", "超过 15 位有效数字时，请以该行“精确原值”列的十进制文本核账。"),
-            ]
-            _sheet(archive, 1, (26, 100, 55), notes, table=False)
-        for key in ("total_cost", "actual_cost"):
-            total[key] = format(total[key], "f")
+            rows = _sheet(archive, 1, (17, 15, 16, 26, 24, 54, 33, 34, 18, 22, 22, 22, 22, 23),
+                          _details(month, site, source, users, total, arithmetic))
+            # Each account contributes its complete usage to exactly one department.
+            # DingTalk stores an organization path; a parent is not a second allocation.
+            departments = {}
+            counts = {}
+            for (_, _, department), usage in users.values():
+                if department not in departments:
+                    departments[department] = Totals()
+                    counts[department] = 0
+                departments[department].add(usage, arithmetic)
+                counts[department] += 1
+
+            def department_rows():
+                yield DEPARTMENT
+                for key, usage in sorted(departments.items(), key=lambda item: (-item[1].total_tokens, item[0])):
+                    yield (site, key or "未填写部门", counts[key], *usage.cells())
+
+            def user_rows():
+                yield USER
+                for uid, (identity, usage) in sorted(users.items(), key=lambda item: (-item[1][1].total_tokens, item[0])):
+                    yield (site, uid, *identity, *usage.cells())
+
+            widths = (18, 22, 22, 22, 22, 23)
+            _sheet(archive, 2, (17, 54, 18, *widths), department_rows())
+            _sheet(archive, 3, (17, 16, 26, 24, 54, *widths), user_rows())
         os.replace(tmp.name, output)
     finally:
         Path(tmp.name).unlink(missing_ok=True)
-    return {site: total}
+    return {site: dict(rows=rows, users=len(users), departments=len(departments),
+                       requests=total.requests, total_tokens=total.total_tokens,
+                       actual_cost=format(total.actual_cost, "f"))}
