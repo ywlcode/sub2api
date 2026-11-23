@@ -32,19 +32,26 @@ func TestMonthlyUsageSnapshotAndWorkbook(t *testing.T) {
 CREATE VIEW settings AS SELECT key, value FROM public.settings WHERE false;
 CREATE VIEW security_penalty_subjects AS SELECT * FROM public.security_penalty_subjects WHERE false;
 CREATE VIEW groups AS SELECT 9 AS id, 'old group' AS name;
-CREATE VIEW users AS SELECT 1 AS id, 'email@example.invalid' AS username, '2024-01-01'::timestamptz AS created_at,
-    NULL::timestamptz AS deleted_at, 'user' AS role, 'active' AS status;
-CREATE VIEW user_attribute_definitions AS SELECT 1 AS id, 'department' AS key, NULL::timestamptz AS deleted_at;
-CREATE VIEW user_attribute_values AS SELECT 1 AS user_id, 1 AS attribute_id,
-    concat_ws('/', current_setting('transaction_read_only'), current_setting('transaction_isolation'), now()::text) AS value;
-CREATE VIEW usage_logs AS SELECT 1 AS user_id, ' '::text AS requested_model, 'fixture-model' AS model,
+CREATE VIEW users AS SELECT id, 'email@example.invalid' AS username, '2024-01-01'::timestamptz AS created_at,
+    deleted_at, role, 'active' AS status
+    FROM (VALUES (1, 'user', NULL::timestamptz), (2, 'admin', NULL),
+                 (3, 'admin', NULL), (4, 'admin', '2024-03-15Z')) u(id, role, deleted_at);
+CREATE TABLE user_attribute_definitions (
+    id bigint PRIMARY KEY, key text, type text, options jsonb, enabled boolean DEFAULT true, deleted_at timestamptz
+);
+INSERT INTO user_attribute_definitions (id, key, type) VALUES (1, 'department', 'text');
+CREATE VIEW user_attribute_values AS SELECT id AS user_id, 1 AS attribute_id,
+    CASE WHEN id = 3 THEN 'admin-only' ELSE
+        concat_ws('/', current_setting('transaction_read_only'), current_setting('transaction_isolation'), now()::text)
+    END AS value FROM users;
+CREATE VIEW usage_logs AS SELECT id AS user_id, ' '::text AS requested_model, 'fixture-model' AS model,
     9 AS group_id, 21 AS input_tokens, 3 AS output_tokens, 5 AS cache_creation_tokens, 7 AS cache_read_tokens,
     0.1000000001::numeric AS actual_cost, ts AS created_at
-    FROM (VALUES ('2024-01-31 16:00Z'::timestamptz), ('2024-02-29 16:00Z'::timestamptz)) days(ts);`)
+    FROM (VALUES ('2024-01-31 16:00Z'::timestamptz), ('2024-02-29 16:00Z'::timestamptz)) days(ts) CROSS JOIN users;`)
 	require.NoError(t, err)
 	repo := NewOpsRepository(db).(*opsRepository)
 	var snapshot bytes.Buffer
-	counts, err := repo.snapshotMonthlyUsage(ctx, "2024-02-01", &snapshot)
+	counts, err := repo.snapshotMonthlyUsage(ctx, "2024-02-01", 0, &snapshot)
 	require.NoError(t, err)
 	decoder := gob.NewDecoder(&snapshot)
 	var row monthlyusage.Row
@@ -61,11 +68,73 @@ CREATE VIEW usage_logs AS SELECT 1 AS user_id, ' '::text AS requested_model, 'fi
 		require.Zero(t, db.Stats().InUse, "output must not hold a database snapshot")
 		return out.Write(p)
 	})
-	require.NoError(t, repo.BuildMonthlyUsageReport(ctx, "2024-02", "boscserver", w))
+	require.NoError(t, repo.BuildMonthlyUsageReport(ctx, "2024-02", "boscserver", 0, w))
+
+	// An explicit field with an empty or missing value must ignore the populated legacy department.
+	_, err = db.ExecContext(ctx, `
+INSERT INTO user_attribute_definitions (id, key, type, options) VALUES
+    (2, 'team', 'select', '[{"value":" eng ","label":" 研发 "}]'),
+    (3, 'notes', 'textarea', '[{"value":"  研发  ","label":"unused"}]'),
+    (4, 'empty_team', 'select', '[]'),
+    (5, 'past_team', 'select', '[]'),
+    (6, 'missing_value', 'text', NULL),
+    (7, 'members', 'multi_select', '[]');
+CREATE OR REPLACE VIEW user_attribute_values AS
+    SELECT 1 AS user_id, 1 AS attribute_id, 'legacy department' AS value
+    UNION ALL SELECT 1, 2, ' eng '
+    UNION ALL SELECT 2, 2, ' eng '
+    UNION ALL SELECT 3, 2, 'admin-only'
+    UNION ALL SELECT 4, 2, 'deleted-admin'
+    UNION ALL SELECT 1, 3, '  研发  '
+    UNION ALL SELECT 1, 4, E' \t'
+    UNION ALL SELECT 1, 5, ' retired-option ';`)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		id         int64
+		department string
+	}{
+		{2, "研发"}, {3, "研发"}, {4, ""}, {5, "retired-option"}, {6, ""},
+	} {
+		ok, err := repo.MonthlyUsageDepartmentAttributeAvailable(ctx, tc.id)
+		require.NoError(t, err)
+		require.True(t, ok)
+		snapshot.Reset()
+		counts, err := repo.snapshotMonthlyUsage(ctx, "2024-02-01", tc.id, &snapshot)
+		require.NoError(t, err)
+		var detail monthlyusage.Row
+		require.NoError(t, gob.NewDecoder(&snapshot).Decode(&detail))
+		require.Equal(t, tc.department, detail.Department, "attribute %d", tc.id)
+		require.Equal(t, map[string]int64{tc.department: 1}, counts)
+	}
+
+	out.Reset()
+	require.NoError(t, repo.BuildMonthlyUsageReport(ctx, "2024-02", "boscserver", 2, w))
 	book, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
 	require.NoError(t, err)
-	_, err = book.Open("xl/worksheets/sheet1.xml")
+	for _, sheet := range []string{"sheet1", "sheet2", "sheet3"} {
+		part, err := book.Open("xl/worksheets/" + sheet + ".xml")
+		require.NoError(t, err)
+		body, err := io.ReadAll(part)
+		require.NoError(t, part.Close())
+		require.NoError(t, err)
+		require.Equal(t, 2, bytes.Count(body, []byte("<row ")), "worksheet %s", sheet) // header and the one non-admin row
+		require.Contains(t, string(body), "研发", "worksheet %s", sheet)
+		require.NotContains(t, string(body), "admin-only", "worksheet %s", sheet)
+	}
+
+	_, err = db.ExecContext(ctx, `
+UPDATE user_attribute_definitions SET enabled = false WHERE id = 2;
+UPDATE user_attribute_definitions SET deleted_at = now() WHERE id = 3;
+INSERT INTO user_attribute_definitions (id, key, type) VALUES (8, 'notes', 'textarea');`)
 	require.NoError(t, err)
+	for _, id := range []int64{2, 3, 7, 999, -1} {
+		ok, err := repo.MonthlyUsageDepartmentAttributeAvailable(ctx, id)
+		require.NoError(t, err)
+		require.False(t, ok)
+		out.Reset()
+		require.ErrorContains(t, repo.BuildMonthlyUsageReport(ctx, "2024-02", "boscserver", id, &out), "unavailable")
+		require.Zero(t, out.Len())
+	}
 }
 
 type monthlyReportWriter func([]byte) (int, error)

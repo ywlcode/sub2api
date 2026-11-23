@@ -51,7 +51,8 @@ func (r *manualMonthlyStoreStub) UpdateManualMonthlyUsage(_ context.Context, j *
 	r.jobs[j.ID] = *j
 	return nil
 }
-func (r *manualMonthlyStoreStub) BuildMonthlyUsageReport(ctx context.Context, _, _ string, w io.Writer) error {
+func (r *manualMonthlyStoreStub) BuildMonthlyUsageReport(ctx context.Context, _, _ string, departmentAttributeID int64, w io.Writer) error {
+	r.attributeIDs = append(r.attributeIDs, departmentAttributeID)
 	if r.started != nil {
 		r.once.Do(func() { close(r.started) })
 		select {
@@ -78,7 +79,7 @@ func TestManualMonthlyUsageDeliversOncePerClickWithoutAutoEnabled(t *testing.T) 
 	id := uuid.NewString()
 	_, err := ops.StartManualMonthlyUsage(ctx, "2024-02", id)
 	require.ErrorIs(t, err, ErrMonthlyUsageInvalid)
-	require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, `{"report":{"enabled":true,"monthly_usage_enabled":false,"recipients":["report@example.org"]}}`))
+	require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, `{"report":{"enabled":true,"monthly_usage_enabled":false,"monthly_usage_department_attribute_id":23,"recipients":["report@example.org"]}}`))
 	req, cancel := context.WithCancel(ctx)
 	defer cancel()
 	first, err := ops.StartManualMonthlyUsage(req, "2024-02", id)
@@ -110,6 +111,7 @@ func TestManualMonthlyUsageDeliversOncePerClickWithoutAutoEnabled(t *testing.T) 
 	require.NoError(t, err)
 	worker.wg.Wait()
 	require.Equal(t, int64(2), smtp.messageCount())
+	require.Equal(t, []int64{23, 23}, store.attributeIDs)
 	_, err = settings.GetValue(ctx, monthlyUsageCheckpoint)
 	require.ErrorIs(t, err, ErrSettingNotFound)
 	require.Empty(t, store.states) // manual send has independent receipts
@@ -123,7 +125,7 @@ func TestManualMonthlyUsagePartialOutcomesAndRemovedRecipient(t *testing.T) {
 	worker := &OpsScheduledReportService{opsService: &OpsService{settingRepo: settings, opsRepo: store}}
 	job := OpsMonthlyUsageJob{ID: uuid.NewString(), Month: "2024-02", Total: 3, Status: "running"}
 	var sent []string
-	worker.runManualMonthlyUsage(ctx, store, store, job, []string{"yes@example.org", "removed@example.org", "unknown@example.org"}, func(_ context.Context, to, _, _, _ string, _ []byte) (bool, error) {
+	worker.runManualMonthlyUsage(ctx, store, store, job, []string{"yes@example.org", "removed@example.org", "unknown@example.org"}, 0, func(_ context.Context, to, _, _, _ string, _ []byte) (bool, error) {
 		sent = append(sent, to)
 		if to == "unknown@example.org" {
 			return true, errors.New("no receipt")

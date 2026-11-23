@@ -136,12 +136,12 @@ func (s *OpsService) StartManualMonthlyUsage(ctx context.Context, month, id stri
 		defer worker.wg.Done()
 		workCtx, cancel := context.WithTimeout(base, 15*time.Minute)
 		defer cancel()
-		worker.runManualMonthlyUsage(workCtx, store, ledger, state, recipients, worker.emailService.SendMonthlyUsageExcel)
+		worker.runManualMonthlyUsage(workCtx, store, ledger, state, recipients, cfg.Report.MonthlyUsageDepartmentAttributeID, worker.emailService.SendMonthlyUsageExcel)
 	}(*job)
 	return job, nil
 }
 
-func (s *OpsScheduledReportService) runManualMonthlyUsage(ctx context.Context, store OpsManualMonthlyUsageRepository, ledger OpsMonthlyUsageRepository, job OpsMonthlyUsageJob, recipients []string, send monthlyUsageSender) {
+func (s *OpsScheduledReportService) runManualMonthlyUsage(ctx context.Context, store OpsManualMonthlyUsageRepository, ledger OpsMonthlyUsageRepository, job OpsMonthlyUsageJob, recipients []string, departmentAttributeID int64, send monthlyUsageSender) {
 	save := func() bool {
 		persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
@@ -153,7 +153,7 @@ func (s *OpsScheduledReportService) runManualMonthlyUsage(ctx context.Context, s
 	}
 	var file bytes.Buffer
 	label := s.monthlyUsageSiteName(ctx)
-	if err := ledger.BuildMonthlyUsageReport(ctx, job.Month, label, &file); err != nil {
+	if err := ledger.BuildMonthlyUsageReport(ctx, job.Month, label, departmentAttributeID, &file); err != nil {
 		log.Printf("[OpsMonthlyUsage] manual job %s export: %v", job.ID, err)
 		job.Status, job.Failed = "failed", job.Total
 		save()
@@ -164,7 +164,7 @@ func (s *OpsScheduledReportService) runManualMonthlyUsage(ctx context.Context, s
 	// or checkpoint; reconnecting with the same request ID never replays mail.
 	cfg, err := s.opsService.GetEmailNotificationConfig(ctx)
 	allowed := map[string]bool{}
-	if err == nil && cfg.Report.Enabled && s.opsService.IsMonitoringEnabled(ctx) {
+	if err == nil && cfg.Report.Enabled && cfg.Report.MonthlyUsageDepartmentAttributeID == departmentAttributeID && s.opsService.IsMonitoringEnabled(ctx) {
 		for _, addr := range normalizeEmails(cfg.Report.Recipients) {
 			allowed[addr] = true
 		}

@@ -24,6 +24,8 @@ type OpsEmailReportConfig struct {
 	WeeklySummaryEnabled  bool     `json:"weekly_summary_enabled"`
 	WeeklySummarySchedule string   `json:"weekly_summary_schedule"`
 	MonthlyUsageEnabled   bool     `json:"monthly_usage_enabled"`
+	// Zero uses the legacy DingTalk/department preference for this site.
+	MonthlyUsageDepartmentAttributeID int64 `json:"monthly_usage_department_attribute_id"`
 	// Set by the server when monthly delivery becomes active; never trust a
 	// client-supplied start period when deciding which past months to send.
 	MonthlyUsageFirstPeriod         string  `json:"monthly_usage_first_period,omitempty"`
@@ -45,7 +47,8 @@ type OpsEmailNotificationConfigUpdateRequest struct {
 type OpsEmailReportUpdate struct {
 	OpsEmailReportConfig
 	// Older clients may save the daily/weekly controls without this field.
-	MonthlyUsageEnabled *bool `json:"monthly_usage_enabled"`
+	MonthlyUsageEnabled               *bool  `json:"monthly_usage_enabled"`
+	MonthlyUsageDepartmentAttributeID *int64 `json:"monthly_usage_department_attribute_id"`
 }
 
 type OpsDistributedLockSettings struct {

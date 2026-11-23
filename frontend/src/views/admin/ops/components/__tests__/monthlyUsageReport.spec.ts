@@ -2,14 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, shallowMount } from '@vue/test-utils'
 import OpsSettingsDialog from '../OpsSettingsDialog.vue'
 import OpsEmailNotificationCard from '../OpsEmailNotificationCard.vue'
+import MonthlyUsageDepartmentField from '../MonthlyUsageDepartmentField.vue'
 import MonthlyUsageSender from '../MonthlyUsageSender.vue'
 import Toggle from '@/components/common/Toggle.vue'
 
-const { get, put } = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn() }))
-vi.mock('@/api/client', () => ({ apiClient: { get, put } }))
+const { get, put, post } = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), post: vi.fn() }))
+vi.mock('@/api/client', () => ({ apiClient: { get, put, post } }))
 vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ user: { id: 17 } }) }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showSuccess: vi.fn(), showError: vi.fn() }) }))
-vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
+vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string, params?: { id?: number }) => params?.id ? key + ' #' + params.id : key }) }))
 enableAutoUnmount(afterEach)
 
 const configPath = '/admin/ops/email-notification/config'
@@ -29,7 +30,7 @@ const legacyConfig = {
 
 const stubs = {
   BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /><slot name="footer" /></div>' },
-  Toggle, MonthlyUsageSender
+  Toggle, MonthlyUsageSender, MonthlyUsageDepartmentField
 }
 async function openSettings() {
   const wrapper = shallowMount(OpsSettingsDialog, { props: { show: false }, global: { stubs } })
@@ -41,6 +42,7 @@ async function openEmailCard() {
   const wrapper = shallowMount(OpsEmailNotificationCard, { global: { stubs } })
   await flushPromises()
   await wrapper.get('button.btn-secondary').trigger('click')
+  await flushPromises()
   return wrapper
 }
 
@@ -48,7 +50,16 @@ describe.each([
   { editor: 'ops settings', open: openSettings, control: '#ops-monthly-usage' },
   { editor: 'email notifications', open: openEmailCard, control: '[aria-describedby="ops-email-monthly-usage-hint"]' }
 ])('monthly usage report in $editor', ({ open, control }) => {
-  let report: typeof legacyConfig.report & { monthly_usage_enabled?: boolean }
+  let report: typeof legacyConfig.report & { monthly_usage_enabled?: boolean; monthly_usage_department_attribute_id?: number }
+  const attributes = [
+    { id: 7, name: 'Department', type: 'text', enabled: true },
+    { id: 9, name: 'Department', type: 'select', enabled: true },
+    { id: 12, name: 'Division', type: 'textarea', enabled: true },
+    { id: 13, name: 'Disabled', type: 'text', enabled: false },
+    { id: 14, name: 'Headcount', type: 'number', enabled: true },
+    { id: 15, name: 'Tags', type: 'multi_select', enabled: true }
+  ]
+  const listAttributes = vi.fn()
   beforeEach(() => {
     vi.resetAllMocks()
     sessionStorage.clear()
@@ -63,10 +74,19 @@ describe.each([
       },
       '/admin/ops/settings/metric-thresholds': {}
     }
-    get.mockImplementation(async (path: string) => ({
-      data: path === configPath ? { alert: legacyConfig.alert, report } : settings[path]
-    }))
-    put.mockImplementation(async (_path: string, data: unknown) => ({ data }))
+    listAttributes.mockResolvedValue(attributes)
+    get.mockImplementation(async (path: string) => {
+      if (path === '/admin/user-attributes') return { data: await listAttributes() }
+      return { data: path === configPath ? structuredClone({ alert: legacyConfig.alert, report }) : settings[path] }
+    })
+    put.mockImplementation(async (path: string, payload) => {
+      const data = JSON.parse(JSON.stringify(payload))
+      if (path === configPath) {
+        report = { ...report, ...data.report }
+        return { data: { ...data, report: structuredClone(report) } }
+      }
+      return { data }
+    })
   })
 
   it.each([
@@ -76,6 +96,7 @@ describe.each([
   ])('loads $initial and saves $expected (toggle=$toggle) with existing report settings', async ({ initial, toggle, expected }) => {
     if (initial !== undefined) report.monthly_usage_enabled = initial
     const wrapper = await open()
+    expect(wrapper.getComponent(MonthlyUsageDepartmentField).get('select').element.value).toBe('0')
     const monthly = wrapper.get(control)
     const checked = () => monthly.element instanceof HTMLInputElement
       ? monthly.element.checked
@@ -91,6 +112,78 @@ describe.each([
       alert: legacyConfig.alert,
       report: { ...legacyConfig.report, monthly_usage_enabled: expected }
     })
+  })
+
+  it('selects an eligible field by name and ID, blocks unsaved sends and reopens the saved choice', async () => {
+    report.monthly_usage_department_attribute_id = 7
+    const wrapper = await open()
+    const select = wrapper.getComponent(MonthlyUsageDepartmentField).get('select')
+    const send = wrapper.getComponent(MonthlyUsageSender).get('button')
+    expect(get).toHaveBeenCalledWith('/admin/user-attributes', { params: { enabled: true } })
+    expect(select.element.value).toBe('7')
+    expect(select.findAll('option').map(option => option.text())).toEqual([
+      'admin.ops.settings.monthlyDepartment.automatic', 'Department (#7)', 'Department (#9)', 'Division (#12)'
+    ])
+    await select.setValue('9')
+    expect(send.element.disabled).toBe(true)
+    await send.trigger('click')
+    expect(post).not.toHaveBeenCalled()
+    await select.setValue('7')
+    expect(send.element.disabled).toBe(false)
+    await select.setValue('9')
+    await wrapper.get('button.btn-primary').trigger('click')
+    await flushPromises()
+    expect(report.monthly_usage_department_attribute_id).toBe(9)
+    wrapper.unmount()
+
+    const reopened = await open()
+    expect(reopened.getComponent(MonthlyUsageDepartmentField).get('select').element.value).toBe('9')
+    const sender = reopened.getComponent(MonthlyUsageSender)
+    const month = sender.get('input').element.value
+    post.mockResolvedValue({ data: { id: 'job', month, status: 'sent', total: 1, accepted: 1, failed: 0, uncertain: 0 } })
+    await sender.get('button').trigger('click')
+    expect(post).toHaveBeenCalledWith('/admin/ops/email-notification/monthly-usage/send',
+      { month, request_id: expect.any(String) }, { signal: expect.any(AbortSignal) })
+  })
+
+  it.each(['deleted', 'load failed'])('preserves the field when %s until Automatic is explicitly saved', async mode => {
+    report.monthly_usage_department_attribute_id = 41
+    if (mode === 'load failed') listAttributes.mockRejectedValue(new Error('offline'))
+    const wrapper = await open()
+    const field = wrapper.getComponent(MonthlyUsageDepartmentField)
+    const select = field.get('select')
+    const selected = select.element.selectedOptions[0]
+    expect(selected.value).toBe('41')
+    expect(selected.textContent).toContain(mode === 'deleted' ? 'unavailable #41' : 'current #41')
+    expect(field.find('[role="status"]').exists()).toBe(mode === 'load failed')
+    await wrapper.get('button.btn-primary').trigger('click')
+    await flushPromises()
+    expect(put.mock.calls.find(([path]) => path === configPath)?.[1].report).not.toHaveProperty('monthly_usage_department_attribute_id')
+    expect(report.monthly_usage_department_attribute_id).toBe(41)
+    wrapper.unmount()
+
+    const reopened = await open()
+    await reopened.getComponent(MonthlyUsageDepartmentField).get('select').setValue('0')
+    expect(reopened.getComponent(MonthlyUsageSender).get('button').element.disabled).toBe(true)
+    await reopened.get('button.btn-primary').trigger('click')
+    await flushPromises()
+    expect(report.monthly_usage_department_attribute_id).toBe(0)
+  })
+
+  it('keeps the manual guard when an older API ignores a custom field on save', async () => {
+    const wrapper = await open()
+    await wrapper.getComponent(MonthlyUsageDepartmentField).get('select').setValue('7')
+    put.mockImplementation(async (path, data) => ({ data: path === configPath ? legacyConfig : data }))
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      await wrapper.get('button.btn-primary').trigger('click')
+      await flushPromises()
+      const sender = wrapper.getComponent(MonthlyUsageSender)
+      expect(sender.text()).toContain('verifySettings')
+      expect(sender.get('button').element.disabled).toBe(true)
+    } finally {
+      err.mockRestore()
+    }
   })
 
   it('compares recipient and switch edits against an independent saved report', async () => {
@@ -138,12 +231,15 @@ describe.each([
 
   it('hides the monthly option when reports are disabled and preserves its saved preference', async () => {
     report.enabled = false
+    report.monthly_usage_department_attribute_id = 7
     report.monthly_usage_enabled = true
     const wrapper = await open()
     expect(wrapper.find(control).exists()).toBe(false)
+    expect(listAttributes).not.toHaveBeenCalled()
     await wrapper.get('button.btn-primary').trigger('click')
     await flushPromises()
-    expect(put).toHaveBeenCalledWith(configPath, { alert: legacyConfig.alert, report })
+    expect(report.monthly_usage_department_attribute_id).toBe(7)
+    expect(report.monthly_usage_enabled).toBe(true)
   })
 
   it('uses the shared report recipient requirement when monthly usage is enabled', async () => {
@@ -157,7 +253,7 @@ describe.each([
       await save.trigger('click')
       await flushPromises()
       expect(put).toHaveBeenCalledWith(configPath, {
-        alert: legacyConfig.alert, report: { ...report, enabled: false }
+        alert: legacyConfig.alert, report: { ...legacyConfig.report, recipients: [], monthly_usage_enabled: true, enabled: false }
       })
     }
   })

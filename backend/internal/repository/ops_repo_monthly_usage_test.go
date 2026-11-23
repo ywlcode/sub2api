@@ -18,7 +18,10 @@ func TestMonthlyUsageQueriesMatchDeployedExporter(t *testing.T) {
 	read := func(name string) string {
 		b, err := os.ReadFile("../../../deploy/monthly-usage/" + name)
 		require.NoError(t, err)
-		return strings.ReplaceAll(string(b), ":'month'", "$1")
+		return strings.NewReplacer(
+			":'month'", "$1",
+			"0::bigint AS department_attribute_id", "$2::bigint AS department_attribute_id",
+		).Replace(string(b))
 	}
 	require.Equal(t, read("headcounts.sql"), monthlyHeadcountsSQL)
 	src := read("usage.sql")
@@ -31,7 +34,7 @@ func TestMonthlyUsageQueriesMatchDeployedExporter(t *testing.T) {
 	for _, line := range strings.Split(body, "\n") {
 		lines = append(lines, strings.TrimPrefix(line, "    "))
 	}
-	require.Equal(t, strings.ReplaceAll(strings.Join(lines, "\n"), ":'email_pattern'", "$2"), monthlyUsageSQL)
+	require.Equal(t, strings.ReplaceAll(strings.Join(lines, "\n"), ":'email_pattern'", "$3"), monthlyUsageSQL)
 }
 
 func TestMonthlyUsageReadFailureRollsBackBeforeOutput(t *testing.T) {
@@ -40,15 +43,15 @@ func TestMonthlyUsageReadFailureRollsBackBeforeOutput(t *testing.T) {
 	defer db.Close()
 	r := &opsRepository{db: db}
 	mock.ExpectBegin()
-	mock.ExpectQuery("WITH penalty_config").WithArgs("2024-02-01").
+	mock.ExpectQuery("WITH penalty_config").WithArgs("2024-02-01", int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"counts"}).AddRow("{}"))
 	failure := errors.New("read interrupted")
-	mock.ExpectQuery("WITH daily_usage").WithArgs("2024-02-01", monthlyUsageEmailPattern).
+	mock.ExpectQuery("WITH daily_usage").WithArgs("2024-02-01", int64(0), monthlyUsageEmailPattern).
 		WillReturnRows(sqlmock.NewRows([]string{"usage_day"}).AddRow("day").RowError(0, failure)).
 		RowsWillBeClosed()
 	mock.ExpectRollback()
 	var out bytes.Buffer
-	require.ErrorIs(t, r.BuildMonthlyUsageReport(context.Background(), "2024-02", "boscserver", &out), failure)
+	require.ErrorIs(t, r.BuildMonthlyUsageReport(context.Background(), "2024-02", "boscserver", 0, &out), failure)
 	require.Empty(t, out.Bytes())
 	require.NoError(t, mock.ExpectationsWereMet())
 }

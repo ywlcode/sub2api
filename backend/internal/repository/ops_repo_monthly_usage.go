@@ -9,6 +9,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -39,7 +40,27 @@ func monthlyReportDate(month string) (string, error) {
 	return month + "-01", nil
 }
 
-func (r *opsRepository) BuildMonthlyUsageReport(ctx context.Context, month, site string, w io.Writer) error {
+// MonthlyUsageDepartmentAttributeAvailable checks an explicit attribute definition.
+func (r *opsRepository) MonthlyUsageDepartmentAttributeAvailable(ctx context.Context, id int64) (bool, error) {
+	if r == nil || r.db == nil {
+		return false, errors.New("missing monthly report database")
+	}
+	return monthlyUsageDepartmentAttributeAvailable(ctx, r.db, id)
+}
+
+func monthlyUsageDepartmentAttributeAvailable(ctx context.Context, db sqlQueryer, id int64) (bool, error) {
+	if id <= 0 {
+		return false, nil
+	}
+	var available bool
+	err := scanSingleRow(ctx, db, `SELECT EXISTS (
+		SELECT 1 FROM user_attribute_definitions
+		WHERE id = $1 AND deleted_at IS NULL AND enabled AND type IN ('text', 'textarea', 'select')
+	)`, []any{id}, &available)
+	return available, err
+}
+
+func (r *opsRepository) BuildMonthlyUsageReport(ctx context.Context, month, site string, departmentAttributeID int64, w io.Writer) error {
 	date, err := monthlyReportDate(month)
 	if err != nil {
 		return err
@@ -60,7 +81,7 @@ func (r *opsRepository) BuildMonthlyUsageReport(ctx context.Context, month, site
 	}
 	defer file.Close()
 
-	registered, err := r.snapshotMonthlyUsage(ctx, date, file)
+	registered, err := r.snapshotMonthlyUsage(ctx, date, departmentAttributeID, file)
 	if err != nil {
 		return err
 	}
@@ -87,7 +108,7 @@ func (r *opsRepository) BuildMonthlyUsageReport(ctx context.Context, month, site
 	})
 }
 
-func (r *opsRepository) snapshotMonthlyUsage(ctx context.Context, date string, dest io.Writer) (map[string]int64, error) {
+func (r *opsRepository) snapshotMonthlyUsage(ctx context.Context, date string, departmentAttributeID int64, dest io.Writer) (map[string]int64, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
@@ -96,8 +117,18 @@ func (r *opsRepository) snapshotMonthlyUsage(ctx context.Context, date string, d
 	}
 	defer tx.Rollback()
 
+	if departmentAttributeID != 0 {
+		ok, err := monthlyUsageDepartmentAttributeAvailable(ctx, tx, departmentAttributeID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("monthly usage department attribute %d is unavailable", departmentAttributeID)
+		}
+	}
+
 	var raw []byte
-	if err := tx.QueryRowContext(ctx, monthlyHeadcountsSQL, date).Scan(&raw); err != nil {
+	if err := tx.QueryRowContext(ctx, monthlyHeadcountsSQL, date, departmentAttributeID).Scan(&raw); err != nil {
 		return nil, err
 	}
 	var registered map[string]int64
@@ -105,7 +136,7 @@ func (r *opsRepository) snapshotMonthlyUsage(ctx context.Context, date string, d
 		return nil, err
 	}
 
-	rows, err := tx.QueryContext(ctx, monthlyUsageSQL, date, monthlyUsageEmailPattern)
+	rows, err := tx.QueryContext(ctx, monthlyUsageSQL, date, departmentAttributeID, monthlyUsageEmailPattern)
 	if err != nil {
 		return nil, err
 	}

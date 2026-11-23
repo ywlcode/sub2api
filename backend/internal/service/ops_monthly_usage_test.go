@@ -42,7 +42,7 @@ func TestMonthlyUsageCalendarAndCatchUp(t *testing.T) {
 
 func TestMonthlyUsageSettingsCompatibility(t *testing.T) {
 	repo := newNotificationEmailMemorySettingRepo()
-	o := OpsService{settingRepo: repo}
+	o := OpsService{settingRepo: repo, opsRepo: &monthlyTestStore{}}
 	ctx := context.Background()
 	update := func(body string) (*OpsEmailNotificationConfig, error) {
 		var req OpsEmailNotificationConfigUpdateRequest
@@ -52,7 +52,7 @@ func TestMonthlyUsageSettingsCompatibility(t *testing.T) {
 	cfg, err := o.GetEmailNotificationConfig(ctx)
 	require.NoError(t, err)
 	require.False(t, cfg.Report.MonthlyUsageEnabled)
-	cfg, err = update(`{"report":{"enabled":true,"recipients":["a@example.org"],"weekly_summary_enabled":true,"monthly_usage_enabled":true,"monthly_usage_first_period":"2000-01"}}`)
+	cfg, err = update(`{"report":{"enabled":true,"recipients":["a@example.org"],"weekly_summary_enabled":true,"monthly_usage_enabled":true,"monthly_usage_first_period":"2000-01","monthly_usage_department_attribute_id":23}}`)
 	require.NoError(t, err)
 	start := cfg.Report.MonthlyUsageFirstPeriod
 	require.Equal(t, firstMonthlyUsagePeriod(time.Now()), start)
@@ -60,23 +60,42 @@ func TestMonthlyUsageSettingsCompatibility(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, cfg.Report.MonthlyUsageEnabled)
 	require.Equal(t, start, cfg.Report.MonthlyUsageFirstPeriod)
+	require.EqualValues(t, 23, cfg.Report.MonthlyUsageDepartmentAttributeID, "older clients do not reset the saved field")
+	_, err = update(`{"report":{"monthly_usage_department_attribute_id":12}}`)
+	require.ErrorContains(t, err, "user attribute")
+	cfg, err = o.GetEmailNotificationConfig(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 23, cfg.Report.MonthlyUsageDepartmentAttributeID)
+	// The saved definition has since disappeared. A full-config client can
+	// still disable the reports without first supplying a different field.
+	o.opsRepo = nil
+	cfg, err = update(`{"report":{"enabled":false,"monthly_usage_department_attribute_id":23}}`)
+	require.NoError(t, err)
+	require.False(t, cfg.Report.Enabled)
+	require.EqualValues(t, 23, cfg.Report.MonthlyUsageDepartmentAttributeID)
 	_, err = update(`{"report":{"enabled":true,"recipients":[],"monthly_usage_enabled":true}}`)
 	require.Error(t, err)
-	cfg, err = update(`{"report":{"enabled":true,"monthly_usage_enabled":false,"weekly_summary_enabled":true}}`)
+	cfg, err = update(`{"report":{"enabled":true,"monthly_usage_enabled":false,"weekly_summary_enabled":true,"monthly_usage_department_attribute_id":0}}`)
 	require.NoError(t, err)
 	require.False(t, cfg.Report.MonthlyUsageEnabled)
+	require.Zero(t, cfg.Report.MonthlyUsageDepartmentAttributeID)
 	require.True(t, cfg.Report.WeeklySummaryEnabled)
 }
 
 type monthlyTestStore struct {
 	OpsRepository
-	states  map[string]string
-	built   []string
-	onBuild func()
+	states       map[string]string
+	built        []string
+	attributeIDs []int64
+	onBuild      func()
 }
 
-func (r *monthlyTestStore) BuildMonthlyUsageReport(_ context.Context, month, site string, w io.Writer) error {
+func (r *monthlyTestStore) MonthlyUsageDepartmentAttributeAvailable(_ context.Context, id int64) (bool, error) {
+	return id == 23, nil
+}
+func (r *monthlyTestStore) BuildMonthlyUsageReport(_ context.Context, month, site string, departmentAttributeID int64, w io.Writer) error {
 	r.built = append(r.built, month)
+	r.attributeIDs = append(r.attributeIDs, departmentAttributeID)
 	if r.onBuild != nil {
 		r.onBuild()
 	}
@@ -109,7 +128,7 @@ func TestMonthlyUsageDeliveryRestartAndRecipients(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 12, 1, 6, 15, 0, 0, monthlyUsageZone)
 	settings := newNotificationEmailMemorySettingRepo()
-	report := `{"alert":{"recipients":["alert@example.org"]},"report":{"enabled":true,"recipients":["A@example.org","b@example.org","a@example.org"],"monthly_usage_enabled":true,"monthly_usage_first_period":"2026-11"}}`
+	report := `{"alert":{"recipients":["alert@example.org"]},"report":{"enabled":true,"recipients":["A@example.org","b@example.org","a@example.org"],"monthly_usage_enabled":true,"monthly_usage_first_period":"2026-11","monthly_usage_department_attribute_id":23}}`
 	require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, report))
 	store := &monthlyTestStore{states: map[string]string{}}
 	s := &OpsScheduledReportService{opsService: &OpsService{opsRepo: store, settingRepo: settings}}
@@ -138,6 +157,7 @@ func TestMonthlyUsageDeliveryRestartAndRecipients(t *testing.T) {
 	require.Empty(t, period)
 	require.Equal(t, []string{"a@example.org", "b@example.org", "b@example.org"}, sent)
 	require.Equal(t, []string{"2026-11", "2026-11"}, store.built)
+	require.Equal(t, []int64{23, 23}, store.attributeIDs)
 }
 
 func TestMonthlyUsageNoDuplicateOrFallback(t *testing.T) {
@@ -202,9 +222,36 @@ func TestMonthlyUsageRechecksRecipientsAfterExport(t *testing.T) {
 	require.Empty(t, period)
 }
 
+func TestMonthlyUsageChangedDepartmentRetriesBeforeSending(t *testing.T) {
+	ctx := context.Background()
+	settings := newNotificationEmailMemorySettingRepo()
+	const initial = `{"report":{"enabled":true,"recipients":["a@example.org"],"monthly_usage_enabled":true,"monthly_usage_first_period":"2026-11","monthly_usage_department_attribute_id":23}}`
+	require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, initial))
+	store := &monthlyTestStore{states: map[string]string{}, onBuild: func() {
+		require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, strings.Replace(initial, ":23}", ":0}", 1)))
+	}}
+	s := &OpsScheduledReportService{opsService: &OpsService{settingRepo: settings, opsRepo: store}}
+	now := time.Date(2026, 12, 1, 6, 15, 0, 0, monthlyUsageZone)
+	sent := 0
+	send := func(context.Context, string, string, string, string, []byte) (bool, error) {
+		sent++
+		return false, nil
+	}
+	period, err := s.monthlyUsageTick(ctx, now, send)
+	require.NoError(t, err)
+	require.Empty(t, period)
+	require.Zero(t, sent)
+	store.onBuild = nil
+	period, err = s.monthlyUsageTick(ctx, now.Add(time.Hour), send)
+	require.NoError(t, err)
+	require.Equal(t, "2026-11", period)
+	require.Equal(t, 1, sent)
+	require.Equal(t, []int64{23, 0}, store.attributeIDs)
+}
+
 type monthlyWorkbookMailTestStore struct{ *monthlyTestStore }
 
-func (s monthlyWorkbookMailTestStore) BuildMonthlyUsageReport(_ context.Context, month, label string, w io.Writer) error {
+func (s monthlyWorkbookMailTestStore) BuildMonthlyUsageReport(_ context.Context, month, label string, _ int64, w io.Writer) error {
 	return monthlyusage.Build(w, label, map[string]int64{"研发": 2}, func(row func(monthlyusage.Row) error) error {
 		return row(monthlyusage.Row{Day: month + "-28", UserID: "07", Username: "测试用户", Department: "研发", Model: "test-model", Requests: "4", InputTokens: "8000000000", OutputTokens: "2000000", CacheReadTokens: "1000", TotalTokens: "8002001000", ActualCost: "12.51"})
 	})

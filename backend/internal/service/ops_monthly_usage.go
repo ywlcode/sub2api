@@ -21,7 +21,8 @@ const monthlyUsageCheckpoint = "ops_monthly_usage_last_completed_period"
 
 // OpsMonthlyUsageRepository is available on authoritative sites for report generation and delivery receipts.
 type OpsMonthlyUsageRepository interface {
-	BuildMonthlyUsageReport(context.Context, string, string, io.Writer) error
+	BuildMonthlyUsageReport(ctx context.Context, month, site string, departmentAttributeID int64, w io.Writer) error
+	MonthlyUsageDepartmentAttributeAvailable(ctx context.Context, id int64) (bool, error)
 	MonthlyUsageEmailClaimed(context.Context, string, string) (bool, error)
 	MonthlyUsageEmailSettled(context.Context, string, string) (bool, error)
 	ClaimMonthlyUsageEmail(context.Context, string, string) (bool, error)
@@ -148,13 +149,14 @@ func (s *OpsScheduledReportService) monthlyUsageTick(ctx context.Context, now ti
 	}
 	if len(pending) > 0 {
 		var file bytes.Buffer
-		if err := store.BuildMonthlyUsageReport(ctx, period, siteName, &file); err != nil {
+		if err := store.BuildMonthlyUsageReport(ctx, period, siteName, cfg.Report.MonthlyUsageDepartmentAttributeID, &file); err != nil {
 			return period, fmt.Errorf("build monthly workbook: %w", err)
 		}
 		// Respect a changed switch or recipient list while the read-only scan was running.
 		current, err := s.opsService.GetEmailNotificationConfig(ctx)
 		if err != nil || !s.opsService.IsMonitoringEnabled(ctx) || !current.Report.Enabled ||
-			!current.Report.MonthlyUsageEnabled || current.Report.MonthlyUsageFirstPeriod != cfg.Report.MonthlyUsageFirstPeriod {
+			!current.Report.MonthlyUsageEnabled || current.Report.MonthlyUsageFirstPeriod != cfg.Report.MonthlyUsageFirstPeriod ||
+			current.Report.MonthlyUsageDepartmentAttributeID != cfg.Report.MonthlyUsageDepartmentAttributeID {
 			return "", err
 		}
 		allowed := make(map[string]bool)
@@ -224,6 +226,6 @@ func sendMonthlyUsageOnce(ctx context.Context, store OpsMonthlyUsageRepository, 
 
 func sendMonthlyUsageAttachment(ctx context.Context, send monthlyUsageSender, month, siteName, to string, file []byte) (bool, error) {
 	return send(ctx, to, fmt.Sprintf("[Sub2API] %s · %s 月度用量报告", siteName, month),
-		fmt.Sprintf("%s · %s（北京时间）。附件包含明细、部门月汇总（Token 单位 B）和用户月汇总（Token 单位 M）。两张汇总表的扣费均按汇总后取整数美元。", siteName, month),
+		fmt.Sprintf("%s · %s（北京时间）。本月报不含导出时为管理员的账号。附件包含明细、部门月汇总（Token 单位 B）和用户月汇总（Token 单位 M）。两张汇总表的扣费均按汇总后取整数美元。", siteName, month),
 		fmt.Sprintf("Sub2API-%s-%s.xlsx", siteName, month), file)
 }

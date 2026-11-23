@@ -756,6 +756,7 @@ interface EmailNotificationConfigResponse {
     weekly_summary_enabled: boolean
     weekly_summary_schedule: string
     monthly_usage_enabled?: boolean
+    monthly_usage_department_attribute_id?: number
     error_digest_enabled: boolean
     error_digest_schedule: string
     error_digest_min_count: number
@@ -766,7 +767,10 @@ interface EmailNotificationConfigResponse {
 }
 
 export interface EmailNotificationConfig extends EmailNotificationConfigResponse {
-  report: EmailNotificationConfigResponse['report'] & { monthly_usage_enabled: boolean }
+  report: EmailNotificationConfigResponse['report'] & {
+    monthly_usage_enabled: boolean
+    monthly_usage_department_attribute_id: number
+  }
 }
 
 export interface OpsMetricThresholds {
@@ -1262,7 +1266,11 @@ export async function createAlertSilence(payload: {
 function normalizeEmailNotificationConfig(config: EmailNotificationConfigResponse): EmailNotificationConfig {
   return {
     ...config,
-    report: { ...config.report, monthly_usage_enabled: config.report.monthly_usage_enabled ?? false }
+    report: {
+      ...config.report,
+      monthly_usage_enabled: config.report.monthly_usage_enabled ?? false,
+      monthly_usage_department_attribute_id: config.report.monthly_usage_department_attribute_id ?? 0
+    }
   }
 }
 
@@ -1271,9 +1279,20 @@ export async function getEmailNotificationConfig(): Promise<EmailNotificationCon
   return normalizeEmailNotificationConfig(data)
 }
 
-export async function updateEmailNotificationConfig(config: EmailNotificationConfig): Promise<EmailNotificationConfig> {
-  const { data } = await apiClient.put<EmailNotificationConfigResponse>('/admin/ops/email-notification/config', config)
-  return normalizeEmailNotificationConfig(data)
+export async function updateEmailNotificationConfig(
+  config: EmailNotificationConfig,
+  savedDepartmentId?: number
+): Promise<EmailNotificationConfig> {
+  const { monthly_usage_department_attribute_id: departmentId, ...otherReportSettings } = config.report
+  // Omission preserves the server's choice, even if the saved attribute has since been deleted.
+  const changed = departmentId !== savedDepartmentId
+  const payload = changed ? config : { ...config, report: otherReportSettings }
+  const { data } = await apiClient.put<EmailNotificationConfigResponse>('/admin/ops/email-notification/config', payload)
+  const saved = normalizeEmailNotificationConfig(data)
+  if (changed && saved.report.monthly_usage_department_attribute_id !== departmentId) {
+    throw new Error('The server did not save the monthly report department field')
+  }
+  return saved
 }
 
 export interface MonthlyUsageJob {

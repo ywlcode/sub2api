@@ -32,12 +32,12 @@ const pending = computed(() => !!attempt.value && !attempt.value.rejection &&
 const maxMonth = ref(lastMonth())
 const month = ref(pending.value ? attempt.value!.month : maxMonth.value)
 const job = computed(() => attempt.value?.job)
-const switches = ['enabled', 'daily_summary_enabled', 'weekly_summary_enabled', 'monthly_usage_enabled',
-  'error_digest_enabled', 'account_health_enabled'] as const
+const reportFields = ['enabled', 'daily_summary_enabled', 'weekly_summary_enabled', 'monthly_usage_enabled',
+  'error_digest_enabled', 'account_health_enabled', 'monthly_usage_department_attribute_id'] as const
 const block = computed(() => {
   const saved = props.saved
   if (!saved) return props.saving ? '' : 'verifySettings'
-  if (props.recipientInput.trim() || switches.some(key => saved[key] !== props.draft[key]) ||
+  if (props.recipientInput.trim() || reportFields.some(key => saved[key] !== props.draft[key]) ||
       saved.recipients.length !== props.draft.recipients.length ||
       saved.recipients.some(email => !props.draft.recipients.includes(email))) return 'saveFirst'
   if (!saved.enabled || !saved.recipients.length) return 'enableFirst'

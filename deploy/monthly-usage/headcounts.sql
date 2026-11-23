@@ -24,23 +24,28 @@ WITH penalty_config AS (
       AND (cfg->'exempt_user_ids' @> jsonb_build_array(s.user_id)) IS NOT TRUE
       AND NOT EXISTS (SELECT 1 FROM trusted_users t WHERE t.user_id = s.user_id)
 ), departments AS (
-    -- 与 usage.sql 一致：先按用户归并属性，再按部门计数。
-    SELECT v.user_id,
-           COALESCE(
-               max(NULLIF(btrim(v.value), '')) FILTER (WHERE k.key = 'dingtalk_department'),
-               max(NULLIF(btrim(v.value), '')) FILTER (WHERE k.key = 'department')
-           ) AS department
+    SELECT DISTINCT ON (v.user_id) v.user_id,
+           COALESCE(CASE WHEN k.type = 'select' THEN (
+               SELECT btrim(opt->>'label')
+               FROM jsonb_array_elements(CASE WHEN jsonb_typeof(k.options) = 'array' THEN k.options END) AS opt
+               WHERE opt->>'value' = v.value AND opt->>'label' ~ '[^[:space:]]'
+               LIMIT 1
+           ) END, btrim(v.value)) AS department
     FROM user_attribute_definitions k
     JOIN user_attribute_values v ON v.attribute_id = k.id
-    WHERE k.deleted_at IS NULL AND k.key IN ('dingtalk_department', 'department')
-    GROUP BY v.user_id
+    CROSS JOIN (SELECT 0::bigint AS department_attribute_id) cfg
+    WHERE k.deleted_at IS NULL AND v.value ~ '[^[:space:]]'
+      AND CASE WHEN cfg.department_attribute_id = 0 THEN k.key IN ('dingtalk_department', 'department')
+               ELSE k.id = cfg.department_attribute_id END
+    ORDER BY v.user_id, (k.key = 'dingtalk_department') DESC
 ), counts AS (
     SELECT COALESCE(d.department, '') AS department, count(*) AS headcount
     FROM users u
     LEFT JOIN departments d ON d.user_id = u.id
     WHERE u.created_at < ((:'month'::date + interval '1 month') AT TIME ZONE 'Asia/Shanghai')
       AND u.deleted_at IS NULL AND u.status = 'active'
-      AND (u.role = 'admin' OR NOT EXISTS (SELECT 1 FROM blocked_users b WHERE b.user_id = u.id))
+      AND u.role IS DISTINCT FROM 'admin'
+      AND NOT EXISTS (SELECT 1 FROM blocked_users b WHERE b.user_id = u.id)
     GROUP BY COALESCE(d.department, '')
 )
 SELECT COALESCE(jsonb_object_agg(department, headcount), '{}'::jsonb) FROM counts;

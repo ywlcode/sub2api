@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { opsAPI } from '@/api/admin/ops'
 import type { EmailNotificationConfig, AlertSeverity } from '../types'
+import MonthlyUsageDepartmentField from './MonthlyUsageDepartmentField.vue'
 import MonthlyUsageSender from './MonthlyUsageSender.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
@@ -52,8 +53,9 @@ async function saveConfig() {
   }
   saving.value = true
   try {
+    const savedDepartmentId = reportVerified.value ? config.value?.report.monthly_usage_department_attribute_id : undefined
     reportVerified.value = false
-    config.value = await opsAPI.updateEmailNotificationConfig(draft.value)
+    config.value = await opsAPI.updateEmailNotificationConfig(draft.value, savedDepartmentId)
     reportVerified.value = true
     showEditor.value = false
     appStore.showSuccess(t('admin.ops.email.saveSuccess'))
@@ -408,6 +410,7 @@ onMounted(() => {
                   {{ t('admin.ops.settings.monthlyUsage') }}
                 </label>
                 <p id="ops-email-monthly-usage-hint" class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.settings.monthlyUsageHint') }}</p>
+                <MonthlyUsageDepartmentField v-model="draft.report.monthly_usage_department_attribute_id" class="mt-3" />
               </div>
               <MonthlyUsageSender
                 v-if="showEditor && config" class="md:col-span-2"

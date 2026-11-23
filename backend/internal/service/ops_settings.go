@@ -84,6 +84,27 @@ func (s *OpsService) UpdateEmailNotificationConfig(ctx context.Context, req *Ops
 		if req.Report.MonthlyUsageEnabled != nil {
 			cfg.Report.MonthlyUsageEnabled = *req.Report.MonthlyUsageEnabled
 		}
+		// An unavailable saved field must not block unrelated edits (e.g. disabling mail).
+		// The exporter checks it again in the snapshot used to build the workbook.
+		if id := req.Report.MonthlyUsageDepartmentAttributeID; id != nil && *id != cfg.Report.MonthlyUsageDepartmentAttributeID {
+			if *id < 0 {
+				return nil, errors.New("invalid monthly report department attribute ID")
+			}
+			if *id > 0 {
+				store, ok := s.opsRepo.(OpsMonthlyUsageRepository)
+				if !ok {
+					return nil, errors.New("monthly report repository not initialized")
+				}
+				available, err := store.MonthlyUsageDepartmentAttributeAvailable(ctx, *id)
+				if err != nil {
+					return nil, err
+				}
+				if !available {
+					return nil, errors.New("select an enabled text, textarea or single-select user attribute for the monthly report department")
+				}
+			}
+			cfg.Report.MonthlyUsageDepartmentAttributeID = *id
+		}
 		if cfg.Report.Enabled && cfg.Report.MonthlyUsageEnabled && (!wasMonthly || cfg.Report.MonthlyUsageFirstPeriod == "") {
 			cfg.Report.MonthlyUsageFirstPeriod = firstMonthlyUsagePeriod(time.Now())
 		}

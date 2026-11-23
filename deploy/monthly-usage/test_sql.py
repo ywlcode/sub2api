@@ -65,6 +65,7 @@ class MonthlyUsageSQL(unittest.TestCase):
             ["2024-02-01", "1", *user, "", "other", 1, 0, 0, 0, 0, "0"],
             ["2024-02-01", "2", "", "", "运维", "", "client", 1, 0, 0, 0, 0, "0"],
             ["2024-02-01", "4", "无属性", "", "", "", "client", 1, 0, 0, 0, 0, "0"],
+            ["2024-02-01", "7", "", "", "已删", "", "client", 1, 1, 2, 4, 10, "6"],
             ["2024-02-02", "1", *user, "A", "client", 1, 6, 7, 9, 30, "0"],
             ["2024-02-29", "1", *user, "", "client", 1, 1, 1, 1, 4, "0"],
         ]
@@ -78,6 +79,14 @@ class MonthlyUsageSQL(unittest.TestCase):
         header, *rows = self.export("2024-05-01")
         self.assertEqual(header, HEADER)
         self.assertEqual([row[1:4] for row in rows], [["5", "", "小林"], ["6", "@小周", ""]])
+
+    def test_default_department_uses_the_same_display_value_in_both_exports(self):
+        _, *rows = self.export("2024-05-01")
+        self.assertEqual({row[1]: row[4] for row in rows}, {"5": "公司/研发", "6": "old-option"})
+        counts = self.headcounts("2024-05-01")
+        self.assertEqual(counts["公司/研发"], 2)  # 选项标签与同名文本计入同一个部门。
+        self.assertEqual(counts["old-option"], 1)
+        self.assertNotIn("不应回退", counts)
 
     def test_empty_month(self):
         self.assertEqual(self.export("2024-04-01"), [HEADER])
@@ -100,7 +109,7 @@ class MonthlyUsageSQL(unittest.TestCase):
         return counts
 
     def test_department_headcounts(self):
-        expected = {"公司/研发": 1, "运维": 4, '仅注册"部门"\n二组': 1, "": 1, "处罚到期": 1, "会话限制": 1}
+        expected = {"公司/研发": 1, "运维": 3, '仅注册"部门"\n二组': 1, "": 1, "处罚到期": 1, "会话限制": 1}
         self.assertEqual(self.headcounts("2024-02-01"), expected)
         self.assertEqual(self.headcounts("2024-03-01"), {**expected, "三月新增": 1})
 
@@ -119,6 +128,8 @@ class MonthlyUsageSQL(unittest.TestCase):
         ]:
             with self.subTest(update=update):
                 counts = self.headcounts("2024-02-01", setup=update)
+                self.assertEqual(counts["运维"], 3)
+                self.assertNotIn("纯管理员部门", counts)
                 self.assertEqual(counts["网关封禁"], 1)
                 self.assertEqual(counts["会话限制"], 1)
 

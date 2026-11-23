@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { opsAPI } from '@/api/admin/ops'
+import MonthlyUsageDepartmentField from './MonthlyUsageDepartmentField.vue'
 import MonthlyUsageSender from './MonthlyUsageSender.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
@@ -228,8 +229,9 @@ const validation = computed(() => {
 
 async function saveEmailConfig(config: EmailNotificationConfig) {
   // Other settings save in parallel. Only this response confirms which report settings are saved.
+  const savedDepartmentId = savedReport.value?.monthly_usage_department_attribute_id
   savedReport.value = null
-  const saved = await opsAPI.updateEmailNotificationConfig(config)
+  const saved = await opsAPI.updateEmailNotificationConfig(config, savedDepartmentId)
   savedReport.value = saved.report
 }
 
@@ -412,6 +414,7 @@ async function saveAllSettings() {
               </div>
               <p id="ops-monthly-usage-hint" class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.settings.monthlyUsageHint') }}</p>
             </div>
+            <MonthlyUsageDepartmentField v-model="emailConfig.report.monthly_usage_department_attribute_id" class="md:col-span-2" />
           </div>
           <MonthlyUsageSender
             v-if="show && settingsLoaded"

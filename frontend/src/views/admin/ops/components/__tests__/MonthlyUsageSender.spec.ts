@@ -11,7 +11,7 @@ vi.mock('@/stores/auth', () => ({ useAuthStore: () => ({ user: { id: 42 } }) }))
 enableAutoUnmount(afterEach)
 
 const report: EmailNotificationConfig['report'] = {
-  enabled: true, recipients: ['reports@example.com'], monthly_usage_enabled: false,
+  enabled: true, recipients: ['reports@example.com'], monthly_usage_enabled: false, monthly_usage_department_attribute_id: 0,
   daily_summary_enabled: false, daily_summary_schedule: '', weekly_summary_enabled: false, weekly_summary_schedule: '',
   account_health_enabled: false, account_health_schedule: '', account_health_error_rate_threshold: 10,
   error_digest_enabled: false, error_digest_schedule: '', error_digest_min_count: 1
