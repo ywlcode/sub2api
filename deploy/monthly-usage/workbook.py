@@ -131,17 +131,53 @@ def _line_width(text):
     return sum(0 if combining(c) else 2 if east_asian_width(c) in ("F", "W") else 1 for c in text)
 
 
+# Widths use Excel's character units. Floors leave room for a two-line heading
+# and the filter button. Ordinary numbers keep room for their displayed value.
+_TEXT_BOUNDS = {
+    "站点": (10, 18), "用量日期": (13, 13), "用户 ID": (9, 24), "用户名": (10, 22),
+    "当前真实姓名": (11, 22), "当前所属部门": (12, 42), "使用分组": (13, 26), "模型": (18, 36),
+}
+_NUMBER_FLOORS = {"注册且未被封禁人数": 15, "活跃用户数": 11, "请求数": 10, METRICS[-1]: 14}
+
+
+def _sheet_widths(headers, samples, numeric):
+    widths = []
+    for i, label in enumerate(headers):
+        if label in _TEXT_BOUNDS:
+            lo, hi = _TEXT_BOUNDS[label]
+            hist = samples[i]
+            # Use the 95th percentile with a little headroom for rarer labels.
+            # Buckets are bounded so a million rows cost no extra layout memory.
+            target = (sum(hist) * 95 + 99) // 100
+            p95 = 0
+            while p95 < hi and target > hist[p95]:
+                target -= hist[p95]
+                p95 += 1
+            longest = max((n for n, count in enumerate(hist) if count), default=0)
+            widths.append(max(lo, min(hi, longest + 2, p95 + 7)))
+        else:
+            widths.append(max(_NUMBER_FLOORS.get(label, 14), numeric[i]))
+    # Compare like units in equal-width columns. A rare precision-preserving
+    # text cell mustn't widen all four token columns to the length of a paragraph.
+    token_cols = [i for i, label in enumerate(headers) if "Token" in label]
+    common = max(widths[i] for i in token_cols)
+    for i in token_cols:
+        widths[i] = common
+    return widths
+
+
 def _sheet(archive, index, rows, scratch):
     """Measure displayed cells as we write; <cols> must precede <sheetData> in XLSX."""
-    widths = []
-    cap = 38
     with SpooledTemporaryFile(max_size=1024 * 1024, dir=scratch) as data:
         for row_num, row in enumerate(rows, 1):
             if row_num > MAX_ROWS:
                 raise ValueError(f"{SHEETS[index - 1]} exceeds Excel row limit ({MAX_ROWS} including header)")
             if row_num == 1:
-                widths = [7] * len(row)
-            cells, height = [], 1
+                headers = row
+                samples = [[0] * (_TEXT_BOUNDS[label][1] + 1) if label in _TEXT_BOUNDS else None
+                           for label in headers]
+                numeric = [0] * len(row)
+            cells = []
             for col, value in enumerate(row):
                 ref = f"{chr(ord('A') + col)}{row_num}"
                 if not isinstance(value, str):
@@ -150,16 +186,21 @@ def _sheet(archive, index, rows, scratch):
                     if len(plain.lstrip("-").replace(".", "").strip("0")) > 15:
                         value = plain
                 if isinstance(value, str):
-                    line_widths = [_line_width(line) for line in value.splitlines()] or [0]
-                    span = max(line_widths)
-                    header = row_num == 1
-                    wrap = not header and (span + 2 > cap or len(line_widths) > 1)
-                    style = ' s="1"' if header else ' s="6"' if wrap else ""
+                    style = ' s="1"'
+                    if row_num != 1:
+                        span = max((_line_width(line) for line in value.splitlines()), default=0)
+                        hist = samples[col]
+                        if hist is not None:
+                            limit = len(hist) - 1
+                            hist[min(span, limit)] += 1
+                        else:  # number stored as exact text (beyond Excel's precision)
+                            limit = 28
+                            numeric[col] = max(numeric[col], min(limit, span + 2))
+                        # Slight overflows can shrink; very long strings stay
+                        # readable at normal size, with full text in the formula bar.
+                        style = ' s="6"' if span <= limit * 1.4 else ""
                     cells.append(f'<c r="{ref}"{style} t="inlineStr"><is><t xml:space="preserve">'
                                  f'{_text(value)}</t></is></c>')
-                    if wrap:
-                        height = max(height, min(6, sum(max(1, (w + cap - 3) // (cap - 2)) for w in line_widths)))
-                    width = min(cap, span + (4 if header else 2))
                 else:
                     if isinstance(value, int):
                         style, displayed = 2, format(value, ",d")
@@ -171,18 +212,23 @@ def _sheet(archive, index, rows, scratch):
                         style, displayed = 5, format(value, ",.9f").rstrip("0")
                     else:
                         style, displayed = 4, format(value, ",.3f") if value else "0"
+                    if len(displayed) > 28:
+                        # A power of ten can be an exact Excel number and still
+                        # need hundreds of columns' worth of digits in fixed point.
+                        style, displayed = 7, format(Decimal(value), ".2E")
                     cells.append(f'<c r="{ref}" s="{style}" t="n"><v>{value}</v></c>')
-                    width = min(255, len(displayed) + 2)
-                widths[col] = max(widths[col], width)
-            ht = f' ht="{height * 15}" customHeight="1"' if height > 1 else ""
-            data.write(f'<row r="{row_num}"{ht}>{"".join(cells)}</row>'.encode())
+                    numeric[col] = max(numeric[col], min(255, len(displayed) + 2))
+            ht = 32 if row_num == 1 else 20
+            data.write(f'<row r="{row_num}" ht="{ht}" customHeight="1">{"".join(cells)}</row>'.encode())
         data.seek(0)
         with archive.open(f"xl/worksheets/sheet{index}.xml", "w", force_zip64=True) as part:
+            widths = _sheet_widths(headers, samples, numeric)
             cols = "".join(f'<col min="{i}" max="{i}" width="{w}" customWidth="1"/>'
                            for i, w in enumerate(widths, 1))
             part.write((f'{XML_DECL}<worksheet xmlns="{XMLNS}"><sheetViews><sheetView workbookViewId="0">'
                         '<pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>'
-                        f'</sheetView></sheetViews><cols>{cols}</cols><sheetData>').encode())
+                        f'</sheetView></sheetViews><sheetFormatPr defaultRowHeight="20"/>'
+                        f'<cols>{cols}</cols><sheetData>').encode())
             shutil.copyfileobj(data, part)
             last = chr(ord("A") + len(widths) - 1)
             part.write(f'</sheetData><autoFilter ref="A1:{last}{row_num}"/></worksheet>'.encode())
@@ -200,13 +246,14 @@ _STYLES = f"""<styleSheet xmlns="{XMLNS}">
 <fill><patternFill patternType="solid"><fgColor rgb="FF25476A"/><bgColor indexed="64"/></patternFill></fill></fills>
 <borders count="1"><border/></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="7"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/>
-<xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
-<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
-<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
-<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
-<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1"/></xf></cellXfs>
+<cellXfs count="8"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
+<xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="166" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="center"/></xf>
+<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="center" shrinkToFit="1"/></xf>
+<xf numFmtId="11" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment vertical="center"/></xf></cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>"""
 

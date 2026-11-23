@@ -222,50 +222,103 @@ class WorkbookTest(unittest.TestCase):
         for index, header in enumerate((DETAIL, DEPARTMENTS, USERS), 1):
             with self.subTest(sheet=SHEETS[index - 1]):
                 self.assertEqual(self.values(index), [header])
-                widths = self.widths(index)
-                for label in header:
-                    # These headers consist of ASCII and full-width Chinese text/punctuation.
-                    label_width = sum(1 if ch.isascii() else 2 for ch in label)
-                    self.assertGreaterEqual(widths[label], label_width - 1, label)
 
-    def test_department_column_adapts_to_ascii_and_chinese_on_each_sheet(self):
-        samples = ("A", "A" * 18, "部" * 18)
-        measurements = []
-        for name in samples:
-            self.write(record(user_id="1", department="短"), record(user_id="2", department=name))
-            self.build()
-            measurements.append([self.widths(i)["当前所属部门"] for i in (1, 2, 3)])
-        for sheet, (short, ascii_width, chinese_width) in zip(SHEETS, zip(*measurements)):
-            with self.subTest(sheet=sheet):
-                self.assertLess(short, ascii_width)
-                self.assertLess(ascii_width, chinese_width)
-                self.assertGreaterEqual(ascii_width, 17)
-                self.assertGreaterEqual(chinese_width, 34)
-
-    def test_long_department_is_preserved_and_wraps_within_the_width_cap(self):
-        name = "研发/Research/" * 80
-        self.write(record(department=name))
+    def test_fixed_row_heights_and_wrapping_preserve_original_values(self):
+        department = "研发/Research/" * 80 + "\n 第二行 "
+        long_row = record(department=department, model="推理模型/" * 50)
+        self.write(record(user_id="2", department="研发"), long_row)
         self.build()
+        self.assertIn([SITE, *long_row], self.values(1)[1:])
+
         with ZipFile(self.xlsx) as archive:
             styles = ET.fromstring(archive.read("xl/styles.xml")).find(f"{NS}cellXfs")
         for index, sheet in enumerate(SHEETS, 1):
             with self.subTest(sheet=sheet):
-                header, row = self.values(index)
-                position = header.index("当前所属部门")
-                self.assertEqual(row[position], name)
-                width = self.widths(index)["当前所属部门"]
-                self.assertGreaterEqual(width, 35)
-                self.assertLessEqual(width, 41)
-                address = f"{chr(ord('A') + position)}2"
-                cell = self.worksheet(index).find(f".//{NS}c[@r='{address}']")
-                style = styles[int(cell.get("s", "0"))]
-                alignment = style.find(f"{NS}alignment")
-                self.assertIsNotNone(alignment, address)
-                self.assertIn(alignment.get("wrapText"), ("1", "true"), address)
+                document = self.worksheet(index)
+                header, *data = self.values(index)
+                self.assertIn(department, [row[header.index("当前所属部门")] for row in data])
+                widths = self.widths(index)
+                defaults = document.find(f"{NS}sheetFormatPr")
+                default_height = defaults.get("defaultRowHeight", "15") if defaults is not None else "15"
+                rows = document.findall(f"{NS}sheetData/{NS}row")
+                self.assertEqual(len(rows), 3)
+                for row_num, row in enumerate(rows, 1):
+                    self.assertEqual(float(row.get("ht", default_height)), 32 if row_num == 1 else 20,
+                                     f"{sheet} row {row_num}")
+                    if "ht" in row.attrib:
+                        self.assertIn(row.get("customHeight"), ("1", "true"), f"{sheet} row {row_num}")
+                    for label, cell in zip(header, row):
+                        style = styles[int(cell.get("s", "0"))]
+                        alignment = style.find(f"{NS}alignment")
+                        wraps = alignment is not None and alignment.get("wrapText") in ("1", "true")
+                        if row_num > 1:
+                            self.assertFalse(wraps, cell.get("r"))
+                        elif widths[label] < sum(1 if ch.isascii() else 2 for ch in label):
+                            self.assertTrue(wraps, label)
 
-    def test_numeric_width_uses_values_on_its_own_sheet(self):
+    def test_department_width_follows_typical_display_width_on_each_sheet(self):
+        # Distinct departments and users keep the same distribution after either rollup.
+        def measure(prefix, first_prefix=None):
+            if first_prefix is None:
+                first_prefix = prefix
+            self.write(*(record(user_id=str(i), department=f"{first_prefix if i == 0 else prefix}{i:02}")
+                         for i in range(100)))
+            self.build()
+            return [self.widths(i)["当前所属部门"] for i in (1, 2, 3)]
+
+        short = measure("A")
+        one_outlier = measure("A", "部" * 200)
+        typical_ascii = measure("A" * 19)
+        typical_chinese = measure("部" * 19)
+        for i, sheet in enumerate(SHEETS):
+            with self.subTest(sheet=sheet):
+                self.assertLess(short[i], typical_ascii[i])
+                self.assertLess(typical_ascii[i], typical_chinese[i])
+                self.assertLess(one_outlier[i], typical_ascii[i])
+
+    def test_token_widths_match_and_identity_and_headcount_columns_stay_compact(self):
+        # Long IDs are text (including leading zeroes). All token units are exercised.
+        uid = "0" * 60 + "7"
+        department = "研发中心/基础设施/数据平台/用量计量"
+        self.write(record(user_id=uid, department=department, input_tokens="1", output_tokens="2",
+                          cache_read_tokens="12345678901234", total_tokens="12345678901237"))
+        self.build(registered={department: 765})
+        for index, suffix in enumerate(("", " (B)", " (M)"), 1):
+            with self.subTest(sheet=SHEETS[index - 1]):
+                widths = self.widths(index)
+                token_widths = [widths[label + suffix] for label in TOKENS]
+                self.assertEqual(token_widths, [token_widths[0]] * len(TOKENS))
+                if index == 2:
+                    # The long registration header can wrap over two lines.
+                    for label in ("注册且未被封禁人数", "活跃用户数"):
+                        self.assertLess(widths[label], len("注册且未被封禁人数") * 2, label)
+                else:
+                    self.assertLess(widths["用户 ID"], widths["当前所属部门"])
+                    header, row = self.values(index)
+                    self.assertEqual(row[header.index("用户 ID")], uid)
+
+    def test_one_extreme_token_count_does_not_stretch_four_columns(self):
+        ordinary = [record(user_id=str(i), department=f"部门{i}") for i in range(100)]
+        # The first count needs exact text. The second fits in Excel's numeric precision
+        # but its ordinary decimal display is just as wide.
+        for count in ("9" * 240, "1" + "0" * 239):
+            outlier = record(user_id="extreme", department="极端值", input_tokens="0",
+                             output_tokens="0", cache_read_tokens=count, total_tokens=count)
+            self.write(*ordinary, outlier)
+            self.build()
+            for index, (suffix, scale) in enumerate((("", 0), (" (B)", 9), (" (M)", 6)), 1):
+                with self.subTest(leading_digit=count[0], sheet=SHEETS[index - 1]):
+                    widths = self.widths(index)
+                    for label in TOKENS:
+                        self.assertLess(widths[label + suffix], 40, label)
+                    header, *rows = self.values(index)
+                    col = header.index("总 Token" + suffix)
+                    self.assertIn(Decimal(f"{count}e-{scale}"), [Decimal(row[col]) for row in rows])
+
+    def test_numeric_width_uses_typical_values_on_its_own_sheet(self):
         def measure(requests, cost):
-            self.write(record(actual_cost=cost), record(requests=requests, actual_cost="-" + cost))
+            self.write(record(requests=requests, actual_cost=cost),
+                       record(requests=requests, actual_cost="-" + cost))
             self.build()
             return [self.widths(i) for i in (1, 2, 3)]
 
