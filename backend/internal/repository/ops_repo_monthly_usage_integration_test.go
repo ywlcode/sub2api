@@ -127,6 +127,16 @@ CREATE OR REPLACE VIEW user_attribute_values AS
 	require.NoError(t, err)
 	require.Contains(t, notice, "2024-01-31（UTC）日汇总全站 6 笔，现存 4 笔，该日跨北京时间月界")
 
+	// A Beijing Jan 31 bucket ends exactly at the report start; an unknown
+	// aggregation zone cannot supply a comparable time interval at all.
+	for _, zone := range []any{"Asia/Shanghai", nil} {
+		var earliest, tail, retention, deficit sql.NullString
+		var cleanup bool
+		require.NoError(t, db.QueryRowContext(ctx, monthlyCoverageSQL, "2024-02-01", zone).
+			Scan(&earliest, &tail, &retention, &cleanup, &deficit))
+		require.False(t, deficit.Valid)
+	}
+
 	// Daily aggregates include admins. Only compare against the unfiltered ledger.
 	_, err = db.ExecContext(ctx, `INSERT INTO usage_dashboard_daily VALUES ('2024-02-10', 83)`)
 	require.NoError(t, err)
