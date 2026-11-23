@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import re
 import shutil
 from unicodedata import combining, east_asian_width
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Context, Decimal, Inexact
 from pathlib import Path
@@ -16,9 +17,13 @@ from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile
 
 
+METRIC_COLUMNS = (
+    "requests", "input_tokens", "output_tokens", "cache_read_tokens", "total_tokens", "actual_cost",
+)
+PLATFORM_COLUMNS = ("openai_usage", "deepseek_usage")
 COLUMNS = (
     "usage_day", "user_id", "username", "profile_name", "department", "used_groups", "model",
-    "requests", "input_tokens", "output_tokens", "cache_read_tokens", "total_tokens", "actual_cost",
+    *METRIC_COLUMNS, *PLATFORM_COLUMNS,
 )
 METRICS = ("请求数", "输入 Token", "输出 Token", "缓存读取 Token", "总 Token", "用户扣费（美元）")
 IDENTITY = ("用户 ID", "用户名", "当前真实姓名", "当前所属部门")
@@ -29,7 +34,7 @@ def _monthly_headers(unit):
 
 DEPARTMENT = ("站点", "当前所属部门", "注册且未被封禁人数", "活跃用户数", *_monthly_headers("B"))
 USER = ("站点", *IDENTITY, *_monthly_headers("M"))
-SHEETS = ("明细", "部门月汇总", "用户月汇总")
+SHEETS = ("明细", "部门OpenAI平台月汇总", "部门Deepseek平台月汇总", "用户月汇总")
 MAX_ROWS = 1_048_576  # includes header
 MAX_TEXT = 32_767
 XMLNS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
@@ -98,7 +103,34 @@ class Totals:
                 int(self.actual_cost))
 
 
-def _details(month, site, source, users, overall, arithmetic):
+@dataclass
+class Department:
+    usage: Totals = field(default_factory=Totals)
+    active: set = field(default_factory=set)
+
+
+def _parse_totals(values):
+    return Totals(*(_number(raw, key) for raw, key in zip(values, METRIC_COLUMNS)))
+
+
+def _add_platform_usage(groups, column, raw, department, uid, arithmetic):
+    if not raw:  # COPY represents SQL NULL as an empty field.
+        return
+    values = json.loads(raw)
+    if (not isinstance(values, list) or len(values) != len(METRIC_COLUMNS)
+            or not all(isinstance(value, str) for value in values)):
+        raise ValueError(f"expected six decimal strings in {column}")
+    metrics = _parse_totals(values)
+    if metrics.requests == 0:
+        raise ValueError(f"expected positive request count in {column}")
+    if department not in groups:
+        groups[department] = Department()
+    entry = groups[department]
+    entry.usage.add(metrics, arithmetic)
+    entry.active.add(uid)
+
+
+def _details(month, site, source, users, overall, platform_departments, arithmetic):
     yield DETAIL
     with Path(source).open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.reader(stream, strict=True)
@@ -114,7 +146,7 @@ def _details(month, site, source, users, overall, arithmetic):
                 if not uid:
                     raise ValueError("missing user ID")
                 identity = (username, profile, department)
-                metrics = Totals(*(_number(raw, key) for raw, key in zip(row[7:], COLUMNS[7:])))
+                metrics = _parse_totals(row[7:13])
                 if uid not in users:
                     users[uid] = (identity, Totals())
                 existing, usage = users[uid]
@@ -122,6 +154,8 @@ def _details(month, site, source, users, overall, arithmetic):
                     raise ValueError("inconsistent user profile in monthly snapshot")
                 usage.add(metrics, arithmetic)
                 overall.add(metrics, arithmetic)
+                for column, raw in zip(PLATFORM_COLUMNS, row[13:]):
+                    _add_platform_usage(platform_departments[column], column, raw, department, uid, arithmetic)
                 yield (site, raw_day, uid, *identity, group, model, *metrics.cells())
         except (ValueError, csv.Error) as exc:
             raise ValueError(f"{site!r}, CSV line {reader.line_num}: {exc}") from exc
@@ -286,7 +320,7 @@ def _package(archive):
 
 
 def build_workbook(output: Path, month: str, sources: dict[str, Path], *, registered: dict[str, int]) -> dict:
-    """Write one site's three sheets from a single private COPY snapshot."""
+    """Write one site's four sheets from a single private COPY snapshot."""
     if not re.fullmatch(r"[0-9]{4}-(?:0[1-9]|1[0-2])", month) or month.startswith("0000"):
         raise ValueError("month must be YYYY-MM")
     if len(sources) != 1:
@@ -310,33 +344,29 @@ def build_workbook(output: Path, month: str, sources: dict[str, Path], *, regist
     try:
         with tmp, ZipFile(tmp, "w", compression=ZIP_DEFLATED) as archive:
             _package(archive)
-            rows = _sheet(archive, 1, _details(month, site, source, users, total, arithmetic), output.parent)
-            # Each account contributes its complete usage to exactly one department.
-            # DingTalk stores an organization path; a parent is not a second allocation.
-            departments = {dept: Totals() for dept in registered}
-            counts = dict.fromkeys(registered, 0)
-            for (_, _, department), usage in users.values():
-                if department not in departments:
-                    departments[department] = Totals()
-                    counts[department] = 0
-                departments[department].add(usage, arithmetic)
-                counts[department] += 1
+            platform_departments = {column: {dept: Department() for dept in registered}
+                                    for column in PLATFORM_COLUMNS}
+            details = _details(month, site, source, users, total, platform_departments, arithmetic)
+            rows = _sheet(archive, 1, details, output.parent)
 
-            def department_rows():
+            def department_rows(departments):
                 yield DEPARTMENT
-                for key, usage in sorted(departments.items(), key=lambda item: (-item[1].total_tokens, item[0])):
-                    yield (site, key or "未填写部门", registered.get(key, 0), counts[key], *usage.monthly(-9, arithmetic))
+                for key, entry in sorted(departments.items(), key=lambda item: (-item[1].usage.total_tokens, item[0])):
+                    yield (site, key or "未填写部门", registered.get(key, 0), len(entry.active),
+                           *entry.usage.monthly(-9, arithmetic))
 
             def user_rows():
                 yield USER
                 for uid, (identity, usage) in sorted(users.items(), key=lambda item: (-item[1][1].total_tokens, item[0])):
                     yield (site, uid, *identity, *usage.monthly(-6, arithmetic))
 
-            _sheet(archive, 2, department_rows(), output.parent)
-            _sheet(archive, 3, user_rows(), output.parent)
+            for index, column in enumerate(PLATFORM_COLUMNS, 2):
+                _sheet(archive, index, department_rows(platform_departments[column]), output.parent)
+            _sheet(archive, 4, user_rows(), output.parent)
         os.replace(tmp.name, output)
     finally:
         Path(tmp.name).unlink(missing_ok=True)
+    departments = set(registered).union(identity[2] for identity, _ in users.values())
     return {site: dict(rows=rows, users=len(users), departments=len(departments),
                        requests=total.requests, total_tokens=total.total_tokens,
                        actual_cost=format(total.actual_cost, "f"))}

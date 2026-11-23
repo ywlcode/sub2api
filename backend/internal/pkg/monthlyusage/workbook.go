@@ -1,4 +1,4 @@
-// Package monthlyusage renders the three monthly usage worksheets from one site's SQL snapshot.
+// Package monthlyusage renders the monthly usage worksheets from one site's SQL snapshot.
 package monthlyusage
 
 import (
@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
@@ -20,6 +21,8 @@ import (
 type Row struct {
 	Day, UserID, Username, RealName, Department, Groups, Model                    string
 	Requests, InputTokens, OutputTokens, CacheReadTokens, TotalTokens, ActualCost string
+	// Optional platform subtotals from the same detail row (six decimal strings).
+	OpenAIUsage, DeepSeekUsage string
 }
 
 var metricHeaders = [...]string{"请求数", "输入 Token", "输出 Token", "缓存读取 Token", "总 Token", "用户扣费（美元）"}
@@ -47,6 +50,7 @@ type profile struct {
 type user struct {
 	profile
 	totals
+	activeOn [len(departmentSheetNames)]bool
 }
 
 type department struct {
@@ -54,7 +58,7 @@ type department struct {
 	totals
 }
 
-// Both summaries sort by descending total tokens, breaking ties by the original string key.
+// Summaries sort by descending total tokens, breaking ties by the original string key.
 func rankedKeys[T any](groups map[string]*T, usage func(*T) *totals) []string {
 	keys := slices.Collect(maps.Keys(groups))
 	slices.SortFunc(keys, func(a, b string) int {
@@ -71,7 +75,10 @@ type snapshot struct {
 	site, month string
 	users       map[string]*user
 	details     *sheet
+	departments [len(departmentSheetNames)]map[string]*department // OpenAI, DeepSeek
 }
+
+var departmentSheetNames = [...]string{"部门OpenAI平台月汇总", "部门Deepseek平台月汇总"}
 
 func (s *snapshot) appendDetail(r Row) error {
 	day, err := time.Parse(time.DateOnly, r.Day)
@@ -86,7 +93,7 @@ func (s *snapshot) appendDetail(r Row) error {
 	if r.UserID == "" {
 		return fmt.Errorf("missing user ID")
 	}
-	metrics, err := parseTotals(r)
+	metrics, err := parseTotals([]string{r.Requests, r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.TotalTokens, r.ActualCost})
 	if err != nil {
 		return err
 	}
@@ -104,6 +111,32 @@ func (s *snapshot) appendDetail(r Row) error {
 		return err
 	}
 	u.add(metrics)
+	for i, raw := range [...]string{r.OpenAIUsage, r.DeepSeekUsage} {
+		if raw == "" { // No usage on this platform; the full detail row still counts above.
+			continue
+		}
+		var fields []string
+		if err := json.Unmarshal([]byte(raw), &fields); err != nil || len(fields) != len(metricHeaders) {
+			return fmt.Errorf("%s: expected six platform metrics", departmentSheetNames[i])
+		}
+		m, err := parseTotals(fields)
+		if err != nil {
+			return fmt.Errorf("%s: %w", departmentSheetNames[i], err)
+		}
+		if m.counts[0].IsZero() {
+			return fmt.Errorf("%s: expected positive request count", departmentSheetNames[i])
+		}
+		d := s.departments[i][r.Department]
+		if d == nil {
+			d = &department{}
+			s.departments[i][r.Department] = d
+		}
+		if !u.activeOn[i] {
+			d.active++
+			u.activeOn[i] = true
+		}
+		d.add(m)
+	}
 	return nil
 }
 
@@ -127,7 +160,10 @@ func BuildContext(ctx context.Context, w io.Writer, site string, registered map[
 	if strings.TrimFunc(site, func(r rune) bool { return unicode.IsSpace(r) || (0x1c <= r && r <= 0x1f) }) == "" {
 		return fmt.Errorf("monthlyusage: site must be a nonempty name")
 	}
-	depts := make(map[string]*department, len(registered))
+	var platforms [len(departmentSheetNames)]map[string]*department
+	for i := range platforms {
+		platforms[i] = make(map[string]*department, len(registered))
+	}
 	for dept, count := range registered {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -135,7 +171,9 @@ func BuildContext(ctx context.Context, w io.Writer, site string, registered map[
 		if count < 0 {
 			return fmt.Errorf("monthlyusage: negative registered headcount")
 		}
-		depts[dept] = &department{}
+		for _, depts := range platforms {
+			depts[dept] = &department{}
+		}
 	}
 
 	f, err := os.CreateTemp("", "monthly-usage-*.xml")
@@ -154,7 +192,7 @@ func BuildContext(ctx context.Context, w io.Writer, site string, registered map[
 		return err
 	}
 	users := make(map[string]*user)
-	snapshot := snapshot{site: site, users: users, details: details}
+	snapshot := snapshot{site: site, users: users, details: details, departments: platforms}
 	var rowErr error
 	err = walk(func(r Row) error {
 		if rowErr == nil {
@@ -175,35 +213,27 @@ func BuildContext(ctx context.Context, w io.Writer, site string, registered map[
 		return rowErr
 	}
 
-	for _, u := range users {
-		if err := ctx.Err(); err != nil {
+	sheets := []*sheet{details}
+	for i, depts := range platforms {
+		deptSheet, err := newSheet(body, departmentHeaders, note)
+		if err != nil {
 			return err
 		}
-		d := depts[u.department]
-		if d == nil {
-			d = &department{}
-			depts[u.department] = d
+		for _, key := range rankedKeys(depts, func(d *department) *totals { return &d.totals }) {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			d := depts[key]
+			label := key
+			if label == "" {
+				label = "未填写部门"
+			}
+			counts := []number{integer(registered[key]), integer(d.active)}
+			if err := deptSheet.row([]string{site, label}, d.numbers(counts, -9, false)); err != nil {
+				return fmt.Errorf("%s: %w", departmentSheetNames[i], err)
+			}
 		}
-		d.active++
-		d.add(u.totals)
-	}
-	deptSheet, err := newSheet(body, departmentHeaders, note)
-	if err != nil {
-		return err
-	}
-	for _, key := range rankedKeys(depts, func(d *department) *totals { return &d.totals }) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		d := depts[key]
-		label := key
-		if label == "" {
-			label = "未填写部门"
-		}
-		counts := []number{integer(registered[key]), integer(d.active)}
-		if err := deptSheet.row([]string{site, label}, d.numbers(counts, -9, false)); err != nil {
-			return fmt.Errorf("部门月汇总: %w", err)
-		}
+		sheets = append(sheets, deptSheet)
 	}
 	userSheet, err := newSheet(body, userHeaders, note)
 	if err != nil {
@@ -222,7 +252,7 @@ func BuildContext(ctx context.Context, w io.Writer, site string, registered map[
 	if err := body.Flush(); err != nil {
 		return err
 	}
-	return writeWorkbook(ctx, w, f, []*sheet{details, deptSheet, userSheet})
+	return writeWorkbook(ctx, w, f, append(sheets, userSheet))
 }
 
 //go:embed parts/*.xml

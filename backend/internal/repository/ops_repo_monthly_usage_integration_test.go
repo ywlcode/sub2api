@@ -50,9 +50,9 @@ CREATE VIEW user_attribute_values AS SELECT id AS user_id, 1 AS attribute_id,
     CASE WHEN id = 3 THEN 'admin-only' ELSE
         concat_ws('/', current_setting('transaction_read_only'), current_setting('transaction_isolation'), now()::text)
     END AS value FROM users;
-CREATE VIEW usage_logs AS SELECT id AS user_id, ' '::text AS requested_model, 'fixture-model' AS model,
+CREATE TABLE usage_logs AS SELECT id AS user_id, ' '::text AS requested_model, 'fixture-model' AS model,
     9 AS group_id, 21 AS input_tokens, 3 AS output_tokens, 5 AS cache_creation_tokens, 7 AS cache_read_tokens,
-    0.1000000001::numeric AS actual_cost, ts AS created_at
+    0.1000000001::numeric AS actual_cost, ts AS created_at, NULL::text AS platform
     FROM (VALUES ('2024-01-31 16:00Z'::timestamptz), ('2024-02-29 16:00Z'::timestamptz),
                  ('2024-04-30 16:00Z'::timestamptz)) days(ts) CROSS JOIN users;`)
 	require.NoError(t, err)
@@ -69,6 +69,34 @@ CREATE VIEW usage_logs AS SELECT id AS user_id, ' '::text AS requested_model, 'f
 		Groups: "old group", Model: "fixture-model", Requests: "1", InputTokens: "21", OutputTokens: "3",
 		CacheReadTokens: "7", TotalTokens: "36", ActualCost: "0.1000000001"}, row)
 	require.ErrorIs(t, decoder.Decode(&row), io.EOF)
+
+	t.Run("historical platform fields survive the snapshot", func(t *testing.T) {
+		// The existing March log has a NULL snapshot. All five requests share one detail key.
+		_, err := db.ExecContext(ctx, `
+INSERT INTO usage_logs (user_id, model, created_at, platform, input_tokens, output_tokens,
+                        cache_creation_tokens, cache_read_tokens, actual_cost) VALUES
+    (1, 'fixture-model', '2024-02-29 16:00Z', 'openai',    3, 4, 5, 6, 9000000000.0000000001),
+    (1, 'fixture-model', '2024-02-29 16:00Z', 'openai',    1, 2, 3, 4, 0.0000000002),
+    (1, 'fixture-model', '2024-02-29 16:00Z', 'deepseek',  0, 0, 0, 0, 0),
+    (1, 'fixture-model', '2024-02-29 16:00Z', 'anthropic', 1, 1, 1, 1, 1)`)
+		require.NoError(t, err)
+		var spool bytes.Buffer
+		_, err = repo.snapshotMonthlyUsage(ctx, "2024-03-01", 0, &spool)
+		require.NoError(t, err)
+		reader := gob.NewDecoder(&spool)
+		var detail monthlyusage.Row
+		require.NoError(t, reader.Decode(&detail))
+		require.Equal(t, "2024-03-01", detail.Day)
+		require.Equal(t, "5", detail.Requests)
+		require.Equal(t, "26", detail.InputTokens)
+		require.Equal(t, "10", detail.OutputTokens)
+		require.Equal(t, "18", detail.CacheReadTokens)
+		require.Equal(t, "68", detail.TotalTokens)
+		require.Equal(t, "9000000001.1000000004", detail.ActualCost)
+		require.JSONEq(t, `["2","4","6","10","28","9000000000.0000000003"]`, detail.OpenAIUsage)
+		require.JSONEq(t, `["1","0","0","0","0","0"]`, detail.DeepSeekUsage)
+		require.ErrorIs(t, reader.Decode(&detail), io.EOF)
+	})
 
 	var out bytes.Buffer
 	w := monthlyReportWriter(func(p []byte) (int, error) {
@@ -146,7 +174,7 @@ CREATE OR REPLACE VIEW user_attribute_values AS
 	require.Contains(t, notice, "2024-02-10（UTC）日汇总全站 83 笔，现存 0 笔")
 	book, err := zip.NewReader(bytes.NewReader(out.Bytes()), int64(out.Len()))
 	require.NoError(t, err)
-	for _, sheet := range []string{"sheet1", "sheet2", "sheet3"} {
+	for _, sheet := range []string{"sheet1", "sheet2", "sheet3", "sheet4"} {
 		part, err := book.Open("xl/worksheets/" + sheet + ".xml")
 		require.NoError(t, err)
 		body, err := io.ReadAll(part)

@@ -8,7 +8,25 @@ WITH daily_usage AS (
            sum(l.output_tokens) AS output_tokens,
            sum(l.cache_creation_tokens) AS cache_creation_tokens,
            sum(l.cache_read_tokens) AS cache_read_tokens,
-           sum(l.actual_cost) AS actual_cost
+           sum(l.actual_cost) AS actual_cost,
+           CASE WHEN count(*) FILTER (WHERE l.platform = 'openai') > 0 THEN json_build_array(
+               (count(*) FILTER (WHERE l.platform = 'openai'))::text,
+               (sum(l.input_tokens) FILTER (WHERE l.platform = 'openai'))::text,
+               (sum(l.output_tokens) FILTER (WHERE l.platform = 'openai'))::text,
+               (sum(l.cache_read_tokens) FILTER (WHERE l.platform = 'openai'))::text,
+               (sum(l.input_tokens::bigint + l.output_tokens + l.cache_creation_tokens + l.cache_read_tokens)
+                   FILTER (WHERE l.platform = 'openai'))::text,
+               (sum(l.actual_cost) FILTER (WHERE l.platform = 'openai'))::text
+           ) END AS openai_usage,
+           CASE WHEN count(*) FILTER (WHERE l.platform = 'deepseek') > 0 THEN json_build_array(
+               (count(*) FILTER (WHERE l.platform = 'deepseek'))::text,
+               (sum(l.input_tokens) FILTER (WHERE l.platform = 'deepseek'))::text,
+               (sum(l.output_tokens) FILTER (WHERE l.platform = 'deepseek'))::text,
+               (sum(l.cache_read_tokens) FILTER (WHERE l.platform = 'deepseek'))::text,
+               (sum(l.input_tokens::bigint + l.output_tokens + l.cache_creation_tokens + l.cache_read_tokens)
+                   FILTER (WHERE l.platform = 'deepseek'))::text,
+               (sum(l.actual_cost) FILTER (WHERE l.platform = 'deepseek'))::text
+           ) END AS deepseek_usage
     FROM usage_logs l
     WHERE l.created_at >= ($1::date::timestamp AT TIME ZONE 'Asia/Shanghai')
       AND l.created_at < (($1::date + interval '1 month') AT TIME ZONE 'Asia/Shanghai')
@@ -45,7 +63,7 @@ SELECT to_char(d.usage_day, 'YYYY-MM-DD') AS usage_day, d.user_id,
         FROM group_names g WHERE g.id = ANY(d.group_ids)) AS used_groups,
        d.model, d.requests, d.input_tokens, d.output_tokens, d.cache_read_tokens,
        d.input_tokens + d.output_tokens + d.cache_creation_tokens + d.cache_read_tokens AS total_tokens,
-       d.actual_cost
+       d.actual_cost, d.openai_usage, d.deepseek_usage
 FROM daily_usage d
 LEFT JOIN users u ON u.id = d.user_id
 LEFT JOIN profile_names p ON p.user_id = d.user_id

@@ -19,18 +19,20 @@ type totals struct {
 	cost   decimal.Decimal
 }
 
-func parseTotals(row Row) (totals, error) {
+// fields follows metricHeaders: five integer counts and the exact user charge.
+func parseTotals(fields []string) (totals, error) {
 	var t totals
-	for i, raw := range [...]string{row.Requests, row.InputTokens, row.OutputTokens, row.CacheReadTokens, row.TotalTokens} {
+	for i, raw := range fields[:5] {
 		if !countPattern.MatchString(raw) {
 			return t, fmt.Errorf("invalid count in %s", metricHeaders[i])
 		}
 		t.counts[i], _ = decimal.NewFromString(raw) // validated unsigned integer
 	}
-	if len(row.ActualCost) > maxText || !costPattern.MatchString(row.ActualCost) {
+	cost := fields[5]
+	if len(cost) > maxText || !costPattern.MatchString(cost) {
 		return t, fmt.Errorf("invalid decimal in actual_cost")
 	}
-	t.cost, _ = decimal.NewFromString(row.ActualCost) // exponent is at most five digits
+	t.cost, _ = decimal.NewFromString(cost) // exponent is at most five digits
 	if exp := t.cost.Exponent(); exp < -maxText || exp > maxText {
 		return t, fmt.Errorf("actual_cost scale exceeds Excel cell limit")
 	}

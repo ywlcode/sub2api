@@ -7,6 +7,8 @@
 -- requests 按日志行计数。四类 token 分别为日志中的输入、输出、缓存写入、缓存读取；
 -- total_tokens 与 UsageLog.TotalTokens 一致，四项相加，不再叠加缓存时长细分或图像 token。
 -- actual_cost 累计请求时的用户计费金额（USD，保留十进制精度），包含订阅用量。
+-- openai_usage / deepseek_usage 只按日志中的平台快照统计。无匹配请求时为 NULL；
+-- 否则为上述六项指标的十进制字符串 JSON 数组，含零费用、零 token 的请求。
 -- profile_name 取 dingtalk_name；department 优先取 dingtalk_department，再取 department。
 -- 仅从未删除的属性定义读取这三个键。用户名或姓名本身为邮箱时，该列留空。
 \set email_pattern '^[[:space:]]*(".*"|[^@[:space:]]+)@[^@[:space:]]+[[:space:]]*$'
@@ -21,7 +23,25 @@ COPY (
                sum(l.output_tokens) AS output_tokens,
                sum(l.cache_creation_tokens) AS cache_creation_tokens,
                sum(l.cache_read_tokens) AS cache_read_tokens,
-               sum(l.actual_cost) AS actual_cost
+               sum(l.actual_cost) AS actual_cost,
+               CASE WHEN count(*) FILTER (WHERE l.platform = 'openai') > 0 THEN json_build_array(
+                   (count(*) FILTER (WHERE l.platform = 'openai'))::text,
+                   (sum(l.input_tokens) FILTER (WHERE l.platform = 'openai'))::text,
+                   (sum(l.output_tokens) FILTER (WHERE l.platform = 'openai'))::text,
+                   (sum(l.cache_read_tokens) FILTER (WHERE l.platform = 'openai'))::text,
+                   (sum(l.input_tokens::bigint + l.output_tokens + l.cache_creation_tokens + l.cache_read_tokens)
+                       FILTER (WHERE l.platform = 'openai'))::text,
+                   (sum(l.actual_cost) FILTER (WHERE l.platform = 'openai'))::text
+               ) END AS openai_usage,
+               CASE WHEN count(*) FILTER (WHERE l.platform = 'deepseek') > 0 THEN json_build_array(
+                   (count(*) FILTER (WHERE l.platform = 'deepseek'))::text,
+                   (sum(l.input_tokens) FILTER (WHERE l.platform = 'deepseek'))::text,
+                   (sum(l.output_tokens) FILTER (WHERE l.platform = 'deepseek'))::text,
+                   (sum(l.cache_read_tokens) FILTER (WHERE l.platform = 'deepseek'))::text,
+                   (sum(l.input_tokens::bigint + l.output_tokens + l.cache_creation_tokens + l.cache_read_tokens)
+                       FILTER (WHERE l.platform = 'deepseek'))::text,
+                   (sum(l.actual_cost) FILTER (WHERE l.platform = 'deepseek'))::text
+               ) END AS deepseek_usage
         FROM usage_logs l
         WHERE l.created_at >= (:'month'::date::timestamp AT TIME ZONE 'Asia/Shanghai')
           AND l.created_at < ((:'month'::date + interval '1 month') AT TIME ZONE 'Asia/Shanghai')
@@ -58,7 +78,7 @@ COPY (
             FROM group_names g WHERE g.id = ANY(d.group_ids)) AS used_groups,
            d.model, d.requests, d.input_tokens, d.output_tokens, d.cache_read_tokens,
            d.input_tokens + d.output_tokens + d.cache_creation_tokens + d.cache_read_tokens AS total_tokens,
-           d.actual_cost
+           d.actual_cost, d.openai_usage, d.deepseek_usage
     FROM daily_usage d
     LEFT JOIN users u ON u.id = d.user_id
     LEFT JOIN profile_names p ON p.user_id = d.user_id

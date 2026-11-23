@@ -722,7 +722,7 @@ export default {
         monthlyUsage: 'Monthly assessment report (Excel)',
         emailConfigUpgradeRequired: 'Upgrade the server and reload this page before editing email settings or sending a monthly report.',
         emailConfigReloadRequired: 'The save could not be confirmed. Reload and check the email settings.',
-        monthlyUsageHint: 'The Excel report for the previous month is sent at 06:15 Beijing time on the first of each month. All three sheets exclude accounts that are admins at export time.',
+        monthlyUsageHint: 'The Excel report for the previous month is sent at 06:15 Beijing time on the first of each month. Department summaries are separate for OpenAI and DeepSeek. Detail and user summaries cover all platforms. All sheets exclude accounts that are admins at export time.',
         monthlyDepartment: {
           label: 'Monthly report department field',
           automatic: 'Automatic (DingTalk department first, then affiliated department)',

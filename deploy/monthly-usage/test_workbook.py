@@ -21,11 +21,12 @@ except ImportError:
 
 
 HEADER = ("usage_day,user_id,username,profile_name,department,used_groups,model,"
-          "requests,input_tokens,output_tokens,cache_read_tokens,total_tokens,actual_cost").split(",")
+          "requests,input_tokens,output_tokens,cache_read_tokens,total_tokens,actual_cost,"
+          "openai_usage,deepseek_usage").split(",")
 TOKENS = ["输入 Token", "输出 Token", "缓存读取 Token", "总 Token"]
 COST = "用户扣费（美元）"
 METRICS = ["请求数", *TOKENS, COST]
-SHEETS = ["明细", "部门月汇总", "用户月汇总"]
+SHEETS = ["明细", "部门OpenAI平台月汇总", "部门Deepseek平台月汇总", "用户月汇总"]
 DETAIL = ["站点", "用量日期", "用户 ID", "用户名", "当前真实姓名", "当前所属部门", "使用分组", "模型", *METRICS]
 DEPARTMENTS = ["站点", "当前所属部门", "注册且未被封禁人数", "活跃用户数", "请求数",
                *(f"{label} (B)" for label in TOKENS), COST]
@@ -38,12 +39,15 @@ DEPARTMENT = "总部/研发, 总部/质量"
 NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
 
-def record(**updates):
+def record(platform="openai_usage", **updates):
     fields = dict(usage_day="2024-02-01", user_id=USER_ID, username="同名用户",
                   profile_name="王五", department=DEPARTMENT, used_groups='一组, "二组"',
                   model="model", requests="2", input_tokens="3", output_tokens="5",
                   cache_read_tokens="7", total_tokens="26", actual_cost="0.0123456789")
+    fields.update(openai_usage="", deepseek_usage="")
     fields.update(updates)
+    if platform and platform not in updates:
+        fields[platform] = json.dumps([fields[key] for key in HEADER[7:13]])
     return [fields[key] for key in HEADER]
 
 
@@ -128,20 +132,20 @@ class WorkbookTest(unittest.TestCase):
         detail = self.values(1)[1:]
         self.assertEqual(len(detail), 4)
         self.assertCountEqual([row for row in detail if row[2] != "99"],
-                              [[SITE, *data] for data in (first, second, same_name)])
+                              [[SITE, *data[:13]] for data in (first, second, same_name)])
         unassigned_detail, = [row for row in detail if row[2] == "99"]
         self.assertEqual(unassigned_detail[:5], [SITE, *unassigned[:4]])
-        self.assertEqual(unassigned_detail[6:], unassigned[5:])
+        self.assertEqual(unassigned_detail[6:], unassigned[5:13])
 
         # The department spends 2.8953086438, while its two users separately truncate to 1 and 0.
-        with self.subTest(sheet="部门月汇总"):
+        with self.subTest(sheet=SHEETS[1]):
             self.assertCountEqual(self.metric_rows(2), [
                 [SITE, DEPARTMENT, "0", "2", 5, Decimal("8e-9"), Decimal("14e-9"),
                  Decimal("20e-9"), Decimal("65e-9"), 2],
                 [SITE, "未填写部门", "0", "1", 2, Decimal("3e-9"), Decimal("5e-9"),
                  Decimal("7e-9"), Decimal("26e-9"), -1],
             ])
-        users = self.metric_rows(3)
+        users = self.metric_rows(4)
         self.assertEqual(len(users), 3)
         self.assertCountEqual([row for row in users if row[1] != "99"], [
             [SITE, USER_ID, "同名用户", "王五", DEPARTMENT, 3, Decimal("5e-6"), Decimal("9e-6"),
@@ -153,6 +157,30 @@ class WorkbookTest(unittest.TestCase):
         self.assertEqual(unassigned_user[:4], [SITE, *unassigned[1:4]])
         self.assertEqual(unassigned_user[5:], [2, Decimal("3e-6"), Decimal("5e-6"),
                                                Decimal("7e-6"), Decimal("26e-6"), -1])
+
+    def test_mixed_platforms_count_each_user_once_and_keep_other_usage(self):
+        self.write(record(requests="4", actual_cost="1.75",
+                          openai_usage='["1","0","0","0","1","0.75"]',
+                          deepseek_usage='["2","1","1","3","10","0"]'),
+                   record(model="second", requests="1", actual_cost="0.75"),
+                   record(user_id="2", platform="deepseek_usage", actual_cost="0"),
+                   record(user_id="3", platform=None, department="其他平台"))
+        summary = self.build(registered={DEPARTMENT: 7})
+        self.assert_summary(summary, users=3, departments=2, requests=9, total_tokens=104,
+                            actual_cost="2.5123456789")
+        self.assertEqual(self.metric_rows(2), [
+            [SITE, DEPARTMENT, "7", "1", 2, Decimal("3e-9"), Decimal("5e-9"),
+             Decimal("7e-9"), Decimal("27e-9"), 1],
+        ])
+        self.assertEqual(self.metric_rows(3), [
+            [SITE, DEPARTMENT, "7", "2", 4, Decimal("4e-9"), Decimal("6e-9"),
+             Decimal("10e-9"), Decimal("36e-9"), 0],
+        ])
+        self.assertEqual(len(self.metric_rows(1)), 4)
+        self.assertEqual([row[1] for row in self.metric_rows(4)], [USER_ID, "2", "3"])
+        self.assertEqual(self.metric_rows(4)[0][-6:], [
+            5, Decimal("6e-6"), Decimal("10e-6"), Decimal("14e-6"), Decimal("52e-6"), 2,
+        ])
 
     def test_registered_counts_and_usage_cover_the_union_of_departments(self):
         self.write(record(), record(model="second"), record(user_id="2", department=""),
@@ -166,7 +194,7 @@ class WorkbookTest(unittest.TestCase):
         inactive, = [row for row in rows if row[1] == "仅有注册"]
         self.assertEqual(inactive[-6:], [0] * 6)
         self.assertEqual(len(self.metric_rows(1)), 4)
-        self.assertEqual(len(self.metric_rows(3)), 3)
+        self.assertEqual(len(self.metric_rows(4)), 3)
         self.assertEqual(self.worksheet(2).find(f"{NS}autoFilter").get("ref"), "A1:J5")
 
     def test_no_usage_still_lists_registered_departments(self):
@@ -176,8 +204,9 @@ class WorkbookTest(unittest.TestCase):
             [SITE, "未填写部门", "2", "0", *([0] * 6)],
             [SITE, "研发", "3", "0", *([0] * 6)],
         ])
+        self.assertEqual(self.metric_rows(3), self.metric_rows(2))
         self.assertEqual(self.values(1), [DETAIL])
-        self.assertEqual(self.values(3), [USERS])
+        self.assertEqual(self.values(4), [USERS])
 
     def test_registered_is_a_required_keyword_argument(self):
         self.write()
@@ -192,9 +221,9 @@ class WorkbookTest(unittest.TestCase):
         cost = "12345678901234568.999999999999999999"
         penny_fraction = "0.000000000000000001"
         combined = 12345678901234569
-        self.write(record(input_tokens=str(inputs), output_tokens=str(outputs),
+        self.write(record(platform="deepseek_usage", input_tokens=str(inputs), output_tokens=str(outputs),
                           cache_read_tokens=str(cached), total_tokens=str(total), actual_cost=cost),
-                   record(model="second", actual_cost=penny_fraction))
+                   record(platform="deepseek_usage", model="second", actual_cost=penny_fraction))
         with localcontext() as context:
             context.prec = 5
             summary = self.build()
@@ -205,7 +234,7 @@ class WorkbookTest(unittest.TestCase):
             [2, 3, 5, 7, 26, Decimal(penny_fraction)],
         ])
         totals = (inputs + 3, outputs + 5, cached + 7, total + 26)
-        for sheet, places in ((2, 9), (3, 6)):
+        for sheet, places in ((3, 9), (4, 6)):
             with self.subTest(sheet=SHEETS[sheet - 1]):
                 # Construct expected decimals exactly, even beyond the default context precision.
                 scaled = [Decimal(f"{count}e-{places}") for count in totals]
@@ -219,7 +248,7 @@ class WorkbookTest(unittest.TestCase):
         with ZipFile(self.xlsx) as archive:
             book = ET.fromstring(archive.read("xl/workbook.xml"))
         self.assertEqual([sheet.get("name") for sheet in book.iter(f"{NS}sheet")], SHEETS)
-        for index, header in enumerate((DETAIL, DEPARTMENTS, USERS), 1):
+        for index, header in enumerate((DETAIL, DEPARTMENTS, DEPARTMENTS, USERS), 1):
             with self.subTest(sheet=SHEETS[index - 1]):
                 self.assertEqual(self.values(index), [header])
 
@@ -227,8 +256,8 @@ class WorkbookTest(unittest.TestCase):
         department = "研发/Research/" * 80 + "\n 第二行 "
         long_row = record(department=department, model="推理模型/" * 50)
         self.write(record(user_id="2", department="研发"), long_row)
-        self.build()
-        self.assertIn([SITE, *long_row], self.values(1)[1:])
+        self.build(registered={"研发": 1, department: 1})
+        self.assertIn([SITE, *long_row[:13]], self.values(1)[1:])
 
         with ZipFile(self.xlsx) as archive:
             styles = ET.fromstring(archive.read("xl/styles.xml")).find(f"{NS}cellXfs")
@@ -261,10 +290,10 @@ class WorkbookTest(unittest.TestCase):
         def measure(prefix, first_prefix=None):
             if first_prefix is None:
                 first_prefix = prefix
-            self.write(*(record(user_id=str(i), department=f"{first_prefix if i == 0 else prefix}{i:02}")
-                         for i in range(100)))
-            self.build()
-            return [self.widths(i)["当前所属部门"] for i in (1, 2, 3)]
+            departments = [f"{first_prefix if i == 0 else prefix}{i:02}" for i in range(100)]
+            self.write(*(record(user_id=str(i), department=dept) for i, dept in enumerate(departments)))
+            self.build(registered=dict.fromkeys(departments, 1))
+            return [self.widths(i)["当前所属部门"] for i in (1, 2, 3, 4)]
 
         short = measure("A")
         one_outlier = measure("A", "部" * 200)
@@ -283,12 +312,12 @@ class WorkbookTest(unittest.TestCase):
         self.write(record(user_id=uid, department=department, input_tokens="1", output_tokens="2",
                           cache_read_tokens="12345678901234", total_tokens="12345678901237"))
         self.build(registered={department: 765})
-        for index, suffix in enumerate(("", " (B)", " (M)"), 1):
+        for index, suffix in enumerate(("", " (B)", " (B)", " (M)"), 1):
             with self.subTest(sheet=SHEETS[index - 1]):
                 widths = self.widths(index)
                 token_widths = [widths[label + suffix] for label in TOKENS]
                 self.assertEqual(token_widths, [token_widths[0]] * len(TOKENS))
-                if index == 2:
+                if index in (2, 3):
                     # The long registration header can wrap over two lines.
                     for label in ("注册且未被封禁人数", "活跃用户数"):
                         self.assertLess(widths[label], len("注册且未被封禁人数") * 2, label)
@@ -306,7 +335,7 @@ class WorkbookTest(unittest.TestCase):
                              output_tokens="0", cache_read_tokens=count, total_tokens=count)
             self.write(*ordinary, outlier)
             self.build()
-            for index, (suffix, scale) in enumerate((("", 0), (" (B)", 9), (" (M)", 6)), 1):
+            for index, suffix, scale in ((1, "", 0), (2, " (B)", 9), (4, " (M)", 6)):
                 with self.subTest(leading_digit=count[0], sheet=SHEETS[index - 1]):
                     widths = self.widths(index)
                     for label in TOKENS:
@@ -317,14 +346,15 @@ class WorkbookTest(unittest.TestCase):
 
     def test_numeric_width_uses_typical_values_on_its_own_sheet(self):
         def measure(requests, cost):
-            self.write(record(requests=requests, actual_cost=cost),
-                       record(requests=requests, actual_cost="-" + cost))
+            self.write(*(record(platform=platform, model=f"{platform}{sign}", requests=requests,
+                                actual_cost=sign + cost)
+                         for platform in ("openai_usage", "deepseek_usage") for sign in ("", "-")))
             self.build()
-            return [self.widths(i) for i in (1, 2, 3)]
+            return [self.widths(i) for i in (1, 2, 3, 4)]
 
         small = measure("1", "1")
         large = measure("123456789012345", "123456789012345678901234567890.1")
-        # Requests grow on all sheets. The two costs cancel on both summaries.
+        # Requests grow on all sheets. The two costs cancel on all summaries.
         for index, sheet in enumerate(SHEETS):
             with self.subTest(sheet=sheet):
                 self.assertGreater(large[index]["请求数"], small[index]["请求数"])
@@ -340,8 +370,8 @@ class WorkbookTest(unittest.TestCase):
         data = record(username="=1+1", profile_name=name, department=department,
                       used_groups=group, model="+model")
         self.write(data)
-        self.build()
-        for sheet, labels in enumerate(([SITE, *data[:7]], [SITE, department],
+        self.build(registered={department: 1})
+        for sheet, labels in enumerate(([SITE, *data[:7]], [SITE, department], [SITE, department],
                                         [SITE, USER_ID, "=1+1", name, department]), 1):
             with self.subTest(sheet=SHEETS[sheet - 1]):
                 row, = self.cells(sheet)[1:]
@@ -372,6 +402,14 @@ class WorkbookTest(unittest.TestCase):
             "missing user ID": [HEADER, record(user_id="")],
             "inconsistent snapshot": [HEADER, record(), record(department="其他部门")],
             "fractional count": [HEADER, record(requests="1.5")],
+            "old header": [HEADER[:13]],
+            "invalid platform JSON": [HEADER, record(openai_usage="{")],
+            "wrong platform type": [HEADER, record(deepseek_usage="null")],
+            "missing platform metric": [HEADER, record(openai_usage='["1"]')],
+            "JSON number": [HEADER, record(deepseek_usage='[1,"2","3","4","5","0"]')],
+            "fractional platform count": [HEADER, record(openai_usage='["1","1.1","0","0","0","0"]')],
+            "present zero requests": [HEADER, record(openai_usage='["0","0","0","0","0","0"]')],
+            "nonfinite platform cost": [HEADER, record(deepseek_usage='["1","2","3","4","5","NaN"]')],
             "nonfinite cost": [HEADER, record(actual_cost="NaN")],
             "out of range": [HEADER, record(actual_cost="1e-10000")],
             "XML control character": [HEADER, record(username="bad\x01")],

@@ -13,7 +13,7 @@ HERE = Path(__file__).resolve().parent
 MIGRATIONS = HERE.parents[1] / "backend" / "migrations"
 HEADER = (
     "usage_day,user_id,username,profile_name,department,used_groups,model,requests,"
-    "input_tokens,output_tokens,cache_read_tokens,total_tokens,actual_cost"
+    "input_tokens,output_tokens,cache_read_tokens,total_tokens,actual_cost,openai_usage,deepseek_usage"
 ).split(",")
 
 
@@ -41,6 +41,7 @@ class MonthlyUsageSQL(unittest.TestCase):
             "014_drop_legacy_allowed_groups.sql", "018_user_attributes.sql", "075_add_usage_log_upstream_model.sql",
             "077_add_usage_log_requested_model.sql", "089_usage_log_image_output_tokens.sql",
             "179_usage_log_image_input_tokens.sql", "181_prompt_audit.sql", "293_security_penalties.sql",
+            "343_usage_log_platform_snapshot.sql",
         ]
         subprocess.run([*cls.psql, "-f", "-"], check=True,
                        input=b"\n".join((MIGRATIONS / name).read_bytes() for name in migrations))
@@ -72,8 +73,21 @@ class MonthlyUsageSQL(unittest.TestCase):
         self.assertEqual(len(rows), len(expected))
         for row, want in zip(rows, expected):
             with self.subTest(key=(want[0], want[1], want[6])):
-                self.assertEqual(row[:-1], list(map(str, want[:-1])))
-                self.assertEqual(Decimal(row[-1]), Decimal(want[-1]))
+                self.assertEqual(row[:12], list(map(str, want[:-1])))
+                self.assertEqual(Decimal(row[12]), Decimal(want[-1]))
+                self.assertEqual(row[13:], ["", ""])
+
+    def test_historical_platforms_share_one_detail_row(self):
+        header, mixed, free = self.export("2024-06-01")
+        self.assertEqual(header, HEADER)
+        self.assertEqual(mixed[:7], ["2024-06-01", "1", '张,"三"\n甲', "钉钉姓名", "公司/研发", "", "deepseek"])
+        self.assertEqual(mixed[7:13], ["7", "2147483666", "28", "52", "2147483786", "9000000004.1200000004"])
+        self.assertEqual(json.loads(mixed[13]),
+                         ["2", "2147483657", "22", "44", "2147483756", "9000000000.0000000003"])
+        self.assertEqual(json.loads(mixed[14]), ["1", "5", "6", "8", "26", "0.1200000001"])
+        self.assertEqual(free[0], "2024-06-02")
+        self.assertEqual(free[13], "")
+        self.assertEqual(json.loads(free[14]), ["1", "0", "0", "0", "0", "0.0000000000"])
 
     def test_email_names_are_blank(self):
         header, *rows = self.export("2024-05-01")
