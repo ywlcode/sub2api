@@ -26,7 +26,7 @@ func buildSMTPMessage(config *SMTPConfig, to, subject, body string) (smtpMessage
 		return smtpMessage{}, err
 	}
 	data := bytes.NewBuffer(message.data)
-	data.WriteString("Content-Type: text/html; charset=UTF-8\r\n" +
+	_, _ = data.WriteString("Content-Type: text/html; charset=UTF-8\r\n" +
 		"Content-Transfer-Encoding: quoted-printable\r\n\r\n")
 	if err := writeSMTPBody(data, body); err != nil {
 		return smtpMessage{}, err
@@ -84,7 +84,7 @@ func buildSMTPHeaders(config *SMTPConfig, to, subject string) (smtpMessage, erro
 	fmt.Fprintf(&message, "Date: %s\r\n", time.Now().UTC().Format(time.RFC1123Z))
 	fmt.Fprintf(&message, "Message-ID: %s\r\n", messageID)
 	fmt.Fprintf(&message, "Subject: %s\r\n", subjectHeader)
-	message.WriteString("MIME-Version: 1.0\r\n")
+	_, _ = message.WriteString("MIME-Version: 1.0\r\n")
 
 	return smtpMessage{
 		envelopeFrom: fromAddress.Address,

@@ -76,9 +76,9 @@ func newSheet(body *bufio.Writer, headers []string, note string) (*sheet, error)
 	if note != "" {
 		// The merged notice sits above the filter, outside the width sample.
 		var notice strings.Builder
-		notice.WriteString(`<row r="1" ht="20" customHeight="1"><c r="A1" s="6" t="inlineStr"><is><t xml:space="preserve">`)
+		_, _ = notice.WriteString(`<row r="1" ht="20" customHeight="1"><c r="A1" s="6" t="inlineStr"><is><t xml:space="preserve">`)
 		writeEscaped(&notice, cellLabel(note))
-		notice.WriteString("</t></is></c></row>")
+		_, _ = notice.WriteString("</t></is></c></row>")
 		n, err := body.WriteString(notice.String())
 		if err != nil {
 			return nil, err
@@ -115,8 +115,8 @@ func cellLabel(s string) string {
 			break
 		}
 		if r == utf8.RuneError && size == 1 || r < 32 && r != '\t' && r != '\r' && r != '\n' || r == 0xfffe || r == 0xffff {
-			b.WriteString(s[start:i])
-			b.WriteRune(utf8.RuneError)
+			_, _ = b.WriteString(s[start:i])
+			_, _ = b.WriteRune(utf8.RuneError)
 			start = i + size
 		}
 		i += size
@@ -124,7 +124,7 @@ func cellLabel(s string) string {
 	if start == 0 {
 		return s
 	}
-	b.WriteString(s[start:])
+	_, _ = b.WriteString(s[start:])
 	return b.String()
 }
 
@@ -147,7 +147,7 @@ func excelEscape(s string) bool {
 		return false
 	}
 	for _, r := range s[2:6] {
-		if !(r >= '0' && r <= '9' || r >= 'A' && r <= 'F' || r >= 'a' && r <= 'f') {
+		if !strings.ContainsRune("0123456789ABCDEFabcdef", r) {
 			return false
 		}
 	}
@@ -175,17 +175,17 @@ func writeEscaped(b *strings.Builder, s string) {
 		default:
 			continue
 		}
-		b.WriteString(s[start:i])
-		b.WriteString(entity)
+		_, _ = b.WriteString(s[start:i])
+		_, _ = b.WriteString(entity)
 		start = i + 1
 	}
-	b.WriteString(s[start:])
+	_, _ = b.WriteString(s[start:])
 }
 
 func (s *sheet) textCell(b *strings.Builder, col int, value string) {
 	span := textSpan(value)
 	if s.rows == s.headerRow {
-		b.WriteString(` s="1"`)
+		_, _ = b.WriteString(` s="1"`)
 	} else {
 		c := &s.columns[col]
 		limit := 28 // precision-preserving text in a numeric column
@@ -196,12 +196,12 @@ func (s *sheet) textCell(b *strings.Builder, col int, value string) {
 			c.numeric = max(c.numeric, min(limit, span+2))
 		}
 		if span*5 <= limit*7 {
-			b.WriteString(` s="6"`)
+			_, _ = b.WriteString(` s="6"`)
 		}
 	}
-	b.WriteString(` t="inlineStr"><is><t xml:space="preserve">`)
+	_, _ = b.WriteString(` t="inlineStr"><is><t xml:space="preserve">`)
 	writeEscaped(b, value)
-	b.WriteString("</t></is></c>")
+	_, _ = b.WriteString("</t></is></c>")
 }
 
 func (s *sheet) row(labels []string, numbers []number) error {
@@ -237,7 +237,7 @@ func (s *sheet) row(labels []string, numbers []number) error {
 			c.numeric = max(c.numeric, min(255, n.width+2))
 		}
 	}
-	b.WriteString("</row>")
+	_, _ = b.WriteString("</row>")
 	n, err := s.body.WriteString(b.String())
 	s.size += int64(n)
 	return err
@@ -260,7 +260,7 @@ func (s *sheet) writeTo(w io.Writer, rows io.Reader) error {
 		}
 		fmt.Fprintf(&prefix, `<col min="%d" max="%d" width="%d" customWidth="1"/>`, i+1, i+1, width)
 	}
-	prefix.WriteString("</cols><sheetData>")
+	_, _ = prefix.WriteString("</cols><sheetData>")
 	if _, err := io.WriteString(w, prefix.String()); err != nil {
 		return err
 	}
@@ -273,7 +273,7 @@ func (s *sheet) writeTo(w io.Writer, rows io.Reader) error {
 	if s.headerRow == 2 {
 		fmt.Fprintf(&prefix, `<mergeCells count="1"><mergeCell ref="A1:%c1"/></mergeCells>`, last)
 	}
-	prefix.WriteString("</worksheet>")
+	_, _ = prefix.WriteString("</worksheet>")
 	_, err := io.WriteString(w, prefix.String())
 	return err
 }

@@ -37,7 +37,10 @@ func zipParts(t *testing.T, data []byte) map[string][]byte {
 			t.Fatal(err)
 		}
 		body, err := io.ReadAll(reader)
-		reader.Close()
+		closeErr := reader.Close()
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
 		if err != nil {
 			t.Fatal(err)
 		}

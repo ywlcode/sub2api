@@ -40,7 +40,7 @@ func TestMonthlyUsageQueriesMatchDeployedExporter(t *testing.T) {
 func TestMonthlyUsageReadFailureRollsBackBeforeOutput(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
-	defer db.Close()
+	t.Cleanup(func() { mock.ExpectClose(); require.NoError(t, db.Close()) })
 	r := &opsRepository{db: db}
 	mock.ExpectBegin()
 	mock.ExpectQuery("WITH penalty_config").WithArgs("2024-02-01", int64(0)).

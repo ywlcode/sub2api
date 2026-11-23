@@ -85,9 +85,9 @@ func (r *opsRepository) BuildMonthlyUsageReportWithCoverage(ctx context.Context,
 	}
 	if err := os.Remove(file.Name()); err != nil {
 		// Some platforms only allow unlink after close.
-		defer os.Remove(file.Name())
+		defer func() { _ = os.Remove(file.Name()) }()
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	snapshot, err := r.snapshotMonthlyUsage(ctx, date, departmentAttributeID, file)
 	if err != nil {
@@ -127,7 +127,7 @@ func (r *opsRepository) snapshotMonthlyUsage(ctx context.Context, date string, d
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	if departmentAttributeID != 0 {
 		ok, err := monthlyUsageDepartmentAttributeAvailable(ctx, tx, departmentAttributeID)
@@ -152,7 +152,7 @@ func (r *opsRepository) snapshotMonthlyUsage(ctx context.Context, date string, d
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	buffer := bufio.NewWriter(dest)
 	encoder := gob.NewEncoder(buffer)

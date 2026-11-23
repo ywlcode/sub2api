@@ -145,9 +145,9 @@ func BuildContext(ctx context.Context, w io.Writer, site string, registered map[
 	// Unlink before writing any rows so a killed process leaves no named XML.
 	if err := os.Remove(f.Name()); err != nil {
 		// Platforms that cannot unlink an open file remove it after Close.
-		defer os.Remove(f.Name())
+		defer func() { _ = os.Remove(f.Name()) }()
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	body := bufio.NewWriter(f)
 	details, err := newSheet(body, detailHeaders, note)
 	if err != nil {
