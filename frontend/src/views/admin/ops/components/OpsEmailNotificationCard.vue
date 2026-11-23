@@ -32,11 +32,14 @@ const severityOptions: Array<{ value: AlertSeverity | ''; label: string }> = [
 ]
 
 async function loadConfig() {
+  if (loading.value || saving.value) return
   loading.value = true
+  reportVerified.value = false
   try {
     const data = await opsAPI.getEmailNotificationConfig()
     config.value = data
     reportVerified.value = true
+    if (showEditor.value) resetDraft(data)
   } catch (err: any) {
     console.error('[OpsEmailNotificationCard] Failed to load config', err)
     appStore.showError(err?.response?.data?.detail || t('admin.ops.email.loadFailed'))
@@ -46,14 +49,14 @@ async function loadConfig() {
 }
 
 async function saveConfig() {
-  if (!draft.value) return
+  if (loading.value || saving.value || !reportVerified.value || !draft.value?.report_revision) return
   if (!editorValidation.value.valid) {
     appStore.showError(editorValidation.value.errors[0] || t('admin.ops.email.validation.invalid'))
     return
   }
   saving.value = true
   try {
-    const savedDepartmentId = reportVerified.value ? config.value?.report.monthly_usage_department_attribute_id : undefined
+    const savedDepartmentId = config.value?.report.monthly_usage_department_attribute_id
     reportVerified.value = false
     config.value = await opsAPI.updateEmailNotificationConfig(draft.value, savedDepartmentId)
     reportVerified.value = true
@@ -61,19 +64,23 @@ async function saveConfig() {
     appStore.showSuccess(t('admin.ops.email.saveSuccess'))
   } catch (err: any) {
     console.error('[OpsEmailNotificationCard] Failed to save config', err)
-    appStore.showError(err?.response?.data?.detail || t('admin.ops.email.saveFailed'))
+    appStore.showError(err?.response?.data?.detail || t('admin.ops.settings.emailConfigReloadRequired'))
   } finally {
     saving.value = false
   }
 }
 
-function openEditor() {
-  if (!config.value) return
-  draft.value = JSON.parse(JSON.stringify(config.value))
+function resetDraft(data: EmailNotificationConfig) {
+  draft.value = JSON.parse(JSON.stringify(data))
   alertRecipientInput.value = ''
   reportRecipientInput.value = ''
   alertRecipientError.value = ''
   reportRecipientError.value = ''
+}
+
+function openEditor() {
+  if (!config.value || !reportVerified.value || saving.value || loading.value) return
+  resetDraft(config.value)
   showEditor.value = true
 }
 
@@ -197,7 +204,7 @@ onMounted(() => {
       <div class="flex items-center gap-2">
         <button
           class="flex items-center gap-1.5 rounded-lg bg-gray-100 px-3 py-1.5 text-xs font-bold text-gray-700 transition-colors hover:bg-gray-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-dark-700 dark:text-gray-300 dark:hover:bg-dark-600"
-          :disabled="loading"
+          :disabled="loading || saving || showEditor"
           @click="loadConfig"
         >
           <svg class="h-3.5 w-3.5" :class="{ 'animate-spin': loading }" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -205,7 +212,7 @@ onMounted(() => {
           </svg>
           {{ t('common.refresh') }}
         </button>
-        <button class="btn btn-sm btn-secondary" :disabled="!config" @click="openEditor">{{ t('common.edit') }}</button>
+        <button class="btn btn-sm btn-secondary" :disabled="!reportVerified || saving || loading || showEditor" @click="openEditor">{{ t('common.edit') }}</button>
       </div>
     </div>
 
@@ -260,7 +267,14 @@ onMounted(() => {
   </div>
 
   <BaseDialog :show="showEditor" :title="t('admin.ops.email.title')" width="extra-wide" @close="showEditor = false">
-    <div v-if="draft" class="space-y-6">
+    <div v-if="draft && !reportVerified && !saving" class="mb-4 space-y-2">
+      <p role="alert" class="text-sm text-amber-700 dark:text-amber-300">{{ t('admin.ops.settings.emailConfigReloadRequired') }}</p>
+      <button type="button" class="btn btn-secondary" :disabled="loading" @click="loadConfig">{{ t('common.refresh') }}</button>
+    </div>
+    <p v-else-if="draft && !draft.report_revision" role="status" class="mb-4 text-sm text-amber-700 dark:text-amber-300">
+      {{ t('admin.ops.settings.emailConfigUpgradeRequired') }}
+    </p>
+    <fieldset v-if="draft" :disabled="!reportVerified || !draft.report_revision || saving" class="space-y-6">
       <div
         v-if="!editorValidation.valid"
         class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200"
@@ -412,10 +426,6 @@ onMounted(() => {
                 <p id="ops-email-monthly-usage-hint" class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.settings.monthlyUsageHint') }}</p>
                 <MonthlyUsageDepartmentField v-model="draft.report.monthly_usage_department_attribute_id" class="mt-3" />
               </div>
-              <MonthlyUsageSender
-                v-if="showEditor && config" class="md:col-span-2"
-                :saved="reportVerified ? config.report : null" :draft="draft.report" :recipient-input="reportRecipientInput" :saving="saving"
-              />
               <div>
                 <div class="mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">{{ t('admin.ops.email.errorDigest') }}</div>
                 <div class="flex items-center gap-2">
@@ -447,11 +457,16 @@ onMounted(() => {
           </div>
         </div>
       </div>
-    </div>
+    </fieldset>
+    <MonthlyUsageSender
+      v-if="showEditor && draft && config" class="mt-4"
+      :report-revision="reportVerified ? draft.report_revision : undefined" :saved="reportVerified ? config.report : null"
+      :draft="draft.report" :recipient-input="reportRecipientInput" :saving="saving"
+    />
     <template #footer>
       <div class="flex justify-end gap-2">
         <button class="btn btn-secondary" @click="showEditor = false">{{ t('common.cancel') }}</button>
-        <button class="btn btn-primary" :disabled="saving || !editorValidation.valid" @click="saveConfig">
+        <button class="btn btn-primary" :disabled="saving || !reportVerified || !draft?.report_revision || !editorValidation.valid" @click="saveConfig">
           {{ saving ? t('common.saving') : t('common.save') }}
         </button>
       </div>

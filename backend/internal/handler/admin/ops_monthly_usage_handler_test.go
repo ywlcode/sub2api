@@ -44,6 +44,8 @@ func monthlyUsageHandlerRouter(store *monthlyHandlerStore, settings *testSetting
 	r.POST("/send", h.StartManualMonthlyUsage)
 	r.GET("/jobs/:id", h.ManualMonthlyUsageStatus)
 	r.GET("/config", h.GetEmailNotificationConfig)
+	r.PUT("/config", h.UpdateEmailNotificationConfig)
+	r.PUT("/config/conditional", h.UpdateEmailNotificationConfig)
 	return r
 }
 
@@ -89,7 +91,7 @@ func TestManualMonthlyUsageHandlerConfiguration(t *testing.T) {
 				settings.values[service.SettingKeyOpsEmailNotificationConfig] = tc.config
 			}
 			r := monthlyUsageHandlerRouter(&monthlyHandlerStore{}, settings)
-			w := monthlyUsageRequest(r, http.MethodPost, "/send", monthlyJobRequest)
+			w := monthlyUsageRequest(r, http.MethodPost, "/send", monthlyRequestWithRevision(loadEmailRevision(t, r)))
 			require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
 			require.NotContains(t, w.Body.String(), "private@example.org")
 			require.Equal(t, http.StatusNotFound, monthlyUsageRequest(r, http.MethodGet, "/jobs/"+monthlyJobID, "").Code)
@@ -137,6 +139,7 @@ func TestManualMonthlyUsageHandlerExistingJob(t *testing.T) {
 	}
 	conflict := monthlyUsageRequest(r, http.MethodPost, "/send", strings.Replace(monthlyJobRequest, "2024-02", "2024-03", 1))
 	require.Equal(t, http.StatusConflict, conflict.Code)
+	require.Contains(t, conflict.Body.String(), `"reason":"MONTHLY_USAGE_REPORT_ID_CONFLICT"`)
 }
 
 func TestManualMonthlyUsageHandlerRedactsServiceErrors(t *testing.T) {
@@ -161,8 +164,76 @@ func TestManualMonthlyUsageHandlerRedactsServiceErrors(t *testing.T) {
 				w = monthlyUsageRequest(r, http.MethodPost, "/send", monthlyJobRequest)
 			}
 			require.Equal(t, tc.status, w.Code, w.Body.String())
+			if tc.err == service.ErrMonthlyUsageBusy {
+				require.Contains(t, w.Body.String(), `"reason":"MONTHLY_USAGE_REPORT_BUSY"`)
+			}
 			require.NotContains(t, w.Body.String(), "private@example.org")
 			require.NotContains(t, w.Body.String(), "internal DB detail")
 		})
 	}
+}
+
+func loadEmailRevision(t *testing.T, r *gin.Engine) string {
+	t.Helper()
+	w := monthlyUsageRequest(r, http.MethodGet, "/config", "")
+	require.Equal(t, http.StatusOK, w.Code)
+	var result struct {
+		Data service.OpsEmailNotificationConfig `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+	require.NotEmpty(t, result.Data.ReportRevision)
+	return result.Data.ReportRevision
+}
+
+func monthlyRequestWithRevision(revision string) string {
+	return fmt.Sprintf(`{"month":"2024-02","request_id":%q,"expected_report_revision":%q}`, monthlyJobID, revision)
+}
+
+func (s *testSettingRepo) CompareAndSetOpsEmailConfig(_ context.Context, previous *string, next string) error {
+	raw, found := s.values[service.SettingKeyOpsEmailNotificationConfig]
+	if (previous == nil && found) || (previous != nil && (!found || raw != *previous)) {
+		return service.ErrReportRevisionConflict
+	}
+	s.values[service.SettingKeyOpsEmailNotificationConfig] = next
+	return nil
+}
+
+func TestManualMonthlyUsageRevisionContract(t *testing.T) {
+	settings := newTestSettingRepo()
+	store := &monthlyHandlerStore{}
+	r := monthlyUsageHandlerRouter(store, settings)
+	revision := loadEmailRevision(t, r)
+	save := func(route, rev string, enabled bool, to string) *httptest.ResponseRecorder {
+		return monthlyUsageRequest(r, http.MethodPut, route, fmt.Sprintf(
+			`{"expected_report_revision":%q,"report":{"enabled":true,"monthly_usage_enabled":%t,"recipients":[%q]}}`,
+			rev, enabled, to))
+	}
+	w := save("/config/conditional", revision, true, "current@example.org")
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	current := loadEmailRevision(t, r)
+	require.NotEqual(t, revision, current)
+	require.Contains(t, w.Body.String(), current)
+	for _, route := range []string{"/config", "/config/conditional"} {
+		require.Equal(t, http.StatusConflict, save(route, revision, false, "stale@example.org").Code)
+		require.Equal(t, http.StatusPreconditionRequired, save(route, "", false, "stale@example.org").Code)
+	}
+	require.Equal(t, current, loadEmailRevision(t, r))
+	for _, tc := range []struct {
+		body   string
+		status int
+		reason string
+	}{
+		{monthlyJobRequest, 428, "MONTHLY_USAGE_REPORT_REVISION_REQUIRED"},
+		{monthlyRequestWithRevision(revision), 409, "MONTHLY_USAGE_REPORT_REVISION_CONFLICT"},
+	} {
+		w = monthlyUsageRequest(r, http.MethodPost, "/send", tc.body)
+		require.Equal(t, tc.status, w.Code)
+		var result struct {
+			Reason string `json:"reason"`
+		}
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &result))
+		require.Equal(t, tc.reason, result.Reason)
+	}
+	store.job = &service.OpsMonthlyUsageJob{ID: monthlyJobID, Month: "2024-02", Status: "sent", Total: 1, Accepted: 1}
+	require.Equal(t, http.StatusOK, monthlyUsageRequest(r, http.MethodPost, "/send", monthlyRequestWithRevision(revision)).Code)
 }

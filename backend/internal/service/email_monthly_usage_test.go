@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -45,6 +46,10 @@ func TestSendMonthlyUsageExcel(t *testing.T) {
 		{name: "accepted"},
 		{name: "recipient refused", stopAt: "RCPT", reply: "550 invalid recipient"},
 		{name: "DATA refused", stopAt: "DATA", reply: "451 try later"},
+		{name: "premature success without body", stopAt: "DATA", reply: "250 queued"},
+		{name: "malformed initial reply", stopAt: "DATA", reply: "bad reply"},
+		{name: "unexpected positive final reply", stopAt: "final", reply: "251 forwarded", wantUncertain: true},
+		{name: "unexpected intermediate final reply", stopAt: "final", reply: "354 send more", wantUncertain: true},
 		{name: "disconnect before DATA starts", stopAt: "DATA"},
 		{name: "temporary final rejection", stopAt: "final", reply: "452 mailbox full"},
 		{name: "permanent final rejection", stopAt: "final", reply: "554 message rejected"},
@@ -201,4 +206,68 @@ func TestSendMonthlyUsageExcelRequiresConfiguredTLS(t *testing.T) {
 	require.ErrorContains(t, err, "STARTTLS")
 	require.False(t, uncertain)
 	require.False(t, srv.sawCommand("AUTH"))
+}
+
+func TestSMTPDataDeadlines(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		attachment bool
+		stall      bool
+		wantErr    bool
+	}{
+		{"active attachment upload", true, false, false},
+		{"attachment final reply times out", true, true, true},
+		{"ordinary mail keeps total deadline", false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				out, in := net.Pipe()
+				done := make(chan struct{})
+				defer func() {
+					_ = out.Close()
+					<-done
+				}()
+				data := bytes.Repeat([]byte("x"), 8*4096)
+				go func() {
+					defer close(done)
+					defer in.Close()
+					server := textproto.NewConn(in)
+					if server.PrintfLine("220 ready") != nil {
+						return
+					}
+					cmd, err := server.ReadLine()
+					if err != nil || cmd != "DATA" || server.PrintfLine("354 proceed") != nil {
+						return
+					}
+					for i := 0; i < 8; i++ {
+						time.Sleep(4 * time.Second)
+						if _, err := io.CopyN(io.Discard, server.R, 4096); err != nil {
+							return
+						}
+					}
+					// The body above has no line break. DotWriter appends CRLF and the terminator.
+					if _, err := io.ReadFull(server.R, make([]byte, len("\r\n.\r\n"))); err != nil {
+						return
+					}
+					if tc.stall {
+						time.Sleep(smtpIOTimeout + time.Second)
+					}
+					_ = server.PrintfLine("250 accepted")
+				}()
+				client, err := newSMTPClient(out, "localhost")
+				require.NoError(t, err)
+				start := time.Now()
+				uncertain, err := client.sendData(data, tc.attachment)
+				if tc.wantErr {
+					var timeout net.Error
+					require.ErrorAs(t, err, &timeout)
+					require.True(t, timeout.Timeout())
+				} else {
+					require.NoError(t, err)
+					require.Greater(t, time.Since(start), smtpIOTimeout)
+				}
+				require.Equal(t, tc.stall, uncertain)
+			})
+		})
+	}
 }

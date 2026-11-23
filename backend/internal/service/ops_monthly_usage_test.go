@@ -11,6 +11,7 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/mail"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -85,6 +86,8 @@ func TestMonthlyUsageSettingsCompatibility(t *testing.T) {
 type monthlyTestStore struct {
 	OpsRepository
 	states       map[string]string
+	settings     *notificationEmailMemorySettingRepo
+	finishErr    error
 	built        []string
 	attributeIDs []int64
 	onBuild      func()
@@ -93,34 +96,49 @@ type monthlyTestStore struct {
 func (r *monthlyTestStore) MonthlyUsageDepartmentAttributeAvailable(_ context.Context, id int64) (bool, error) {
 	return id == 23, nil
 }
-func (r *monthlyTestStore) BuildMonthlyUsageReport(_ context.Context, month, site string, departmentAttributeID int64, w io.Writer) error {
+func (r *monthlyTestStore) BuildMonthlyUsageReportWithCoverage(_ context.Context, month, site string, departmentAttributeID int64, w io.Writer) (string, error) {
 	r.built = append(r.built, month)
 	r.attributeIDs = append(r.attributeIDs, departmentAttributeID)
 	if r.onBuild != nil {
 		r.onBuild()
 	}
 	_, err := io.WriteString(w, "workbook for "+month)
-	return err
+	return "", err
 }
-func (r *monthlyTestStore) MonthlyUsageEmailClaimed(_ context.Context, month, to string) (bool, error) {
-	return r.states[month+to] != "", nil
+func (r *monthlyTestStore) MonthlyUsageDelivery(_ context.Context, month, to string) (MonthlyUsageDeliveryState, error) {
+	return MonthlyUsageDeliveryState(r.states[month+to]), nil
 }
-func (r *monthlyTestStore) MonthlyUsageEmailSettled(_ context.Context, month, to string) (bool, error) {
-	return r.states[month+to] == "accepted" || r.states[month+to] == "old-unknown", nil
+func (r *monthlyTestStore) NextMonthlyUsageRetry(_ context.Context, first, last string, recipients []string) (string, error) {
+	for key, state := range r.states {
+		if state == "rejected" && key[:7] >= first && key[:7] <= last && slices.Contains(recipients, key[7:]) {
+			return key[:7], nil
+		}
+	}
+	return "", nil
 }
-func (r *monthlyTestStore) ClaimMonthlyUsageEmail(_ context.Context, month, to string) (bool, error) {
-	if r.states[month+to] != "" {
+func (r *monthlyTestStore) AdvanceMonthlyUsageDispatch(ctx context.Context, month, raw string) (bool, error) {
+	current, err := r.settings.GetValue(ctx, SettingKeyOpsEmailNotificationConfig)
+	if err != nil || current != raw {
+		return false, err
+	}
+	return true, r.settings.Set(ctx, monthlyUsageCheckpoint, month)
+}
+func (r *monthlyTestStore) ClaimMonthlyUsageEmailForConfig(ctx context.Context, month, to, raw string) (bool, error) {
+	current, err := r.settings.GetValue(ctx, SettingKeyOpsEmailNotificationConfig)
+	if err != nil || current != raw {
+		return false, err
+	}
+	if state := r.states[month+to]; state != "" && state != "rejected" {
 		return false, nil
 	}
 	r.states[month+to] = "sending"
 	return true, nil
 }
-func (r *monthlyTestStore) FinishMonthlyUsageEmail(_ context.Context, month, to string, success bool) error {
-	if success {
-		r.states[month+to] = "accepted"
-	} else {
-		delete(r.states, month+to)
+func (r *monthlyTestStore) FinishMonthlyUsageEmail(_ context.Context, month, to string, state MonthlyUsageDeliveryState) error {
+	if r.finishErr != nil {
+		return r.finishErr
 	}
+	r.states[month+to] = string(state)
 	return nil
 }
 
@@ -130,7 +148,7 @@ func TestMonthlyUsageDeliveryRestartAndRecipients(t *testing.T) {
 	settings := newNotificationEmailMemorySettingRepo()
 	report := `{"alert":{"recipients":["alert@example.org"]},"report":{"enabled":true,"recipients":["A@example.org","b@example.org","a@example.org"],"monthly_usage_enabled":true,"monthly_usage_first_period":"2026-11","monthly_usage_department_attribute_id":23}}`
 	require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, report))
-	store := &monthlyTestStore{states: map[string]string{}}
+	store := &monthlyTestStore{settings: settings, states: map[string]string{}}
 	s := &OpsScheduledReportService{opsService: &OpsService{opsRepo: store, settingRepo: settings}}
 	var sent []string
 	refuse := true
@@ -169,7 +187,7 @@ func TestMonthlyUsageNoDuplicateOrFallback(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, string(raw)))
 	}
-	store := &monthlyTestStore{states: map[string]string{}}
+	store := &monthlyTestStore{settings: settings, states: map[string]string{}}
 	s := &OpsScheduledReportService{opsService: &OpsService{settingRepo: settings, opsRepo: store}}
 	never := func(context.Context, string, string, string, string, []byte) (bool, error) {
 		t.Fatal("unexpected email")
@@ -195,11 +213,10 @@ func TestMonthlyUsageNoDuplicateOrFallback(t *testing.T) {
 		return true, errors.New("receipt lost")
 	})
 	require.ErrorContains(t, err, "uncertain")
-	require.Equal(t, "sending", store.states["2026-11a@example.org"])
-	store.states["2026-11a@example.org"] = "old-unknown"
-	period, err = s.monthlyUsageTick(ctx, now, never)
+	require.Equal(t, "uncertain", store.states["2026-11a@example.org"])
+	period, err = s.monthlyUsageTick(ctx, now.Add(time.Hour), never)
 	require.NoError(t, err)
-	require.Equal(t, "2026-11", period)
+	require.Empty(t, period)
 	require.Len(t, store.built, 1)
 }
 
@@ -210,16 +227,17 @@ func TestMonthlyUsageRechecksRecipientsAfterExport(t *testing.T) {
 		return `{"report":{"enabled":true,"recipients":["` + to + `"],"monthly_usage_enabled":true,"monthly_usage_first_period":"2026-11"}}`
 	}
 	require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, raw("old@example.org")))
-	store := &monthlyTestStore{states: map[string]string{}, onBuild: func() {
+	store := &monthlyTestStore{settings: settings, states: map[string]string{}, onBuild: func() {
 		require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, raw("new@example.org")))
 	}}
 	s := &OpsScheduledReportService{opsService: &OpsService{opsRepo: store, settingRepo: settings}}
-	period, err := s.monthlyUsageTick(ctx, time.Date(2026, 12, 1, 6, 15, 0, 0, monthlyUsageZone), func(context.Context, string, string, string, string, []byte) (bool, error) {
-		t.Fatal("sent to removed recipient")
+	period, err := s.monthlyUsageTick(ctx, time.Date(2026, 12, 1, 6, 15, 0, 0, monthlyUsageZone), func(_ context.Context, to, _, _, _ string, _ []byte) (bool, error) {
+		require.Equal(t, "new@example.org", to)
 		return false, nil
 	})
 	require.NoError(t, err)
-	require.Empty(t, period)
+	require.Equal(t, "2026-11", period)
+	require.Equal(t, map[string]string{"2026-11new@example.org": "accepted"}, store.states)
 }
 
 func TestMonthlyUsageChangedDepartmentRetriesBeforeSending(t *testing.T) {
@@ -227,7 +245,7 @@ func TestMonthlyUsageChangedDepartmentRetriesBeforeSending(t *testing.T) {
 	settings := newNotificationEmailMemorySettingRepo()
 	const initial = `{"report":{"enabled":true,"recipients":["a@example.org"],"monthly_usage_enabled":true,"monthly_usage_first_period":"2026-11","monthly_usage_department_attribute_id":23}}`
 	require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, initial))
-	store := &monthlyTestStore{states: map[string]string{}, onBuild: func() {
+	store := &monthlyTestStore{settings: settings, states: map[string]string{}, onBuild: func() {
 		require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, strings.Replace(initial, ":23}", ":0}", 1)))
 	}}
 	s := &OpsScheduledReportService{opsService: &OpsService{settingRepo: settings, opsRepo: store}}
@@ -251,8 +269,9 @@ func TestMonthlyUsageChangedDepartmentRetriesBeforeSending(t *testing.T) {
 
 type monthlyWorkbookMailTestStore struct{ *monthlyTestStore }
 
-func (s monthlyWorkbookMailTestStore) BuildMonthlyUsageReport(_ context.Context, month, label string, _ int64, w io.Writer) error {
-	return monthlyusage.Build(w, label, map[string]int64{"研发": 2}, func(row func(monthlyusage.Row) error) error {
+func (s monthlyWorkbookMailTestStore) BuildMonthlyUsageReportWithCoverage(ctx context.Context, month, label string, _ int64, w io.Writer) (string, error) {
+	const note = "历史覆盖无法确认：仅含现存明细。"
+	return note, monthlyusage.BuildContext(ctx, w, label, map[string]int64{"研发": 2}, note, func(row func(monthlyusage.Row) error) error {
 		return row(monthlyusage.Row{Day: month + "-28", UserID: "07", Username: "测试用户", Department: "研发", Model: "test-model", Requests: "4", InputTokens: "8000000000", OutputTokens: "2000000", CacheReadTokens: "1000", TotalTokens: "8002001000", ActualCost: "12.51"})
 	})
 }
@@ -263,7 +282,7 @@ func TestMonthlyUsagePrimaryDeliversReadableWorkbook(t *testing.T) {
 	smtp := startNotificationEmailTestSMTPServer(t)
 	require.NoError(t, db.SetMultiple(ctx, smtp.settings()))
 	require.NoError(t, db.Set(ctx, SettingKeyOpsEmailNotificationConfig, `{"report":{"enabled":true,"monthly_usage_enabled":true,"monthly_usage_first_period":"2024-02","recipients":["reader@example.org"]}}`))
-	repo := monthlyWorkbookMailTestStore{&monthlyTestStore{states: map[string]string{}}}
+	repo := monthlyWorkbookMailTestStore{&monthlyTestStore{settings: db, states: map[string]string{}}}
 	s := &OpsScheduledReportService{cfg: &config.Config{Site: site.Config{Mode: site.Primary}}, opsService: &OpsService{opsRepo: repo, settingRepo: db}}
 	period, err := s.monthlyUsageTick(ctx, time.Date(2024, 3, 1, 6, 15, 0, 0, monthlyUsageZone), NewEmailService(db, nil).SendMonthlyUsageExcel)
 	require.NoError(t, err)
@@ -274,8 +293,11 @@ func TestMonthlyUsagePrimaryDeliversReadableWorkbook(t *testing.T) {
 	_, params, err := mime.ParseMediaType(msg.Header.Get("Content-Type"))
 	require.NoError(t, err)
 	parts := multipart.NewReader(msg.Body, params["boundary"])
-	_, err = parts.NextPart()
+	message, err := parts.NextPart()
 	require.NoError(t, err)
+	body, err := io.ReadAll(message)
+	require.NoError(t, err)
+	require.Contains(t, string(body), "历史覆盖无法确认：仅含现存明细。")
 	file, err := parts.NextPart()
 	require.NoError(t, err)
 	require.Equal(t, "Sub2API-主站-2024-02.xlsx", file.FileName())
@@ -291,4 +313,88 @@ func TestMonthlyUsagePrimaryDeliversReadableWorkbook(t *testing.T) {
 		require.NoError(t, part.Close())
 		require.Contains(t, string(b), want)
 	}
+}
+
+func TestMonthlyUsageRechecksListBetweenMessages(t *testing.T) {
+	ctx := context.Background()
+	settings := newNotificationEmailMemorySettingRepo()
+	before := `{"report":{"enabled":true,"recipients":["a@example.org","revoked@example.org"],"monthly_usage_enabled":true,"monthly_usage_first_period":"2026-11"}}`
+	require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, before))
+	store := &monthlyTestStore{settings: settings, states: map[string]string{}}
+	s := &OpsScheduledReportService{opsService: &OpsService{opsRepo: store, settingRepo: settings}}
+	var sent []string
+	send := func(_ context.Context, to, _, _, _ string, _ []byte) (bool, error) {
+		sent = append(sent, to)
+		if to == "a@example.org" {
+			require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, strings.Replace(before, "revoked@", "new@", 1)))
+		}
+		return false, nil
+	}
+	period, err := s.monthlyUsageTick(ctx, time.Date(2026, 12, 1, 7, 0, 0, 0, monthlyUsageZone), send)
+	require.NoError(t, err)
+	require.Equal(t, "2026-11", period)
+	require.Equal(t, []string{"a@example.org", "new@example.org"}, sent)
+	require.Len(t, store.built, 1)
+}
+
+func TestMonthlyUsageRejectionDoesNotBlockLaterMonths(t *testing.T) {
+	ctx := context.Background()
+	settings := newNotificationEmailMemorySettingRepo()
+	before := `{"report":{"enabled":true,"recipients":["bad@example.org","ok@example.org"],"monthly_usage_enabled":true,"monthly_usage_first_period":"2026-11"}}`
+	require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, before))
+	store := &monthlyTestStore{settings: settings, states: map[string]string{}}
+	s := &OpsScheduledReportService{opsService: &OpsService{opsRepo: store, settingRepo: settings}}
+	var sent []string
+	refuse := true
+	send := func(_ context.Context, to, _, _, _ string, data []byte) (bool, error) {
+		sent = append(sent, string(data)+" "+to)
+		if refuse && to == "bad@example.org" {
+			return false, errors.New("550 refused")
+		}
+		return false, nil
+	}
+	now := time.Date(2026, 12, 1, 7, 0, 0, 0, monthlyUsageZone)
+	for i, month := range []string{"2026-11", "2026-12"} {
+		period, err := s.monthlyUsageTick(ctx, now.AddDate(0, i, 0), send)
+		require.ErrorContains(t, err, "550 refused")
+		require.Equal(t, month, period)
+		require.Equal(t, "accepted", store.states[month+"ok@example.org"])
+		require.Equal(t, "rejected", store.states[month+"bad@example.org"])
+	}
+	require.Len(t, sent, 4)
+	require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, strings.Replace(before, "ok@", "new@", 1)))
+	refuse = false
+	for range 2 {
+		_, err := s.monthlyUsageTick(ctx, now.AddDate(0, 1, 0).Add(time.Hour), send)
+		require.NoError(t, err)
+	}
+	require.ElementsMatch(t, []string{"workbook for 2026-11 bad@example.org", "workbook for 2026-12 bad@example.org"}, sent[4:])
+}
+
+func TestMonthlyUsageRefusalWithReceiptWriteFailure(t *testing.T) {
+	ctx := context.Background()
+	settings := newNotificationEmailMemorySettingRepo()
+	require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, `{"report":{"enabled":true,"recipients":["bad@example.org"],"monthly_usage_enabled":true,"monthly_usage_first_period":"2026-11"}}`))
+	store := &monthlyTestStore{settings: settings, states: map[string]string{}, finishErr: errors.New("database unreachable")}
+	s := &OpsScheduledReportService{opsService: &OpsService{opsRepo: store, settingRepo: settings}}
+	now := time.Date(2026, 12, 1, 7, 0, 0, 0, monthlyUsageZone)
+	calls := 0
+	send := func(context.Context, string, string, string, string, []byte) (bool, error) {
+		calls++
+		return false, errors.New("550 refused")
+	}
+	_, err := s.monthlyUsageTick(ctx, now, send)
+	require.ErrorContains(t, err, "SMTP rejected; receipt update unconfirmed")
+	require.ErrorContains(t, err, notificationEmailHash("bad@example.org"))
+	require.ErrorContains(t, err, "550 refused")
+	require.ErrorContains(t, err, "database unreachable")
+	_, err = settings.GetValue(ctx, monthlyUsageCheckpoint)
+	require.ErrorIs(t, err, ErrSettingNotFound)
+	require.Equal(t, "sending", store.states["2026-11bad@example.org"])
+	// The database classifies an old unresolved claim as uncertain on restart.
+	store.states["2026-11bad@example.org"] = "uncertain"
+	period, err := s.monthlyUsageTick(ctx, now.Add(time.Hour), send)
+	require.Equal(t, "2026-11", period)
+	require.ErrorContains(t, err, "1 uncertain")
+	require.Equal(t, 1, calls)
 }

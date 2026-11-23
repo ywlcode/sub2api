@@ -14,14 +14,15 @@ import (
 
 type manualMonthlyStoreStub struct {
 	*monthlyTestStore
-	mu      sync.Mutex
-	jobs    map[string]OpsMonthlyUsageJob
-	started chan struct{}
-	proceed chan struct{}
-	once    sync.Once
+	mu       sync.Mutex
+	jobs     map[string]OpsMonthlyUsageJob
+	started  chan struct{}
+	proceed  chan struct{}
+	once     sync.Once
+	onInsert func()
 }
 
-func (r *manualMonthlyStoreStub) BeginManualMonthlyUsage(_ context.Context, id, month string, total int) (*OpsMonthlyUsageJob, bool, error) {
+func (r *manualMonthlyStoreStub) BeginManualMonthlyUsage(ctx context.Context, id, month string, total int) (*OpsMonthlyUsageJob, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if job, ok := r.jobs[id]; ok {
@@ -34,6 +35,12 @@ func (r *manualMonthlyStoreStub) BeginManualMonthlyUsage(_ context.Context, id, 
 	}
 	j := OpsMonthlyUsageJob{ID: id, Month: month, Total: total, Status: "running"}
 	r.jobs[id] = j
+	if r.onInsert != nil {
+		r.onInsert()
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+	}
 	return &j, true, nil
 }
 func (r *manualMonthlyStoreStub) GetManualMonthlyUsage(_ context.Context, id string) (*OpsMonthlyUsageJob, error) {
@@ -51,18 +58,18 @@ func (r *manualMonthlyStoreStub) UpdateManualMonthlyUsage(_ context.Context, j *
 	r.jobs[j.ID] = *j
 	return nil
 }
-func (r *manualMonthlyStoreStub) BuildMonthlyUsageReport(ctx context.Context, _, _ string, departmentAttributeID int64, w io.Writer) error {
+func (r *manualMonthlyStoreStub) BuildMonthlyUsageReportWithCoverage(ctx context.Context, _, _ string, departmentAttributeID int64, w io.Writer) (string, error) {
 	r.attributeIDs = append(r.attributeIDs, departmentAttributeID)
 	if r.started != nil {
 		r.once.Do(func() { close(r.started) })
 		select {
 		case <-r.proceed:
 		case <-ctx.Done():
-			return ctx.Err()
+			return "", ctx.Err()
 		}
 	}
 	_, err := io.WriteString(w, "test XLSX")
-	return err
+	return "本月非管理员已入账请求为 0。", err
 }
 
 func TestManualMonthlyUsageDeliversOncePerClickWithoutAutoEnabled(t *testing.T) {
@@ -78,14 +85,22 @@ func TestManualMonthlyUsageDeliversOncePerClickWithoutAutoEnabled(t *testing.T) 
 	t.Cleanup(worker.Stop)
 	id := uuid.NewString()
 	_, err := ops.StartManualMonthlyUsage(ctx, "2024-02", id)
-	require.ErrorIs(t, err, ErrMonthlyUsageInvalid)
+	require.ErrorIs(t, err, ErrReportRevisionRequired)
+	old, err := ops.GetEmailNotificationConfig(ctx)
+	require.NoError(t, err)
 	require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, `{"report":{"enabled":true,"monthly_usage_enabled":false,"monthly_usage_department_attribute_id":23,"recipients":["report@example.org"]}}`))
 	req, cancel := context.WithCancel(ctx)
 	defer cancel()
-	first, err := ops.StartManualMonthlyUsage(req, "2024-02", id)
+	_, err = ops.StartManualMonthlyUsage(ctx, "2024-02", id, old.ReportRevision)
+	require.ErrorIs(t, err, ErrReportRevisionConflict)
+	require.Empty(t, store.jobs)
+	cfg, err := ops.GetEmailNotificationConfig(ctx)
+	require.NoError(t, err)
+	store.onInsert = cancel // Browser disconnects while the INSERT result is pending.
+	first, err := ops.StartManualMonthlyUsage(req, "2024-02", id, cfg.ReportRevision)
 	require.NoError(t, err)
 	require.Equal(t, "running", first.Status)
-	cancel()
+	require.ErrorIs(t, req.Err(), context.Canceled)
 	select {
 	case <-store.started:
 	case <-time.After(3 * time.Second):
@@ -96,7 +111,7 @@ func TestManualMonthlyUsageDeliversOncePerClickWithoutAutoEnabled(t *testing.T) 
 	require.Equal(t, id, same.ID)
 	_, err = ops.StartManualMonthlyUsage(ctx, "2024-01", id)
 	require.ErrorIs(t, err, ErrMonthlyUsageConflict)
-	_, err = ops.StartManualMonthlyUsage(ctx, "2024-02", uuid.NewString())
+	_, err = ops.StartManualMonthlyUsage(ctx, "2024-02", uuid.NewString(), cfg.ReportRevision)
 	require.ErrorIs(t, err, ErrMonthlyUsageBusy)
 	close(store.proceed)
 	worker.wg.Wait()
@@ -104,10 +119,10 @@ func TestManualMonthlyUsageDeliversOncePerClickWithoutAutoEnabled(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, "sent", completed.Status)
 	require.Equal(t, 1, completed.Accepted)
-	_, err = ops.StartManualMonthlyUsage(ctx, "2024-02", id)
+	_, err = ops.StartManualMonthlyUsage(ctx, "2024-02", id, old.ReportRevision)
 	require.NoError(t, err)
 	require.Equal(t, int64(1), smtp.messageCount())
-	_, err = ops.StartManualMonthlyUsage(ctx, "2024-02", uuid.NewString()) // deliberate resend
+	_, err = ops.StartManualMonthlyUsage(ctx, "2024-02", uuid.NewString(), cfg.ReportRevision) // deliberate resend
 	require.NoError(t, err)
 	worker.wg.Wait()
 	require.Equal(t, int64(2), smtp.messageCount())
@@ -125,7 +140,8 @@ func TestManualMonthlyUsagePartialOutcomesAndRemovedRecipient(t *testing.T) {
 	worker := &OpsScheduledReportService{opsService: &OpsService{settingRepo: settings, opsRepo: store}}
 	job := OpsMonthlyUsageJob{ID: uuid.NewString(), Month: "2024-02", Total: 3, Status: "running"}
 	var sent []string
-	worker.runManualMonthlyUsage(ctx, store, store, job, []string{"yes@example.org", "removed@example.org", "unknown@example.org"}, 0, func(_ context.Context, to, _, _, _ string, _ []byte) (bool, error) {
+	worker.runManualMonthlyUsage(ctx, store, store, job, []string{"yes@example.org", "removed@example.org", "unknown@example.org"}, 0, func(_ context.Context, to, _, body, _ string, _ []byte) (bool, error) {
+		require.Contains(t, body, "本月非管理员已入账请求为 0。")
 		sent = append(sent, to)
 		if to == "unknown@example.org" {
 			return true, errors.New("no receipt")
@@ -148,4 +164,37 @@ func TestManualMonthlyUsageBeijingMonthBoundary(t *testing.T) {
 		require.ErrorIs(t, validateManualMonthlyPeriod(month, now), ErrMonthlyUsageInvalid)
 	}
 	require.ErrorIs(t, validateManualMonthlyPeriod("2024-02", now.Add(-time.Second)), ErrMonthlyUsageInvalid)
+}
+
+func TestManualMonthlyUsageRechecksApprovalBeforeEachMessage(t *testing.T) {
+	const report = `{"report":{"enabled":true,"recipients":["first@example.org","second@example.org"]}}`
+	for _, tc := range []struct{ name, key, value string }{
+		{"recipient replaced", SettingKeyOpsEmailNotificationConfig, `{"report":{"enabled":true,"recipients":["first@example.org","new@example.org"]}}`},
+		{"reports disabled", SettingKeyOpsEmailNotificationConfig, `{"report":{"enabled":false,"recipients":["second@example.org"]}}`},
+		{"department changed", SettingKeyOpsEmailNotificationConfig, `{"report":{"enabled":true,"monthly_usage_department_attribute_id":23,"recipients":["second@example.org"]}}`},
+		{"monitoring disabled", SettingKeyOpsMonitoringEnabled, "false"},
+		{"unreadable approval", SettingKeyOpsEmailNotificationConfig, "{"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := t.Context()
+			settings := newNotificationEmailMemorySettingRepo()
+			require.NoError(t, settings.Set(ctx, SettingKeyOpsEmailNotificationConfig, report))
+			store := &manualMonthlyStoreStub{monthlyTestStore: &monthlyTestStore{}, jobs: map[string]OpsMonthlyUsageJob{}}
+			worker := &OpsScheduledReportService{opsService: &OpsService{settingRepo: settings, opsRepo: store}}
+			job := OpsMonthlyUsageJob{ID: uuid.NewString(), Month: "2024-02", Total: 2, Status: "running"}
+			var sent []string
+			worker.runManualMonthlyUsage(ctx, store, store, job, []string{"first@example.org", "second@example.org"}, 0,
+				func(_ context.Context, to, _, _, _ string, _ []byte) (bool, error) {
+					sent = append(sent, to)
+					require.NoError(t, settings.Set(ctx, tc.key, tc.value))
+					return false, nil
+				})
+			require.Equal(t, []string{"first@example.org"}, sent)
+			got, err := store.GetManualMonthlyUsage(ctx, job.ID)
+			require.NoError(t, err)
+			require.Equal(t, "failed", got.Status)
+			require.Equal(t, 1, got.Failed)
+			require.Equal(t, 1, got.Accepted)
+		})
+	}
 }

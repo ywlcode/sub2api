@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
@@ -50,8 +51,16 @@ func (h *OpsHandler) UpdateEmailNotificationConfig(c *gin.Context) {
 		return
 	}
 
+	if req.ExpectedReportRevision == "" {
+		monthlyUsageError(c, service.ErrReportRevisionRequired)
+		return
+	}
 	updated, err := h.opsService.UpdateEmailNotificationConfig(c.Request.Context(), &req)
 	if err != nil {
+		if errors.Is(err, service.ErrReportRevisionConflict) {
+			monthlyUsageError(c, err)
+			return
+		}
 		// Most failures here are validation errors from request payload; treat as 400.
 		response.Error(c, http.StatusBadRequest, err.Error())
 		return

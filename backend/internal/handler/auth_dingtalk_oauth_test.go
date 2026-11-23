@@ -512,3 +512,70 @@ func TestSyncDingTalkIdentity_DepartmentAttribute(t *testing.T) {
 		})
 	}
 }
+
+type dingTalkProfileFields struct {
+	service.UserAttributeDefinitionRepository
+}
+
+func (dingTalkProfileFields) List(ctx context.Context, _ bool) ([]service.UserAttributeDefinition, error) {
+	return []service.UserAttributeDefinition{
+		{ID: 1, Key: "name", Type: service.AttributeTypeText, Enabled: true},
+		{ID: 2, Key: "email", Type: service.AttributeTypeText, Enabled: true},
+		{ID: 3, Key: "dept", Type: service.AttributeTypeText, Enabled: true},
+	}, ctx.Err()
+}
+
+func (r dingTalkProfileFields) GetByKey(ctx context.Context, key string) (*service.UserAttributeDefinition, error) {
+	defs, err := r.List(ctx, true)
+	if err != nil {
+		return nil, err
+	}
+	for _, def := range defs {
+		if def.Key == key {
+			return &def, nil
+		}
+	}
+	return nil, fmt.Errorf("unknown key %q", key)
+}
+
+type dingTalkProfileValues struct {
+	service.UserAttributeValueRepository
+	attrs map[int64]string
+}
+
+func (v dingTalkProfileValues) UpsertBatch(ctx context.Context, _ int64, inputs []service.UpdateUserAttributeInput) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	for _, in := range inputs {
+		v.attrs[in.AttributeID] = in.Value
+	}
+	return nil
+}
+
+func TestSyncDingTalkIdentity_SecondDepartmentCancellationKeepsOtherFields(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID int64 `json:"dept_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			return
+		}
+		if req.ID == 11 {
+			cancel()
+			return
+		}
+		fmt.Fprint(w, `{"result":{"dept_id":10,"name":"研发","parent_id":1}}`)
+	}))
+	defer server.Close()
+	values := dingTalkProfileValues{attrs: map[int64]string{3: "原部门"}}
+	h := &AuthHandler{userAttributeService: service.NewUserAttributeService(dingTalkProfileFields{}, values)}
+	client := &DingTalkClient{cfg: dingTalkClientConfig{UserInfoURL: server.URL}, httpClient: server.Client(), appToken: "token", appTokenExp: time.Now().Add(time.Hour)}
+	cfg := config.DingTalkConnectConfig{CorpRestrictionPolicy: "internal_only", SyncDisplayName: true, SyncDisplayNameAttrKey: "name", SyncCorpEmail: true, SyncCorpEmailAttrKey: "email", SyncDept: true, SyncDeptAttrKey: "dept"}
+	h.syncDingTalkIdentity(ctx, cfg, client, 7, &DingTalkStaffInfo{Name: "员工", Email: "user@example.org", DeptIDs: []int64{10, 11}}, false)
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.Equal(t, map[int64]string{1: "员工", 2: "user@example.org", 3: "原部门"}, values.attrs)
+}

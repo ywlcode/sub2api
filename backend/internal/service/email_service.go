@@ -203,11 +203,11 @@ func (s *EmailService) SendEmailWithConfig(config *SMTPConfig, to, subject, body
 		return err
 	}
 
-	_, err = s.sendSMTPMessage(context.Background(), config, message)
+	_, err = s.sendSMTPMessage(context.Background(), config, message, false)
 	return err
 }
 
-func (s *EmailService) sendSMTPMessage(ctx context.Context, config *SMTPConfig, message smtpMessage) (uncertain bool, err error) {
+func (s *EmailService) sendSMTPMessage(ctx context.Context, config *SMTPConfig, message smtpMessage, renewDataDeadline bool) (uncertain bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -233,12 +233,51 @@ func (s *EmailService) sendSMTPMessage(ctx context.Context, config *SMTPConfig, 
 	if err = client.Rcpt(message.envelopeTo); err != nil {
 		return false, fmt.Errorf("smtp rcpt: %w", err)
 	}
+	uncertain, err = client.sendData(message.data, renewDataDeadline)
+	if err != nil {
+		return uncertain, err
+	}
+	// Acceptance is final even when the server fails to answer QUIT.
+	_ = client.Quit()
+	return false, nil
+}
+
+type smtpSession struct {
+	*smtp.Client
+	conn net.Conn // Also controls the underlying socket after STARTTLS.
+}
+
+func (client *smtpSession) sendData(data []byte, renewDeadline bool) (uncertain bool, err error) {
+	refresh := func() error {
+		if renewDeadline {
+			return client.conn.SetDeadline(time.Now().Add(smtpIOTimeout))
+		}
+		return nil
+	}
+	if err := refresh(); err != nil {
+		return false, err
+	}
 	w, err := client.Data()
 	if err != nil {
 		return false, fmt.Errorf("smtp data: %w", err)
 	}
-	if _, err = w.Write(message.data); err != nil {
-		return false, fmt.Errorf("write msg: %w", err)
+	blockSize := len(data)
+	if renewDeadline {
+		// Match the SMTP writer's socket buffer so slow writes can keep progressing.
+		blockSize = 4 * 1024
+	}
+	for len(data) > 0 {
+		n := min(len(data), blockSize)
+		if err := refresh(); err != nil {
+			return false, err
+		}
+		if _, err := w.Write(data[:n]); err != nil {
+			return false, fmt.Errorf("write msg: %w", err)
+		}
+		data = data[n:]
+	}
+	if err := refresh(); err != nil {
+		return false, err
 	}
 	if err = w.Close(); err != nil {
 		// Close sends the DATA terminator and waits for the final 250.
@@ -247,9 +286,6 @@ func (s *EmailService) sendSMTPMessage(ctx context.Context, config *SMTPConfig, 
 		rejected := errors.As(err, &reply) && reply.Code >= 400 && reply.Code < 600
 		return !rejected, fmt.Errorf("close writer: %w", err)
 	}
-	// Email is sent successfully after w.Close(), ignore Quit errors
-	// Some SMTP servers return non-standard responses on QUIT
-	_ = client.Quit()
 	return false, nil
 }
 
@@ -272,7 +308,7 @@ func smtpTLSConfig(host string) *tls.Config {
 //     两种方式都无法建立加密连接时报错，绝不明文继续。
 //   - UseTLS=false：明文连接后若服务器支持 STARTTLS 则机会式升级，
 //     与 smtp.SendMail 的默认行为一致。
-func (s *EmailService) connectSMTP(config *SMTPConfig) (*smtp.Client, error) {
+func (s *EmailService) connectSMTP(config *SMTPConfig) (*smtpSession, error) {
 	addr := fmt.Sprintf("%s:%d", config.Host, config.Port)
 	dialer := &net.Dialer{Timeout: smtpDialTimeout}
 	tlsConfig := smtpTLSConfig(config.Host)
@@ -296,7 +332,7 @@ func (s *EmailService) connectSMTP(config *SMTPConfig) (*smtp.Client, error) {
 
 // connectSMTPStartTLS 建立明文连接并按需升级 STARTTLS。
 // mandatory 为 true 时服务器必须支持 STARTTLS，否则报错。
-func (s *EmailService) connectSMTPStartTLS(dialer *net.Dialer, addr, host string, tlsConfig *tls.Config, mandatory bool) (*smtp.Client, error) {
+func (s *EmailService) connectSMTPStartTLS(dialer *net.Dialer, addr, host string, tlsConfig *tls.Config, mandatory bool) (*smtpSession, error) {
 	conn, err := dialer.Dial("tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("smtp dial: %w", err)
@@ -319,14 +355,14 @@ func (s *EmailService) connectSMTPStartTLS(dialer *net.Dialer, addr, host string
 	return client, nil
 }
 
-func newSMTPClient(conn net.Conn, host string) (*smtp.Client, error) {
+func newSMTPClient(conn net.Conn, host string) (*smtpSession, error) {
 	_ = conn.SetDeadline(time.Now().Add(smtpIOTimeout))
 	client, err := smtp.NewClient(conn, host)
 	if err != nil {
 		_ = conn.Close()
 		return nil, fmt.Errorf("new smtp client: %w", err)
 	}
-	return client, nil
+	return &smtpSession{Client: client, conn: conn}, nil
 }
 
 // GenerateVerifyCode 生成6位数字验证码

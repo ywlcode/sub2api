@@ -16,8 +16,9 @@ func (h *OpsHandler) StartManualMonthlyUsage(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Month     string `json:"month"`
-		RequestID string `json:"request_id"`
+		Month            string `json:"month"`
+		RequestID        string `json:"request_id"`
+		ExpectedRevision string `json:"expected_report_revision"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(c.Writer, c.Request.Body, 4096))
 	decoder.DisallowUnknownFields()
@@ -25,7 +26,7 @@ func (h *OpsHandler) StartManualMonthlyUsage(c *gin.Context) {
 		response.BadRequest(c, "Invalid monthly usage report request")
 		return
 	}
-	job, err := h.opsService.StartManualMonthlyUsage(c.Request.Context(), req.Month, req.RequestID)
+	job, err := h.opsService.StartManualMonthlyUsage(c.Request.Context(), req.Month, req.RequestID, req.ExpectedRevision)
 	if err != nil {
 		monthlyUsageError(c, err)
 		return
@@ -54,11 +55,15 @@ func (h *OpsHandler) ManualMonthlyUsageStatus(c *gin.Context) {
 func monthlyUsageError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, service.ErrMonthlyUsageJobNotFound):
-		response.NotFound(c, "Monthly usage report job not found")
+		response.ErrorWithDetails(c, http.StatusNotFound, "Monthly usage report job not found", "MONTHLY_USAGE_REPORT_JOB_NOT_FOUND", nil)
 	case errors.Is(err, service.ErrMonthlyUsageBusy):
-		response.Error(c, http.StatusConflict, "A monthly usage report is already running")
+		response.ErrorWithDetails(c, http.StatusConflict, "A monthly usage report is already running", "MONTHLY_USAGE_REPORT_BUSY", nil)
 	case errors.Is(err, service.ErrMonthlyUsageConflict):
-		response.Error(c, http.StatusConflict, "Request ID already belongs to a different report month")
+		response.ErrorWithDetails(c, http.StatusConflict, "Request ID already belongs to a different report month", "MONTHLY_USAGE_REPORT_ID_CONFLICT", nil)
+	case errors.Is(err, service.ErrReportRevisionRequired):
+		response.ErrorWithDetails(c, http.StatusPreconditionRequired, service.ErrReportRevisionRequired.Error(), "MONTHLY_USAGE_REPORT_REVISION_REQUIRED", nil)
+	case errors.Is(err, service.ErrReportRevisionConflict):
+		response.ErrorWithDetails(c, http.StatusConflict, service.ErrReportRevisionConflict.Error(), "MONTHLY_USAGE_REPORT_REVISION_CONFLICT", nil)
 	case errors.Is(err, service.ErrMonthlyUsageInvalid), errors.Is(err, service.ErrEmailNotConfigured):
 		response.BadRequest(c, "Invalid monthly usage report request or email configuration")
 	default:

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,34 +22,46 @@ const (
 // Email notification config
 // =========================
 
+var (
+	ErrReportRevisionRequired = errors.New("reload the email notification settings before continuing")
+	ErrReportRevisionConflict = errors.New("email notification settings changed; reload before continuing")
+)
+
+func emailConfigRevision(raw string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
+}
+
 func (s *OpsService) GetEmailNotificationConfig(ctx context.Context) (*OpsEmailNotificationConfig, error) {
-	defaultCfg := defaultOpsEmailNotificationConfig()
+	cfg, _, err := s.readEmailNotificationConfig(ctx)
+	return cfg, err
+}
+
+// Return the exact stored value for the conditional write. Reading a missing row
+// must not initialize it and race with another administrator's first save.
+func (s *OpsService) readEmailNotificationConfig(ctx context.Context) (*OpsEmailNotificationConfig, *string, error) {
 	if s == nil || s.settingRepo == nil {
-		return defaultCfg, nil
+		return defaultOpsEmailNotificationConfig(), nil, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-
 	raw, err := s.settingRepo.GetValue(ctx, SettingKeyOpsEmailNotificationConfig)
+	if errors.Is(err, ErrSettingNotFound) {
+		cfg := defaultOpsEmailNotificationConfig()
+		cfg.ReportRevision = emailConfigRevision("")
+		return cfg, nil, nil
+	}
 	if err != nil {
-		if errors.Is(err, ErrSettingNotFound) {
-			// Initialize defaults on first read (best-effort).
-			if b, mErr := json.Marshal(defaultCfg); mErr == nil {
-				_ = s.settingRepo.Set(ctx, SettingKeyOpsEmailNotificationConfig, string(b))
-			}
-			return defaultCfg, nil
-		}
-		return nil, err
+		return nil, nil, err
 	}
 
 	cfg := &OpsEmailNotificationConfig{}
 	if err := json.Unmarshal([]byte(raw), cfg); err != nil {
-		// Corrupted JSON should not break ops UI; fall back to defaults.
-		return defaultCfg, nil
+		cfg = defaultOpsEmailNotificationConfig()
 	}
 	normalizeOpsEmailNotificationConfig(cfg)
-	return cfg, nil
+	cfg.ReportRevision = emailConfigRevision(raw)
+	return cfg, &raw, nil
 }
 
 func (s *OpsService) UpdateEmailNotificationConfig(ctx context.Context, req *OpsEmailNotificationConfigUpdateRequest) (*OpsEmailNotificationConfig, error) {
@@ -62,9 +75,13 @@ func (s *OpsService) UpdateEmailNotificationConfig(ctx context.Context, req *Ops
 		return nil, errors.New("invalid request")
 	}
 
-	cfg, err := s.GetEmailNotificationConfig(ctx)
+	cfg, previous, err := s.readEmailNotificationConfig(ctx)
 	if err != nil {
 		return nil, err
+	}
+
+	if req.ExpectedReportRevision != "" && req.ExpectedReportRevision != cfg.ReportRevision {
+		return nil, ErrReportRevisionConflict
 	}
 
 	if req.Alert != nil {
@@ -128,13 +145,24 @@ func (s *OpsService) UpdateEmailNotificationConfig(ctx context.Context, req *Ops
 	}
 
 	normalizeOpsEmailNotificationConfig(cfg)
+	cfg.ReportRevision = "" // The digest covers stored settings, not itself.
 	raw, err := json.Marshal(cfg)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.settingRepo.Set(ctx, SettingKeyOpsEmailNotificationConfig, string(raw)); err != nil {
+	if writer, ok := s.settingRepo.(interface {
+		CompareAndSetOpsEmailConfig(context.Context, *string, string) error
+	}); ok {
+		err = writer.CompareAndSetOpsEmailConfig(ctx, previous, string(raw))
+	} else if req.ExpectedReportRevision != "" {
+		return nil, errors.New("conditional settings writes unavailable")
+	} else {
+		err = s.settingRepo.Set(ctx, SettingKeyOpsEmailNotificationConfig, string(raw))
+	}
+	if err != nil {
 		return nil, err
 	}
+	cfg.ReportRevision = emailConfigRevision(string(raw))
 	return cfg, nil
 }
 

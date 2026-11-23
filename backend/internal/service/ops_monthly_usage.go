@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"strings"
 	"time"
@@ -17,16 +16,29 @@ import (
 // Both the billing query and the original Excel reports use Beijing calendar months.
 var monthlyUsageZone = time.FixedZone("Asia/Shanghai", 8*60*60)
 
-const monthlyUsageCheckpoint = "ops_monthly_usage_last_completed_period"
+// MonthlyUsageDispatchCheckpoint tracks scheduled attempts, including durable rejections and unknown receipts.
+const MonthlyUsageDispatchCheckpoint = "ops_monthly_usage_last_dispatched_period"
+const monthlyUsageCheckpoint = MonthlyUsageDispatchCheckpoint
+
+type MonthlyUsageDeliveryState string
+
+const (
+	MonthlyUsageUnclaimed MonthlyUsageDeliveryState = ""
+	MonthlyUsageSending   MonthlyUsageDeliveryState = "sending"
+	MonthlyUsageAccepted  MonthlyUsageDeliveryState = "accepted"
+	MonthlyUsageRejected  MonthlyUsageDeliveryState = "rejected"
+	MonthlyUsageUncertain MonthlyUsageDeliveryState = "uncertain"
+)
 
 // OpsMonthlyUsageRepository is available on authoritative sites for report generation and delivery receipts.
 type OpsMonthlyUsageRepository interface {
-	BuildMonthlyUsageReport(ctx context.Context, month, site string, departmentAttributeID int64, w io.Writer) error
+	monthlyUsageWorkbookBuilder
 	MonthlyUsageDepartmentAttributeAvailable(ctx context.Context, id int64) (bool, error)
-	MonthlyUsageEmailClaimed(context.Context, string, string) (bool, error)
-	MonthlyUsageEmailSettled(context.Context, string, string) (bool, error)
-	ClaimMonthlyUsageEmail(context.Context, string, string) (bool, error)
-	FinishMonthlyUsageEmail(context.Context, string, string, bool) error
+	MonthlyUsageDelivery(context.Context, string, string) (MonthlyUsageDeliveryState, error)
+	NextMonthlyUsageRetry(ctx context.Context, first, last string, recipients []string) (string, error)
+	AdvanceMonthlyUsageDispatch(ctx context.Context, period, configValue string) (bool, error)
+	ClaimMonthlyUsageEmailForConfig(ctx context.Context, month, recipient, configValue string) (bool, error)
+	FinishMonthlyUsageEmail(context.Context, string, string, MonthlyUsageDeliveryState) error
 }
 
 type monthlyUsageSender func(context.Context, string, string, string, string, []byte) (bool, error)
@@ -105,7 +117,9 @@ func (s *OpsScheduledReportService) monthlyUsageHeartbeat(started time.Time, per
 	if s.opsService.opsRepo != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = s.opsService.opsRepo.UpsertJobHeartbeat(ctx, h)
+		if err := s.opsService.opsRepo.UpsertJobHeartbeat(ctx, h); err != nil {
+			log.Printf("[OpsMonthlyUsage] period=%s: heartbeat write failed: %v", period, err)
+		}
 	}
 }
 
@@ -130,62 +144,125 @@ func (s *OpsScheduledReportService) monthlyUsageTick(ctx context.Context, now ti
 		return "", err
 	}
 	period, err := dueMonthlyUsagePeriod(now, cfg.Report.MonthlyUsageFirstPeriod, last)
-	if err != nil || period == "" {
+	if err != nil {
 		return "", err
 	}
-	siteName := s.monthlyUsageSiteName(ctx)
+	retryOnly := period == ""
+	if retryOnly {
+		if last == "" || last < cfg.Report.MonthlyUsageFirstPeriod {
+			return "", nil
+		}
+		period, err = store.NextMonthlyUsageRetry(ctx, cfg.Report.MonthlyUsageFirstPeriod, last, recipients)
+		if err != nil || period == "" {
+			return "", err
+		}
+	}
 
-	// Check cheaply before aggregating an entire month's ledger. Claim only
-	// after export, immediately before SMTP, never while building the report.
-	var pending []string
+	processed, err := s.dispatchMonthlyUsage(ctx, store, cfg.Report, period, retryOnly, send)
+	if err != nil {
+		return period, err // Include the month in diagnostics even when dispatch could not advance.
+	}
+	return processed, nil
+}
+
+func (s *OpsScheduledReportService) dispatchMonthlyUsage(ctx context.Context, store OpsMonthlyUsageRepository, initial OpsEmailReportConfig, period string, retryOnly bool, send monthlyUsageSender) (string, error) {
+	siteName := s.monthlyUsageSiteName(ctx)
+	var file *bytes.Buffer
+	var coverage string
+	checked := make(map[string]bool)
+	var sendErrors error
+	var claimedAny bool
+	for {
+		// Reload after export, between individual messages, and before closing
+		// the month, including the path where all addresses already have receipts.
+		cfg, raw, err := s.opsService.readEmailNotificationConfig(ctx)
+		if err != nil {
+			return period, errors.Join(sendErrors, err)
+		}
+		recipients := normalizeEmails(cfg.Report.Recipients)
+		if raw == nil || !s.opsService.IsMonitoringEnabled(ctx) || !cfg.Report.Enabled || !cfg.Report.MonthlyUsageEnabled ||
+			cfg.Report.MonthlyUsageFirstPeriod != initial.MonthlyUsageFirstPeriod ||
+			cfg.Report.MonthlyUsageDepartmentAttributeID != initial.MonthlyUsageDepartmentAttributeID || len(recipients) == 0 {
+			return "", sendErrors
+		}
+		var next string
+		for _, addr := range recipients {
+			if checked[addr] {
+				continue
+			}
+			state, err := store.MonthlyUsageDelivery(ctx, period, addr)
+			if err != nil {
+				return period, errors.Join(sendErrors, err)
+			}
+			if state == MonthlyUsageRejected || (state == MonthlyUsageUnclaimed && !retryOnly) {
+				next = addr
+				break
+			}
+			checked[addr] = true
+		}
+		if next == "" {
+			if retryOnly && !claimedAny {
+				return "", sendErrors // The rejection was claimed by a peer or its address was removed.
+			}
+			processed, err := closeMonthlyUsageDispatch(ctx, store, period, recipients, *raw, retryOnly)
+			return processed, errors.Join(sendErrors, err)
+		}
+		if file == nil {
+			file = new(bytes.Buffer)
+			coverage, err = store.BuildMonthlyUsageReportWithCoverage(ctx, period, siteName, initial.MonthlyUsageDepartmentAttributeID, file)
+			if err != nil {
+				return period, fmt.Errorf("build monthly workbook: %w", err)
+			}
+			continue
+		}
+		checked[next] = true
+		claimed, err := sendMonthlyUsageOnce(ctx, store, send, period, siteName, next, *raw, coverage, file.Bytes())
+		claimedAny = claimedAny || claimed
+		if err != nil {
+			sendErrors = errors.Join(sendErrors, fmt.Errorf("recipient_hash=%s: %w", notificationEmailHash(next), err))
+		}
+	}
+}
+
+func closeMonthlyUsageDispatch(ctx context.Context, store OpsMonthlyUsageRepository, period string, recipients []string, configValue string, retryOnly bool) (string, error) {
+	var rejected, uncertain int
+	var incomplete bool
 	for _, addr := range recipients {
-		exists, err := store.MonthlyUsageEmailClaimed(ctx, period, addr)
+		state, err := store.MonthlyUsageDelivery(ctx, period, addr)
 		if err != nil {
 			return period, err
 		}
-		if !exists {
-			pending = append(pending, addr)
-		}
-	}
-	if len(pending) > 0 {
-		var file bytes.Buffer
-		if err := store.BuildMonthlyUsageReport(ctx, period, siteName, cfg.Report.MonthlyUsageDepartmentAttributeID, &file); err != nil {
-			return period, fmt.Errorf("build monthly workbook: %w", err)
-		}
-		// Respect a changed switch or recipient list while the read-only scan was running.
-		current, err := s.opsService.GetEmailNotificationConfig(ctx)
-		if err != nil || !s.opsService.IsMonitoringEnabled(ctx) || !current.Report.Enabled ||
-			!current.Report.MonthlyUsageEnabled || current.Report.MonthlyUsageFirstPeriod != cfg.Report.MonthlyUsageFirstPeriod ||
-			current.Report.MonthlyUsageDepartmentAttributeID != cfg.Report.MonthlyUsageDepartmentAttributeID {
-			return "", err
-		}
-		allowed := make(map[string]bool)
-		for _, addr := range normalizeEmails(current.Report.Recipients) {
-			allowed[addr] = true
-		}
-		var failures []error
-		for _, addr := range pending {
-			if !allowed[addr] {
-				continue
+		switch state {
+		case MonthlyUsageAccepted:
+		case MonthlyUsageRejected:
+			rejected++
+		case MonthlyUsageUncertain:
+			uncertain++
+		case MonthlyUsageSending:
+			incomplete = true
+		case MonthlyUsageUnclaimed:
+			// Retrying an old rejection never authorizes historical mail to a new address.
+			if !retryOnly {
+				incomplete = true
 			}
-			if err := sendMonthlyUsageOnce(ctx, store, send, period, siteName, addr, file.Bytes()); err != nil {
-				failures = append(failures, err)
-			}
-		}
-		if err := errors.Join(failures...); err != nil {
-			return period, err
-		}
-		recipients = normalizeEmails(current.Report.Recipients)
-	}
-	// A peer may currently own a claim and still receive an explicit SMTP
-	// rejection. Its mere existence is not enough to advance the whole month.
-	for _, addr := range recipients {
-		settled, err := store.MonthlyUsageEmailSettled(ctx, period, addr)
-		if err != nil || !settled {
-			return "", err
+		default:
+			return period, fmt.Errorf("unexpected monthly delivery state %q", state)
 		}
 	}
-	return period, s.opsService.settingRepo.Set(ctx, monthlyUsageCheckpoint, period)
+	var outcome error
+	if rejected > 0 || uncertain > 0 {
+		outcome = fmt.Errorf("monthly report %s: %d rejected (queued for retry), %d uncertain (check mail logs)", period, rejected, uncertain)
+	}
+	if incomplete {
+		return "", outcome
+	}
+	if !retryOnly {
+		advanced, err := store.AdvanceMonthlyUsageDispatch(ctx, period, configValue)
+		if err != nil || !advanced {
+			return "", errors.Join(outcome, err)
+		}
+	}
+	return period, outcome
 }
 
 func (s *OpsScheduledReportService) monthlyUsageSiteName(ctx context.Context) string {
@@ -208,24 +285,34 @@ func (s *OpsScheduledReportService) monthlyUsageSiteName(ctx context.Context) st
 	return siteName
 }
 
-func sendMonthlyUsageOnce(ctx context.Context, store OpsMonthlyUsageRepository, send monthlyUsageSender, month, siteName, to string, file []byte) error {
-	claimed, err := store.ClaimMonthlyUsageEmail(ctx, month, to)
+func sendMonthlyUsageOnce(ctx context.Context, store OpsMonthlyUsageRepository, send monthlyUsageSender, month, siteName, to, configValue, coverage string, file []byte) (bool, error) {
+	claimed, err := store.ClaimMonthlyUsageEmailForConfig(ctx, month, to, configValue)
 	if err != nil || !claimed {
-		return err
+		return false, err
 	}
-	uncertain, err := sendMonthlyUsageAttachment(ctx, send, month, siteName, to, file)
+	uncertain, err := sendMonthlyUsageAttachment(ctx, send, month, siteName, to, coverage, file)
+	state := MonthlyUsageAccepted
 	if uncertain {
-		return errors.New("monthly report SMTP receipt uncertain; check mail logs before resending")
+		state = MonthlyUsageUncertain
+		err = errors.Join(errors.New("monthly report SMTP receipt uncertain; check mail logs before resending"), err)
+	} else if err != nil {
+		state = MonthlyUsageRejected
 	}
-	// Complete or release even if the worker was canceled during SMTP.
+	// Until a definite rejection is durable, leave the claim in place. A DB
+	// failure after SMTP (or a lost DB acknowledgment) is unsafe to replay.
 	finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	stateErr := store.FinishMonthlyUsageEmail(finalCtx, month, to, err == nil)
-	return errors.Join(err, stateErr)
+	if stateErr := store.FinishMonthlyUsageEmail(finalCtx, month, to, state); stateErr != nil {
+		return true, errors.Join(err, fmt.Errorf("monthly report %s: SMTP %s; receipt update unconfirmed, check database and mail logs: %w", month, state, stateErr))
+	}
+	return true, err
 }
 
-func sendMonthlyUsageAttachment(ctx context.Context, send monthlyUsageSender, month, siteName, to string, file []byte) (bool, error) {
-	return send(ctx, to, fmt.Sprintf("[Sub2API] %s · %s 月度用量报告", siteName, month),
-		fmt.Sprintf("%s · %s（北京时间）。本月报不含导出时为管理员的账号。附件包含明细、部门月汇总（Token 单位 B）和用户月汇总（Token 单位 M）。两张汇总表的扣费均按汇总后取整数美元。", siteName, month),
+func sendMonthlyUsageAttachment(ctx context.Context, send monthlyUsageSender, month, siteName, to, coverage string, file []byte) (bool, error) {
+	body := fmt.Sprintf("%s · %s（北京时间）。本月报不含导出时为管理员的账号。附件包含明细、部门月汇总（Token 单位 B）和用户月汇总（Token 单位 M）。两张汇总表的扣费均按汇总后取整数美元。", siteName, month)
+	if coverage != "" {
+		body += "\n" + coverage
+	}
+	return send(ctx, to, fmt.Sprintf("[Sub2API] %s · %s 月度用量报告", siteName, month), body,
 		fmt.Sprintf("Sub2API-%s-%s.xlsx", siteName, month), file)
 }

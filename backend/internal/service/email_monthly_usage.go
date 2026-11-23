@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net/textproto"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 )
@@ -21,6 +22,8 @@ const xlsxMediaType = "application/vnd.openxmlformats-officedocument.spreadsheet
 // to one recipient. On error, uncertain indicates that SMTP may have accepted
 // the message and retrying could deliver a duplicate.
 func (s *EmailService) SendMonthlyUsageExcel(ctx context.Context, to, subject, body, filename string, attachment []byte) (uncertain bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
 	config, err := s.GetSMTPConfig(ctx)
 	if err != nil {
 		return false, err
@@ -60,7 +63,7 @@ func (s *EmailService) SendMonthlyUsageExcel(ctx context.Context, to, subject, b
 		return false, err
 	}
 	message.data = data.Bytes()
-	return s.sendSMTPMessage(ctx, config, message)
+	return s.sendSMTPMessage(ctx, config, message, true)
 }
 
 func writeMIMEBase64(w io.Writer, data []byte) error {

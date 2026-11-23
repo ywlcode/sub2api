@@ -7,6 +7,7 @@ from email.headerregistry import Address
 from email.message import EmailMessage
 from email.utils import formatdate, make_msgid
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,8 @@ from workbook import build_workbook
 HERE = Path(__file__).resolve().parent
 TZ = ZoneInfo("Asia/Shanghai")
 SITE = {"boscserver": "主站", "ecosserver": "独立站"}
+# Bump when the workbook format or the SQL's population/aggregation changes.
+ARCHIVE_VERSION = "three-sheets-admin-filter-v1"
 SMTP_CONFIG = """
 SELECT json_object_agg(key, value) FROM settings WHERE key IN
  ('smtp_host','smtp_port','smtp_from','smtp_username','smtp_password');
@@ -83,6 +86,10 @@ def archive(state, site, month, revision=None):
     return state / f"Sub2API-{site}-{month}{suffix}.xlsx"
 
 
+def archive_record(filename, digest):
+    return {"version": ARCHIVE_VERSION, "filename": filename.name, "sha256": digest}
+
+
 def render(state, site, month, revision=None):
     filename = archive(state, site, month, revision)
     with tempfile.TemporaryDirectory(prefix=".build-", dir=state) as tmp:
@@ -98,12 +105,29 @@ def render(state, site, month, revision=None):
             shutil.copyfileobj(snapshot, f)
         xlsx = tmp / "out.xlsx"
         summary = build_workbook(xlsx, month, {site: src}, registered=registered)[site]
+        digest = hashlib.sha256()
         with xlsx.open("rb") as f:
+            for block in iter(lambda: f.read(256 * 1024), b""):
+                digest.update(block)
             os.fsync(f.fileno())
         os.replace(xlsx, filename)
-        sync_dir(state)
+        write_state(filename.with_suffix(".render.json"), archive_record(filename, digest.hexdigest()))
     print(f"rendered {site} {month}: {json.dumps(summary, ensure_ascii=False)}", flush=True)
     return filename
+
+
+def attachment_bytes(state, site, month, revision):
+    path = archive(state, site, month, revision)
+    try:
+        record = json.loads(path.with_suffix(".render.json").read_text())
+        data = path.read_bytes()
+        if record == archive_record(path, hashlib.sha256(data).hexdigest()):
+            return data
+        del data
+    except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
+        pass
+    # Old archives can look identical even when their SQL included administrators.
+    return render(state, site, month, revision).read_bytes()
 
 
 def mailbox(raw):
@@ -128,8 +152,6 @@ def deliver(state, site, month, recipient, smtp_factory=None, *, revision=None, 
             print(f"already accepted: {site} {month}", flush=True)
             return
         raise Uncertain(f"check SMTP records before retry: {site} {month}")
-    if not path.exists():
-        render(state, site, month, revision)
     cfg = json.loads(db(SMTP_CONFIG))
     sender = mailbox(cfg["smtp_from"].strip())
     recipient = mailbox(recipient)
@@ -143,7 +165,7 @@ def deliver(state, site, month, recipient, smtp_factory=None, *, revision=None, 
                     "部门 Token 用 B（十亿）、用户 Token 用 M（百万）；两张汇总表按部门或用户合计后舍去美元小数。"
                     "注册人数含截至月底已注册的零请求用户；部门、启用、删除及整账号封禁均按本次导出时状态判断。"
                     + ("\n" + note if note else ""))
-    msg.add_attachment(path.read_bytes(), maintype="application",
+    msg.add_attachment(attachment_bytes(state, site, month, revision), maintype="application",
                        subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename=path.name)
     wire = msg.as_bytes()
     record = {"message_id": str(msg["Message-ID"]), "status": "sending"}
@@ -167,18 +189,26 @@ def deliver(state, site, month, recipient, smtp_factory=None, *, revision=None, 
             code, _ = op(arg)
             if not 200 <= code < 300:
                 raise RuntimeError(f"SMTP envelope rejected ({code})")
+        # Before 354 the body has never left this process, even on an unexpected 250.
+        code, _ = server.docmd("DATA")
+        if code != 354:
+            raise RuntimeError(f"SMTP DATA expected 354 ({code})")
+        # SMTP policy emits CRLF. Dot-stuff before chunking so line starts are preserved.
+        payload = memoryview(re.sub(br"(?m)^\.", b"..", wire))
         write_state(marker, record)
         try:
-            code, _ = server.data(wire)
-        except smtplib.SMTPDataError as exc:
-            # smtplib.data() rejects DATA before streaming the body.
-            code = exc.smtp_code
+            for start in range(0, len(payload), 32 * 1024):
+                server.send(payload[start:start + 32 * 1024])
+            server.send(b".\r\n" if wire.endswith(b"\r\n") else b"\r\n.\r\n")
+            code, _ = server.getreply()
         except (OSError, smtplib.SMTPException) as exc:
             raise Uncertain(f"SMTP result unknown: {site} {month}") from exc
-        if not 200 <= code < 300:
+        if 400 <= code < 600:
             marker.unlink()
             sync_dir(state)
             raise RuntimeError(f"SMTP DATA rejected ({code})")
+        if code != 250:
+            raise Uncertain(f"unexpected SMTP completion ({code}): {site} {month}")
         write_state(marker, dict(record, status="accepted", accepted_at=datetime.now(TZ).isoformat()))
         print(f"SMTP accepted: {site} {month} ({code})", flush=True)
     finally:

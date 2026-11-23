@@ -912,38 +912,26 @@ func (h *AuthHandler) syncDingTalkIdentity(ctx context.Context, cfg config.DingT
 		}
 	}
 
-	// 属性同步（目标 attr key 从 cfg 读取，默认值由 GetDingTalkConnectOAuthConfig 保证非空）
-	type syncField struct {
-		key   string
-		value string
+	// Login profile fields are already available. Persist them before department
+	// lookups, which may exhaust the shared background deadline.
+	write := func(key, value string) {
+		if err := h.setUserAttributeByKey(ctx, userID, key, value); err != nil {
+			slog.Warn("dingtalk sync: failed to set attribute", "user_id", userID, "key", key, "err", err)
+		}
 	}
-	var fields []syncField
-
-	if cfg.SyncDisplayName && strings.TrimSpace(staff.Name) != "" {
-		fields = append(fields, syncField{cfg.SyncDisplayNameAttrKey, strings.TrimSpace(staff.Name)})
+	if name := strings.TrimSpace(staff.Name); cfg.SyncDisplayName && name != "" {
+		write(cfg.SyncDisplayNameAttrKey, name)
 	}
-	if cfg.SyncCorpEmail && strings.TrimSpace(staff.Email) != "" {
-		fields = append(fields, syncField{cfg.SyncCorpEmailAttrKey, strings.TrimSpace(staff.Email)})
+	if email := strings.TrimSpace(staff.Email); cfg.SyncCorpEmail && email != "" {
+		write(cfg.SyncCorpEmailAttrKey, email)
 	}
 	if cfg.SyncDept && len(staff.DeptIDs) > 0 {
 		path, err := h.resolveDingTalkDeptPath(ctx, client, staff.DeptIDs)
 		if err != nil {
 			slog.Warn("dingtalk sync: failed to resolve dept path", "user_id", userID, "dept_ids", staff.DeptIDs, "err", err)
-		} else {
-			// path="" 表示公司直属（仅在根部门下），仍写入空串覆盖旧值。
-			fields = append(fields, syncField{cfg.SyncDeptAttrKey, path})
+			return
 		}
-	}
-
-	if len(fields) == 0 {
-		return
-	}
-
-	// 逐 key 查 definition 并 upsert
-	for _, f := range fields {
-		if err := h.setUserAttributeByKey(ctx, userID, f.key, f.value); err != nil {
-			slog.Warn("dingtalk sync: failed to set attribute", "user_id", userID, "key", f.key, "err", err)
-		}
+		write(cfg.SyncDeptAttrKey, path) // Root-only membership clears the previous department.
 	}
 }
 

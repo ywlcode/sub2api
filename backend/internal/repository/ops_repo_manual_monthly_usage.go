@@ -4,22 +4,25 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/google/uuid"
 )
 
 var _ service.OpsManualMonthlyUsageRepository = (*opsRepository)(nil)
 
 const manualMonthlyUsageColumns = `request_id::text, to_char(report_month, 'YYYY-MM'),
-	status, total, accepted, failed, uncertain`
+	status, total, accepted, failed, uncertain, owner_token`
 
-func scanManualMonthlyUsage(row *sql.Row) (*service.OpsMonthlyUsageJob, error) {
+func scanManualMonthlyUsage(row *sql.Row) (*service.OpsMonthlyUsageJob, uuid.NullUUID, error) {
 	var job service.OpsMonthlyUsageJob
-	err := row.Scan(&job.ID, &job.Month, &job.Status, &job.Total, &job.Accepted, &job.Failed, &job.Uncertain)
+	var owner uuid.NullUUID
+	err := row.Scan(&job.ID, &job.Month, &job.Status, &job.Total, &job.Accepted, &job.Failed, &job.Uncertain, &owner)
 	if err != nil {
-		return nil, err
+		return nil, owner, err
 	}
-	return &job, nil
+	return &job, owner, nil
 }
 
 // At most one row matches the partial index. A crashed worker may have sent any
@@ -40,44 +43,57 @@ func (r *opsRepository) BeginManualMonthlyUsage(ctx context.Context, id, month s
 	if err := r.expireManualMonthlyUsage(ctx); err != nil {
 		return nil, false, err
 	}
-	// Both the primary key and the partial unique index arbitrate across processes.
-	job, err := scanManualMonthlyUsage(r.db.QueryRowContext(ctx, `
-INSERT INTO monthly_usage_manual_jobs (request_id, report_month, total) VALUES ($1, $2, $3)
-ON CONFLICT DO NOTHING RETURNING `+manualMonthlyUsageColumns, id, date, total))
-	if err == nil {
-		return job, true, nil
+	// Only this invocation knows the token, including across database/sql retries.
+	token := uuid.New()
+	insert := func() (*service.OpsMonthlyUsageJob, uuid.NullUUID, error) {
+		return scanManualMonthlyUsage(r.db.QueryRowContext(ctx, `
+INSERT INTO monthly_usage_manual_jobs (request_id, report_month, total, owner_token) VALUES ($1, $2, $3, $4)
+ON CONFLICT DO NOTHING RETURNING `+manualMonthlyUsageColumns, id, date, total, token))
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return nil, false, err
+	job, owner, insertErr := insert()
+	if insertErr != nil && !errors.Is(insertErr, sql.ErrNoRows) && ctx.Err() == nil {
+		// The server may still be committing. Repeating the same claim waits
+		// for the unique indexes to settle before we read the winning row.
+		job, owner, insertErr = insert()
 	}
-	// A separate statement sees the winning insert even if we waited for its commit.
-	job, err = r.readManualMonthlyUsage(ctx, id)
-	if errors.Is(err, service.ErrMonthlyUsageJobNotFound) {
-		return nil, false, service.ErrMonthlyUsageBusy
-	}
-	if err != nil {
-		return nil, false, err
+	if insertErr != nil {
+		// A claim deadline can expire after commit. Give only the read-back
+		// its own short deadline; no fresh write is authorized by this context.
+		verifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		job, owner, err = r.readManualMonthlyUsage(verifyCtx, id)
+		if err != nil {
+			if !errors.Is(insertErr, sql.ErrNoRows) {
+				// The outcome is unknown. A missing row is not a definitive 404.
+				return nil, false, insertErr
+			}
+			if errors.Is(err, service.ErrMonthlyUsageJobNotFound) {
+				return nil, false, service.ErrMonthlyUsageBusy
+			}
+			return nil, false, err
+		}
 	}
 	if job.Month != month {
 		return nil, false, service.ErrMonthlyUsageConflict
 	}
-	return job, false, nil
+	return job, job.Status == "running" && owner.Valid && owner.UUID == token, nil
 }
 
-func (r *opsRepository) readManualMonthlyUsage(ctx context.Context, id string) (*service.OpsMonthlyUsageJob, error) {
-	job, err := scanManualMonthlyUsage(r.db.QueryRowContext(ctx, `
+func (r *opsRepository) readManualMonthlyUsage(ctx context.Context, id string) (*service.OpsMonthlyUsageJob, uuid.NullUUID, error) {
+	job, owner, err := scanManualMonthlyUsage(r.db.QueryRowContext(ctx, `
 SELECT `+manualMonthlyUsageColumns+` FROM monthly_usage_manual_jobs WHERE request_id = $1`, id))
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, service.ErrMonthlyUsageJobNotFound
+		err = service.ErrMonthlyUsageJobNotFound
 	}
-	return job, err
+	return job, owner, err
 }
 
 func (r *opsRepository) GetManualMonthlyUsage(ctx context.Context, id string) (*service.OpsMonthlyUsageJob, error) {
 	if err := r.expireManualMonthlyUsage(ctx); err != nil {
 		return nil, err
 	}
-	return r.readManualMonthlyUsage(ctx, id)
+	job, _, err := r.readManualMonthlyUsage(ctx, id)
+	return job, err
 }
 
 func (r *opsRepository) UpdateManualMonthlyUsage(ctx context.Context, job *service.OpsMonthlyUsageJob) error {

@@ -25,6 +25,9 @@ const emit = defineEmits<{
 const loading = ref(false)
 const settingsLoaded = ref(false)
 const saving = ref(false)
+const reloadMessage = ref('')
+let loadGeneration = 0
+let pendingWrites: Promise<PromiseSettledResult<unknown>[]> | undefined
 
 // 运行时设置
 const runtimeSettings = ref<OpsAlertRuntimeSettings | null>(null)
@@ -43,18 +46,24 @@ const metricThresholds = ref<OpsMetricThresholds>({
 
 // 加载所有配置
 async function loadAllSettings() {
+  const generation = ++loadGeneration
   settingsLoaded.value = false
   loading.value = true
   try {
+    // A reopened dialog must read after the previous save finishes.
+    if (pendingWrites) await pendingWrites
     const [runtime, email, advanced, thresholds] = await Promise.all([
       opsAPI.getAlertRuntimeSettings(),
       opsAPI.getEmailNotificationConfig(),
       opsAPI.getAdvancedSettings(),
       opsAPI.getMetricThresholds()
     ])
+    if (generation !== loadGeneration) return
     runtimeSettings.value = runtime
     savedReport.value = structuredClone(email.report)
     emailConfig.value = email
+    alertRecipientInput.value = ''
+    reportRecipientInput.value = ''
     advancedSettings.value = advanced
     if (advancedSettings.value?.data_retention) {
       const retention = advancedSettings.value.data_retention
@@ -69,21 +78,21 @@ async function loadAllSettings() {
     if (advancedSettings.value && !advancedSettings.value.openai_account_quota_auto_pause) {
       advancedSettings.value.openai_account_quota_auto_pause = { default_threshold_5h: 0, default_threshold_7d: 0 }
     }
-    // 如果后端返回了阈值，使用后端的值；否则保持默认值
-    if (thresholds && Object.keys(thresholds).length > 0) {
-        metricThresholds.value = {
-          sla_percent_min: thresholds.sla_percent_min ?? 99.5,
-          ttft_p99_ms_max: thresholds.ttft_p99_ms_max ?? 500,
-          request_error_rate_percent_max: thresholds.request_error_rate_percent_max ?? 5,
-          upstream_error_rate_percent_max: thresholds.upstream_error_rate_percent_max ?? 5
-        }
+    // 空响应也应恢复默认值，避免继续使用上一次编辑的草稿。
+    metricThresholds.value = {
+      sla_percent_min: thresholds?.sla_percent_min ?? 99.5,
+      ttft_p99_ms_max: thresholds?.ttft_p99_ms_max ?? 500,
+      request_error_rate_percent_max: thresholds?.request_error_rate_percent_max ?? 5,
+      upstream_error_rate_percent_max: thresholds?.upstream_error_rate_percent_max ?? 5
     }
     settingsLoaded.value = true
   } catch (err: any) {
+    if (generation !== loadGeneration) return
+    reloadMessage.value = t('admin.ops.settings.loadFailed')
     console.error('[OpsSettingsDialog] Failed to load settings', err)
     appStore.showError(err?.response?.data?.detail || t('admin.ops.settings.loadFailed'))
   } finally {
-    loading.value = false
+    if (generation === loadGeneration) loading.value = false
   }
 }
 
@@ -92,7 +101,7 @@ watch(() => props.show, (show) => {
   if (show) {
     loadAllSettings()
   }
-})
+}, { immediate: true })
 
 // 邮件输入
 const alertRecipientInput = ref('')
@@ -232,7 +241,8 @@ async function saveEmailConfig(config: EmailNotificationConfig) {
   const savedDepartmentId = savedReport.value?.monthly_usage_department_attribute_id
   savedReport.value = null
   const saved = await opsAPI.updateEmailNotificationConfig(config, savedDepartmentId)
-  savedReport.value = saved.report
+  savedReport.value = structuredClone(saved.report)
+  emailConfig.value = saved
 }
 
 // 保存所有配置
@@ -244,9 +254,10 @@ async function saveAllSettings() {
   }
 
   saving.value = true
+  const generation = loadGeneration
   try {
     // 无收件人时自动禁用邮件通知
-    if (emailConfig.value) {
+    if (emailConfig.value?.report_revision) {
       if (emailConfig.value.alert.enabled && emailConfig.value.alert.recipients.length === 0) {
         emailConfig.value.alert.enabled = false
       }
@@ -254,19 +265,26 @@ async function saveAllSettings() {
         emailConfig.value.report.enabled = false
       }
     }
-    await Promise.all([
+    pendingWrites = Promise.allSettled([
       runtimeSettings.value ? opsAPI.updateAlertRuntimeSettings(runtimeSettings.value) : Promise.resolve(),
-      emailConfig.value ? saveEmailConfig(emailConfig.value) : Promise.resolve(),
+      emailConfig.value?.report_revision ? saveEmailConfig(emailConfig.value) : Promise.resolve(),
       advancedSettings.value ? opsAPI.updateAdvancedSettings(advancedSettings.value) : Promise.resolve(),
       opsAPI.updateMetricThresholds(metricThresholds.value)
     ])
+    const results = await pendingWrites
+    if (generation !== loadGeneration) return
+    const failure = results.find(result => result.status === 'rejected')
+    if (failure?.status === 'rejected') throw failure.reason
     appStore.showSuccess(t('admin.ops.settings.saveSuccess'))
     emit('saved')
     emit('close')
   } catch (err: any) {
+    settingsLoaded.value = false
+    reloadMessage.value = t('admin.ops.settings.emailConfigReloadRequired')
     console.error('[OpsSettingsDialog] Failed to save settings', err)
-    appStore.showError(err?.response?.data?.message || err?.response?.data?.detail || t('admin.ops.settings.saveFailed'))
+    appStore.showError(err?.response?.data?.message || err?.response?.data?.detail || reloadMessage.value)
   } finally {
+    pendingWrites = undefined
     saving.value = false
   }
 }
@@ -276,6 +294,11 @@ async function saveAllSettings() {
   <BaseDialog :show="show" :title="t('admin.ops.settings.title')" width="extra-wide" @close="emit('close')">
     <div v-if="loading" class="py-10 text-center text-sm text-gray-500">
       {{ t('common.loading') }}
+    </div>
+
+    <div v-else-if="!settingsLoaded" class="space-y-2">
+      <p role="alert" class="text-sm text-amber-700 dark:text-amber-300">{{ reloadMessage }}</p>
+      <button type="button" class="btn btn-secondary" @click="loadAllSettings">{{ t('common.refresh') }}</button>
     </div>
 
     <div v-else-if="runtimeSettings && emailConfig && advancedSettings" class="space-y-6">
@@ -304,7 +327,10 @@ async function saveAllSettings() {
       </div>
 
       <!-- 预警配置 -->
-      <div class="rounded-2xl bg-gray-50 p-4 dark:bg-dark-700/50">
+      <p v-if="!emailConfig.report_revision" role="status" class="text-sm text-amber-700 dark:text-amber-300">
+        {{ t('admin.ops.settings.emailConfigUpgradeRequired') }}
+      </p>
+      <fieldset :disabled="saving || !emailConfig.report_revision" class="rounded-2xl bg-gray-50 p-4 dark:bg-dark-700/50">
         <h4 class="mb-3 text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.ops.settings.alertConfig') }}</h4>
 
         <div class="space-y-4">
@@ -349,13 +375,13 @@ async function saveAllSettings() {
             <Select v-model="emailConfig.alert.min_severity" :options="severityOptions" />
           </div>
         </div>
-      </div>
+      </fieldset>
 
       <!-- 评估报告配置 -->
       <div class="rounded-2xl bg-gray-50 p-4 dark:bg-dark-700/50">
         <h4 class="mb-3 text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.ops.settings.reportConfig') }}</h4>
 
-        <div class="space-y-4">
+        <fieldset :disabled="saving || !emailConfig.report_revision" class="space-y-4">
           <div class="flex items-center justify-between">
             <div>
               <label class="font-medium text-gray-900 dark:text-white">{{ t('admin.ops.settings.enableReport') }}</label>
@@ -416,11 +442,12 @@ async function saveAllSettings() {
             </div>
             <MonthlyUsageDepartmentField v-model="emailConfig.report.monthly_usage_department_attribute_id" class="md:col-span-2" />
           </div>
-          <MonthlyUsageSender
-            v-if="show && settingsLoaded"
-            :saved="savedReport" :draft="emailConfig.report" :recipient-input="reportRecipientInput" :saving="saving"
-          />
-        </div>
+        </fieldset>
+        <MonthlyUsageSender
+          v-if="show" class="mt-4"
+          :report-revision="emailConfig.report_revision" :saved="savedReport" :draft="emailConfig.report"
+          :recipient-input="reportRecipientInput" :saving="saving"
+        />
       </div>
 
       <!-- 指标阈值配置 -->

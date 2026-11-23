@@ -4,6 +4,7 @@ package monthlyusage
 import (
 	"archive/zip"
 	"bufio"
+	"context"
 	"embed"
 	"fmt"
 	"io"
@@ -111,6 +112,15 @@ func (s *snapshot) appendDetail(r Row) error {
 // Build spools private row XML to the system temp directory to measure columns in one pass.
 // It begins writing w only after all input and summaries have been validated.
 func Build(w io.Writer, site string, registered map[string]int64, walk func(func(Row) error) error) error {
+	return BuildContext(context.Background(), w, site, registered, "", walk)
+}
+
+// BuildContext includes an optional coverage notice on every sheet. Cancellation
+// stops the export even when highly compressible rows produce little ZIP output.
+func BuildContext(ctx context.Context, w io.Writer, site string, registered map[string]int64, note string, walk func(func(Row) error) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if w == nil || walk == nil {
 		return fmt.Errorf("monthlyusage: missing writer or row source")
 	}
@@ -119,6 +129,9 @@ func Build(w io.Writer, site string, registered map[string]int64, walk func(func
 	}
 	depts := make(map[string]*department, len(registered))
 	for dept, count := range registered {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if count < 0 {
 			return fmt.Errorf("monthlyusage: negative registered headcount")
 		}
@@ -136,7 +149,7 @@ func Build(w io.Writer, site string, registered map[string]int64, walk func(func
 	}
 	defer f.Close()
 	body := bufio.NewWriter(f)
-	details, err := newSheet(body, detailHeaders)
+	details, err := newSheet(body, detailHeaders, note)
 	if err != nil {
 		return err
 	}
@@ -144,6 +157,9 @@ func Build(w io.Writer, site string, registered map[string]int64, walk func(func
 	snapshot := snapshot{site: site, users: users, details: details}
 	var rowErr error
 	err = walk(func(r Row) error {
+		if rowErr == nil {
+			rowErr = ctx.Err()
+		}
 		if rowErr == nil {
 			n := details.rows + 1
 			if err := snapshot.appendDetail(r); err != nil {
@@ -160,6 +176,9 @@ func Build(w io.Writer, site string, registered map[string]int64, walk func(func
 	}
 
 	for _, u := range users {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		d := depts[u.department]
 		if d == nil {
 			d = &department{}
@@ -168,11 +187,14 @@ func Build(w io.Writer, site string, registered map[string]int64, walk func(func
 		d.active++
 		d.add(u.totals)
 	}
-	deptSheet, err := newSheet(body, departmentHeaders)
+	deptSheet, err := newSheet(body, departmentHeaders, note)
 	if err != nil {
 		return err
 	}
 	for _, key := range rankedKeys(depts, func(d *department) *totals { return &d.totals }) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		d := depts[key]
 		label := key
 		if label == "" {
@@ -183,11 +205,14 @@ func Build(w io.Writer, site string, registered map[string]int64, walk func(func
 			return fmt.Errorf("部门月汇总: %w", err)
 		}
 	}
-	userSheet, err := newSheet(body, userHeaders)
+	userSheet, err := newSheet(body, userHeaders, note)
 	if err != nil {
 		return err
 	}
 	for _, uid := range rankedKeys(users, func(u *user) *totals { return &u.totals }) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		u := users[uid]
 		labels := []string{site, uid, u.username, u.name, u.department}
 		if err := userSheet.row(labels, u.numbers(nil, -6, false)); err != nil {
@@ -197,13 +222,13 @@ func Build(w io.Writer, site string, registered map[string]int64, walk func(func
 	if err := body.Flush(); err != nil {
 		return err
 	}
-	return writeWorkbook(w, f, []*sheet{details, deptSheet, userSheet})
+	return writeWorkbook(ctx, w, f, []*sheet{details, deptSheet, userSheet})
 }
 
 //go:embed parts/*.xml
 var parts embed.FS
 
-func writeWorkbook(w io.Writer, spool io.ReaderAt, sheets []*sheet) error {
+func writeWorkbook(ctx context.Context, w io.Writer, spool io.ReaderAt, sheets []*sheet) error {
 	z := zip.NewWriter(w)
 	for _, part := range [][2]string{
 		{"content-types.xml", "[Content_Types].xml"}, {"root-rels.xml", "_rels/.rels"},
@@ -228,10 +253,29 @@ func writeWorkbook(w io.Writer, spool io.ReaderAt, sheets []*sheet) error {
 		if err != nil {
 			return err
 		}
-		if err := s.writeTo(entry, io.NewSectionReader(spool, offset, s.size)); err != nil {
+		rows := contextReader{ctx, io.NewSectionReader(spool, offset, s.size)}
+		if err := s.writeTo(entry, rows); err != nil {
 			return err
 		}
 		offset += s.size
 	}
-	return z.Close()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := z.Close(); err != nil {
+		return err
+	}
+	return ctx.Err()
+}
+
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.r.Read(p)
 }

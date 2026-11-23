@@ -45,14 +45,15 @@ func (c column) width(rows int) int {
 }
 
 type sheet struct {
-	body    *bufio.Writer
-	columns []column
-	rows    int
-	size    int64 // length of this sheet's row XML in the shared spool
+	body      *bufio.Writer
+	columns   []column
+	rows      int
+	headerRow int
+	size      int64 // length of this sheet's row XML in the shared spool
 }
 
-func newSheet(body *bufio.Writer, headers []string) (*sheet, error) {
-	s := &sheet{body: body, columns: make([]column, len(headers))}
+func newSheet(body *bufio.Writer, headers []string, note string) (*sheet, error) {
+	s := &sheet{body: body, columns: make([]column, len(headers)), headerRow: 1}
 	for i, label := range headers {
 		c := &s.columns[i]
 		if bounds, ok := textBounds[label]; ok {
@@ -72,6 +73,18 @@ func newSheet(body *bufio.Writer, headers []string) (*sheet, error) {
 			c.floor = 14
 		}
 	}
+	if note != "" {
+		// The merged notice sits above the filter, outside the width sample.
+		var notice strings.Builder
+		notice.WriteString(`<row r="1" ht="20" customHeight="1"><c r="A1" s="6" t="inlineStr"><is><t xml:space="preserve">`)
+		writeEscaped(&notice, cellLabel(note))
+		notice.WriteString("</t></is></c></row>")
+		n, err := body.WriteString(notice.String())
+		if err != nil {
+			return nil, err
+		}
+		s.size, s.rows, s.headerRow = int64(n), 1, 2
+	}
 	return s, s.row(headers, nil)
 }
 
@@ -86,29 +99,46 @@ func runeWidth(r rune) int {
 	return 1
 }
 
-func textSpan(value string) (int, error) {
-	if !utf8.ValidString(value) {
-		return 0, fmt.Errorf("invalid UTF-8 in cell")
-	}
-	var units, line, widest int
-	for _, r := range value {
+// cellLabel repairs display text only. Aggregation keys and exact numeric cells
+// retain their original values. Stop at a rune boundary even for non-BMP text.
+func cellLabel(s string) string {
+	var b strings.Builder
+	start, units := 0, 0
+	for i := 0; i < len(s); {
+		r, size := utf8.DecodeRuneInString(s[i:])
 		units++
 		if r > 0xffff {
 			units++
 		}
-		switch {
-		case r == '\r' || r == '\n' || r == 0x85 || r == 0x2028 || r == 0x2029:
+		if units > maxText {
+			s = s[:i]
+			break
+		}
+		if r == utf8.RuneError && size == 1 || r < 32 && r != '\t' && r != '\r' && r != '\n' || r == 0xfffe || r == 0xffff {
+			b.WriteString(s[start:i])
+			b.WriteRune(utf8.RuneError)
+			start = i + size
+		}
+		i += size
+	}
+	if start == 0 {
+		return s
+	}
+	b.WriteString(s[start:])
+	return b.String()
+}
+
+func textSpan(value string) int {
+	var line, widest int
+	for _, r := range value {
+		switch r {
+		case '\r', '\n', 0x85, 0x2028, 0x2029:
 			widest, line = max(widest, line), 0
-		case r < 32 && r != '\t' || r == 0xfffe || r == 0xffff:
-			return 0, fmt.Errorf("invalid XML character in cell")
 		default:
 			line += runeWidth(r)
 		}
 	}
-	if units > maxText {
-		return 0, fmt.Errorf("text exceeds Excel cell length limit")
-	}
-	return max(widest, line), nil
+	return max(widest, line)
 }
 
 // Match the leading underscore only: consecutive Excel escapes can share an underscore.
@@ -152,12 +182,9 @@ func writeEscaped(b *strings.Builder, s string) {
 	b.WriteString(s[start:])
 }
 
-func (s *sheet) textCell(b *strings.Builder, col int, value string) error {
-	span, err := textSpan(value)
-	if err != nil {
-		return err
-	}
-	if s.rows == 1 {
+func (s *sheet) textCell(b *strings.Builder, col int, value string) {
+	span := textSpan(value)
+	if s.rows == s.headerRow {
 		b.WriteString(` s="1"`)
 	} else {
 		c := &s.columns[col]
@@ -175,7 +202,6 @@ func (s *sheet) textCell(b *strings.Builder, col int, value string) error {
 	b.WriteString(` t="inlineStr"><is><t xml:space="preserve">`)
 	writeEscaped(b, value)
 	b.WriteString("</t></is></c>")
-	return nil
 }
 
 func (s *sheet) row(labels []string, numbers []number) error {
@@ -185,7 +211,7 @@ func (s *sheet) row(labels []string, numbers []number) error {
 	s.rows++
 	rowID := strconv.Itoa(s.rows)
 	height := 20
-	if s.rows == 1 {
+	if s.rows == s.headerRow {
 		height = 32
 	}
 	var b strings.Builder
@@ -193,9 +219,7 @@ func (s *sheet) row(labels []string, numbers []number) error {
 	for i := range s.columns {
 		fmt.Fprintf(&b, `<c r="%c%s"`, 'A'+i, rowID)
 		if i < len(labels) {
-			if err := s.textCell(&b, i, labels[i]); err != nil {
-				return err
-			}
+			s.textCell(&b, i, cellLabel(labels[i]))
 			continue
 		}
 		n, err := numbers[i-len(labels)].render()
@@ -203,9 +227,10 @@ func (s *sheet) row(labels []string, numbers []number) error {
 			return err
 		}
 		if n.style == 0 {
-			if err := s.textCell(&b, i, n.value); err != nil {
-				return err
+			if len(n.value) > maxText {
+				return fmt.Errorf("exact number exceeds Excel cell length limit")
 			}
+			s.textCell(&b, i, n.value)
 		} else {
 			fmt.Fprintf(&b, ` s="%d" t="n"><v>%s</v></c>`, n.style, n.value)
 			c := &s.columns[i]
@@ -220,11 +245,11 @@ func (s *sheet) row(labels []string, numbers []number) error {
 
 func (s *sheet) writeTo(w io.Writer, rows io.Reader) error {
 	var prefix strings.Builder
-	prefix.WriteString(`<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="20"/><cols>`)
+	fmt.Fprintf(&prefix, `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="%d" topLeftCell="A%d" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="20"/><cols>`, s.headerRow, s.headerRow+1)
 	widths := make([]int, len(s.columns))
 	common := 0
 	for i, c := range s.columns {
-		widths[i] = c.width(s.rows - 1)
+		widths[i] = c.width(s.rows - s.headerRow)
 		if c.token {
 			common = max(common, widths[i])
 		}
@@ -242,6 +267,13 @@ func (s *sheet) writeTo(w io.Writer, rows io.Reader) error {
 	if _, err := io.Copy(w, rows); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(w, `</sheetData><autoFilter ref="A1:%c%d"/></worksheet>`, 'A'+len(widths)-1, s.rows)
+	last := 'A' + len(widths) - 1
+	prefix.Reset()
+	fmt.Fprintf(&prefix, `</sheetData><autoFilter ref="A%d:%c%d"/>`, s.headerRow, last, s.rows)
+	if s.headerRow == 2 {
+		fmt.Fprintf(&prefix, `<mergeCells count="1"><mergeCell ref="A1:%c1"/></mergeCells>`, last)
+	}
+	prefix.WriteString("</worksheet>")
+	_, err := io.WriteString(w, prefix.String())
 	return err
 }

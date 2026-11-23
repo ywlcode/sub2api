@@ -740,6 +740,7 @@ export interface AlertEvent {
 }
 
 interface EmailNotificationConfigResponse {
+  report_revision?: string
   alert: {
     enabled: boolean
     recipients: string[]
@@ -1266,6 +1267,8 @@ export async function createAlertSilence(payload: {
 function normalizeEmailNotificationConfig(config: EmailNotificationConfigResponse): EmailNotificationConfig {
   return {
     ...config,
+    report_revision: typeof config.report_revision === 'string' && config.report_revision.trim()
+      ? config.report_revision : undefined,
     report: {
       ...config.report,
       monthly_usage_enabled: config.report.monthly_usage_enabled ?? false,
@@ -1283,12 +1286,17 @@ export async function updateEmailNotificationConfig(
   config: EmailNotificationConfig,
   savedDepartmentId?: number
 ): Promise<EmailNotificationConfig> {
+  if (!config.report_revision?.trim()) throw new Error('A loaded report revision is required to save email settings')
   const { monthly_usage_department_attribute_id: departmentId, ...otherReportSettings } = config.report
   // Omission preserves the server's choice, even if the saved attribute has since been deleted.
   const changed = departmentId !== savedDepartmentId
-  const payload = changed ? config : { ...config, report: otherReportSettings }
-  const { data } = await apiClient.put<EmailNotificationConfigResponse>('/admin/ops/email-notification/config', payload)
+  const { data } = await apiClient.put<EmailNotificationConfigResponse>('/admin/ops/email-notification/config/conditional', {
+    expected_report_revision: config.report_revision,
+    alert: config.alert,
+    report: changed ? config.report : otherReportSettings
+  })
   const saved = normalizeEmailNotificationConfig(data)
+  if (!saved.report_revision) throw new Error('The server did not confirm the saved report revision')
   if (changed && saved.report.monthly_usage_department_attribute_id !== departmentId) {
     throw new Error('The server did not save the monthly report department field')
   }
@@ -1305,9 +1313,11 @@ export interface MonthlyUsageJob {
   uncertain: number
 }
 
-export async function sendMonthlyUsageReport(month: string, requestId: string, signal: AbortSignal): Promise<MonthlyUsageJob> {
+export async function sendMonthlyUsageReport(
+  month: string, requestId: string, signal: AbortSignal, expectedReportRevision?: string
+): Promise<MonthlyUsageJob> {
   const { data } = await apiClient.post<MonthlyUsageJob>('/admin/ops/email-notification/monthly-usage/send', {
-    month, request_id: requestId
+    month, request_id: requestId, expected_report_revision: expectedReportRevision ?? ''
   }, { signal })
   return data
 }

@@ -3,9 +3,12 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,6 +35,10 @@ type OpsManualMonthlyUsageRepository interface {
 	BeginManualMonthlyUsage(context.Context, string, string, int) (*OpsMonthlyUsageJob, bool, error)
 	GetManualMonthlyUsage(context.Context, string) (*OpsMonthlyUsageJob, error)
 	UpdateManualMonthlyUsage(context.Context, *OpsMonthlyUsageJob) error
+}
+
+type monthlyUsageWorkbookBuilder interface {
+	BuildMonthlyUsageReportWithCoverage(context.Context, string, string, int64, io.Writer) (string, error)
 }
 
 func canonicalMonthlyJobID(raw string) (string, error) {
@@ -72,7 +79,7 @@ func (s *OpsService) ManualMonthlyUsageStatus(ctx context.Context, id string) (*
 	return store.GetManualMonthlyUsage(ctx, id)
 }
 
-func (s *OpsService) StartManualMonthlyUsage(ctx context.Context, month, id string) (*OpsMonthlyUsageJob, error) {
+func (s *OpsService) StartManualMonthlyUsage(ctx context.Context, month, id string, expectedRevision ...string) (*OpsMonthlyUsageJob, error) {
 	if err := validateManualMonthlyPeriod(month, time.Now()); err != nil {
 		return nil, err
 	}
@@ -92,9 +99,15 @@ func (s *OpsService) StartManualMonthlyUsage(ctx context.Context, month, id stri
 		return nil, err
 	}
 
+	if len(expectedRevision) != 1 || expectedRevision[0] == "" {
+		return nil, ErrReportRevisionRequired
+	}
 	cfg, err := s.GetEmailNotificationConfig(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.ReportRevision != expectedRevision[0] {
+		return nil, ErrReportRevisionConflict
 	}
 	recipients := normalizeEmails(cfg.Report.Recipients)
 	if !cfg.Report.Enabled || len(recipients) == 0 {
@@ -107,7 +120,7 @@ func (s *OpsService) StartManualMonthlyUsage(ctx context.Context, month, id stri
 		}
 	}
 	worker := s.monthlyReports
-	ledger, ok := s.opsRepo.(OpsMonthlyUsageRepository)
+	ledger, ok := s.opsRepo.(monthlyUsageWorkbookBuilder)
 	if worker == nil || worker.emailService == nil || !ok {
 		return nil, errors.New("monthly report worker not initialized")
 	}
@@ -126,7 +139,11 @@ func (s *OpsService) StartManualMonthlyUsage(ctx context.Context, month, id stri
 	worker.wg.Add(1)
 	base := worker.stopCtx
 	worker.manualMu.Unlock()
-	job, created, err := store.BeginManualMonthlyUsage(ctx, id, month, len(recipients))
+	// The INSERT may already be committed when the HTTP connection is lost.
+	// Give the admitted worker its own bounded context to receive the result.
+	claimCtx, cancelClaim := context.WithTimeout(context.WithoutCancel(base), 10*time.Second)
+	job, created, err := store.BeginManualMonthlyUsage(claimCtx, id, month, len(recipients))
+	cancelClaim()
 	if err != nil || !created {
 		worker.wg.Done()
 		return job, err
@@ -141,7 +158,7 @@ func (s *OpsService) StartManualMonthlyUsage(ctx context.Context, month, id stri
 	return job, nil
 }
 
-func (s *OpsScheduledReportService) runManualMonthlyUsage(ctx context.Context, store OpsManualMonthlyUsageRepository, ledger OpsMonthlyUsageRepository, job OpsMonthlyUsageJob, recipients []string, departmentAttributeID int64, send monthlyUsageSender) {
+func (s *OpsScheduledReportService) runManualMonthlyUsage(ctx context.Context, store OpsManualMonthlyUsageRepository, ledger monthlyUsageWorkbookBuilder, job OpsMonthlyUsageJob, recipients []string, departmentAttributeID int64, send monthlyUsageSender) {
 	save := func() bool {
 		persist, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
@@ -153,7 +170,8 @@ func (s *OpsScheduledReportService) runManualMonthlyUsage(ctx context.Context, s
 	}
 	var file bytes.Buffer
 	label := s.monthlyUsageSiteName(ctx)
-	if err := ledger.BuildMonthlyUsageReport(ctx, job.Month, label, departmentAttributeID, &file); err != nil {
+	coverage, err := ledger.BuildMonthlyUsageReportWithCoverage(ctx, job.Month, label, departmentAttributeID, &file)
+	if err != nil {
 		log.Printf("[OpsMonthlyUsage] manual job %s export: %v", job.ID, err)
 		job.Status, job.Failed = "failed", job.Total
 		save()
@@ -162,22 +180,15 @@ func (s *OpsScheduledReportService) runManualMonthlyUsage(ctx context.Context, s
 	// Allow sending only to the intersection of the originally approved and
 	// currently saved recipients. Manual jobs never alter the automatic receipts
 	// or checkpoint; reconnecting with the same request ID never replays mail.
-	cfg, err := s.opsService.GetEmailNotificationConfig(ctx)
-	allowed := map[string]bool{}
-	if err == nil && cfg.Report.Enabled && cfg.Report.MonthlyUsageDepartmentAttributeID == departmentAttributeID && s.opsService.IsMonitoringEnabled(ctx) {
-		for _, addr := range normalizeEmails(cfg.Report.Recipients) {
-			allowed[addr] = true
-		}
-	}
 	for i, addr := range recipients {
 		if ctx.Err() != nil {
 			job.Failed += len(recipients) - i
 			break
 		}
-		if !allowed[addr] {
+		if !s.opsService.manualMonthlyRecipientAllowed(ctx, addr, departmentAttributeID) {
 			job.Failed++
 		} else {
-			unknown, sendErr := sendMonthlyUsageAttachment(ctx, send, job.Month, label, addr, file.Bytes())
+			unknown, sendErr := sendMonthlyUsageAttachment(ctx, send, job.Month, label, addr, coverage, file.Bytes())
 			switch {
 			case unknown:
 				job.Uncertain++
@@ -200,4 +211,22 @@ func (s *OpsScheduledReportService) runManualMonthlyUsage(ctx context.Context, s
 		job.Status = "sent"
 	}
 	save()
+}
+
+// Recheck the DB-backed monitoring switch and the report config together at each
+// SMTP handoff. Another administrator can revoke delivery while a job is running.
+func (s *OpsService) manualMonthlyRecipientAllowed(ctx context.Context, recipient string, departmentID int64) bool {
+	if !s.IsMonitoringEnabled(ctx) || s.settingRepo == nil {
+		return false
+	}
+	values, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyOpsMonitoringEnabled, SettingKeyOpsEmailNotificationConfig})
+	if err != nil || !parseOpsMonitoringEnabled(values[SettingKeyOpsMonitoringEnabled]) {
+		return false
+	}
+	var cfg OpsEmailNotificationConfig
+	if json.Unmarshal([]byte(values[SettingKeyOpsEmailNotificationConfig]), &cfg) != nil {
+		return false
+	}
+	return cfg.Report.Enabled && cfg.Report.MonthlyUsageDepartmentAttributeID == departmentID &&
+		slices.Contains(normalizeEmails(cfg.Report.Recipients), recipient)
 }

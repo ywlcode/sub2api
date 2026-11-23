@@ -17,6 +17,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/monthlyusage"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	"github.com/lib/pq"
 )
 
 var _ service.OpsMonthlyUsageRepository = (*opsRepository)(nil)
@@ -61,19 +62,26 @@ func monthlyUsageDepartmentAttributeAvailable(ctx context.Context, db sqlQueryer
 }
 
 func (r *opsRepository) BuildMonthlyUsageReport(ctx context.Context, month, site string, departmentAttributeID int64, w io.Writer) error {
+	_, err := r.BuildMonthlyUsageReportWithCoverage(ctx, month, site, departmentAttributeID, w)
+	return err
+}
+
+// BuildMonthlyUsageReportWithCoverage returns the notice printed in the attachment
+// so the sender can include the same snapshot's coverage in the message body.
+func (r *opsRepository) BuildMonthlyUsageReportWithCoverage(ctx context.Context, month, site string, departmentAttributeID int64, w io.Writer) (string, error) {
 	date, err := monthlyReportDate(month)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if r == nil || r.db == nil || w == nil {
-		return errors.New("missing monthly report database or writer")
+		return "", errors.New("missing monthly report database or writer")
 	}
 
 	// Keep the MVCC snapshot only while reading the DB. Spool on disk so the
 	// largest month fits without buffering all rows or waiting on a slow writer.
 	file, err := os.CreateTemp("", "sub2api-monthly-usage-*")
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := os.Remove(file.Name()); err != nil {
 		// Some platforms only allow unlink after close.
@@ -81,14 +89,14 @@ func (r *opsRepository) BuildMonthlyUsageReport(ctx context.Context, month, site
 	}
 	defer file.Close()
 
-	registered, err := r.snapshotMonthlyUsage(ctx, date, departmentAttributeID, file)
+	snapshot, err := r.snapshotMonthlyUsage(ctx, date, departmentAttributeID, file)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		return err
+		return "", err
 	}
-	return monthlyusage.Build(w, site, registered, func(visit func(monthlyusage.Row) error) error {
+	err = monthlyusage.BuildContext(ctx, w, site, snapshot.registered, snapshot.notice, func(visit func(monthlyusage.Row) error) error {
 		decoder := gob.NewDecoder(bufio.NewReader(file))
 		for {
 			if err := ctx.Err(); err != nil {
@@ -106,9 +114,13 @@ func (r *opsRepository) BuildMonthlyUsageReport(ctx context.Context, month, site
 			}
 		}
 	})
+	if err != nil {
+		return "", err
+	}
+	return snapshot.notice, nil
 }
 
-func (r *opsRepository) snapshotMonthlyUsage(ctx context.Context, date string, departmentAttributeID int64, dest io.Writer) (map[string]int64, error) {
+func (r *opsRepository) snapshotMonthlyUsage(ctx context.Context, date string, departmentAttributeID int64, dest io.Writer) (*monthlyUsageSnapshot, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
@@ -144,6 +156,7 @@ func (r *opsRepository) snapshotMonthlyUsage(ctx context.Context, date string, d
 
 	buffer := bufio.NewWriter(dest)
 	encoder := gob.NewEncoder(buffer)
+	var firstDay, lastDay string
 	for rows.Next() {
 		var row monthlyusage.Row
 		var username, realName, department, groups sql.NullString
@@ -152,6 +165,10 @@ func (r *opsRepository) snapshotMonthlyUsage(ctx context.Context, date string, d
 			&row.TotalTokens, &row.ActualCost); err != nil {
 			return nil, err
 		}
+		if firstDay == "" {
+			firstDay = row.Day
+		}
+		lastDay = row.Day
 		row.Username, row.RealName = username.String, realName.String
 		row.Department, row.Groups = department.String, groups.String
 		if err := encoder.Encode(row); err != nil {
@@ -161,10 +178,14 @@ func (r *opsRepository) snapshotMonthlyUsage(ctx context.Context, date string, d
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+	notice, err := monthlyCoverageNotice(ctx, tx, date, firstDay, lastDay)
+	if err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	return registered, buffer.Flush()
+	return &monthlyUsageSnapshot{registered: registered, notice: notice}, buffer.Flush()
 }
 
 func monthlyDeliveryKey(month, recipient string) (string, []byte, error) {
@@ -180,48 +201,57 @@ func monthlyDeliveryKey(month, recipient string) (string, []byte, error) {
 	return date, hash[:], nil
 }
 
-// MonthlyUsageEmailClaimed lets callers skip building an attachment for a pending
-// or accepted delivery. After a miss, ClaimMonthlyUsageEmail still arbitrates sends.
-func (r *opsRepository) MonthlyUsageEmailClaimed(ctx context.Context, month, recipient string) (bool, error) {
-	return r.monthlyUsageEmailExists(ctx, month, recipient, `
-SELECT EXISTS (SELECT 1 FROM monthly_usage_email_deliveries
-               WHERE report_month = $1 AND recipient_hash = $2)`)
-}
-
-// MonthlyUsageEmailSettled reports whether this recipient can count toward the
-// monthly checkpoint. A 15-minute worker can still release a fresh claim on a
-// definite failure. After 30 minutes an unresolved claim is treated as uncertain.
-func (r *opsRepository) MonthlyUsageEmailSettled(ctx context.Context, month, recipient string) (bool, error) {
-	return r.monthlyUsageEmailExists(ctx, month, recipient, `
-SELECT EXISTS (SELECT 1 FROM monthly_usage_email_deliveries
-               WHERE report_month = $1 AND recipient_hash = $2
-                 AND (accepted_at IS NOT NULL OR claimed_at < now() - interval '30 minutes'))`)
-}
-
-func (r *opsRepository) monthlyUsageEmailExists(ctx context.Context, month, recipient, query string) (bool, error) {
+// Claims left by a crash (including rows from migration 388) become visibly
+// uncertain after the worker deadline plus grace. Only a recorded rejection
+// permits another SMTP attempt.
+func (r *opsRepository) MonthlyUsageDelivery(ctx context.Context, month, recipient string) (service.MonthlyUsageDeliveryState, error) {
 	date, hash, err := monthlyDeliveryKey(month, recipient)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	if r == nil || r.db == nil {
-		return false, errors.New("missing monthly report database")
+	var state service.MonthlyUsageDeliveryState
+	err = r.db.QueryRowContext(ctx, `
+SELECT CASE WHEN accepted_at IS NOT NULL THEN 'accepted'
+            WHEN rejected_at IS NOT NULL THEN 'rejected'
+            WHEN uncertain_at IS NOT NULL OR claimed_at < now() - interval '30 minutes' THEN 'uncertain'
+            ELSE 'sending' END
+FROM monthly_usage_email_deliveries WHERE report_month = $1 AND recipient_hash = $2`, date, hash).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return service.MonthlyUsageUnclaimed, nil
 	}
-	var exists bool
-	err = r.db.QueryRowContext(ctx, query, date, hash).Scan(&exists)
-	return exists, err
+	return state, err
 }
 
-func (r *opsRepository) ClaimMonthlyUsageEmail(ctx context.Context, month, recipient string) (bool, error) {
-	date, hash, err := monthlyDeliveryKey(month, recipient)
-	if err != nil {
-		return false, err
+// New due months take priority. Otherwise rotate through old rejections by
+// last attempt, considering only addresses still on the saved report list.
+func (r *opsRepository) NextMonthlyUsageRetry(ctx context.Context, first, last string, recipients []string) (string, error) {
+	hashes := make(pq.ByteaArray, 0, len(recipients))
+	for _, addr := range recipients {
+		_, hash, err := monthlyDeliveryKey(first, addr)
+		if err != nil {
+			return "", err
+		}
+		hashes = append(hashes, hash)
 	}
-	if r == nil || r.db == nil {
-		return false, errors.New("missing monthly report database")
+	var month string
+	err := r.db.QueryRowContext(ctx, `
+SELECT to_char(report_month, 'YYYY-MM') FROM monthly_usage_email_deliveries
+WHERE rejected_at IS NOT NULL AND report_month BETWEEN $1 AND $2 AND recipient_hash = ANY($3::bytea[])
+ORDER BY rejected_at, report_month LIMIT 1`, first+"-01", last+"-01", hashes).Scan(&month)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
 	}
+	return month, err
+}
+
+func (r *opsRepository) AdvanceMonthlyUsageDispatch(ctx context.Context, period, configValue string) (bool, error) {
+	// Serialize with settings edits. An addition committed after our final
+	// recipient scan must keep the month open. A slower worker cannot rewind it.
 	res, err := r.db.ExecContext(ctx, `
-INSERT INTO monthly_usage_email_deliveries (report_month, recipient_hash)
-VALUES ($1, $2) ON CONFLICT (report_month, recipient_hash) DO NOTHING`, date, hash)
+INSERT INTO settings (key, value)
+SELECT $1, $2 FROM settings WHERE key = $3 AND value = $4 FOR SHARE
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+WHERE settings.value < EXCLUDED.value`, service.MonthlyUsageDispatchCheckpoint, period, service.SettingKeyOpsEmailNotificationConfig, configValue)
 	if err != nil {
 		return false, err
 	}
@@ -229,31 +259,57 @@ VALUES ($1, $2) ON CONFLICT (report_month, recipient_hash) DO NOTHING`, date, ha
 	return n == 1, err
 }
 
-// FinishMonthlyUsageEmail records SMTP acceptance or releases the claim after
-// a definite failure. Callers must leave the claim alone for an unknown result.
-func (r *opsRepository) FinishMonthlyUsageEmail(ctx context.Context, month, recipient string, delivered bool) error {
+func (r *opsRepository) ClaimMonthlyUsageEmail(ctx context.Context, month, recipient string) (bool, error) {
+	return r.claimMonthlyUsageEmail(ctx, month, recipient, nil)
+}
+
+func (r *opsRepository) ClaimMonthlyUsageEmailForConfig(ctx context.Context, month, recipient, configValue string) (bool, error) {
+	return r.claimMonthlyUsageEmail(ctx, month, recipient, &configValue)
+}
+
+func (r *opsRepository) claimMonthlyUsageEmail(ctx context.Context, month, recipient string, configValue *string) (bool, error) {
+	date, hash, err := monthlyDeliveryKey(month, recipient)
+	if err != nil {
+		return false, err
+	}
+	res, err := r.db.ExecContext(ctx, `
+INSERT INTO monthly_usage_email_deliveries (report_month, recipient_hash)
+SELECT $1::date, $2::bytea WHERE $3::text IS NULL OR EXISTS (
+    SELECT 1 FROM settings WHERE key = $4 AND value = $3 FOR SHARE
+)
+ON CONFLICT (report_month, recipient_hash) DO UPDATE
+SET claimed_at = now(), rejected_at = NULL
+WHERE monthly_usage_email_deliveries.rejected_at IS NOT NULL`, date, hash, configValue, service.SettingKeyOpsEmailNotificationConfig)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
+func (r *opsRepository) FinishMonthlyUsageEmail(ctx context.Context, month, recipient string, result service.MonthlyUsageDeliveryState) error {
 	date, hash, err := monthlyDeliveryKey(month, recipient)
 	if err != nil {
 		return err
 	}
-	if r == nil || r.db == nil {
-		return errors.New("missing monthly report database")
+	switch result {
+	case service.MonthlyUsageAccepted, service.MonthlyUsageRejected, service.MonthlyUsageUncertain:
+	default:
+		return fmt.Errorf("invalid monthly delivery result %q", result)
 	}
-	if delivered {
-		res, err := r.db.ExecContext(ctx, `
-UPDATE monthly_usage_email_deliveries SET accepted_at = COALESCE(accepted_at, now())
-WHERE report_month = $1 AND recipient_hash = $2`, date, hash)
-		if err != nil {
-			return err
-		}
-		n, err := res.RowsAffected()
-		if err == nil && n == 0 {
-			return errors.New("monthly usage email claim missing")
-		}
+	res, err := r.db.ExecContext(ctx, `
+UPDATE monthly_usage_email_deliveries
+SET accepted_at = CASE WHEN $3 = 'accepted' THEN now() END,
+    rejected_at = CASE WHEN $3 = 'rejected' THEN now() END,
+    uncertain_at = CASE WHEN $3 = 'uncertain' THEN now() END
+WHERE report_month = $1 AND recipient_hash = $2
+AND accepted_at IS NULL AND rejected_at IS NULL AND uncertain_at IS NULL`, date, hash, result)
+	if err != nil {
 		return err
 	}
-	_, err = r.db.ExecContext(ctx, `
-DELETE FROM monthly_usage_email_deliveries
-WHERE report_month = $1 AND recipient_hash = $2 AND accepted_at IS NULL`, date, hash)
+	n, err := res.RowsAffected()
+	if err == nil && n != 1 {
+		return errors.New("monthly usage email claim missing or already finalized")
+	}
 	return err
 }

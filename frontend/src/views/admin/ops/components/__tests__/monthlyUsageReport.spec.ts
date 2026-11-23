@@ -4,6 +4,7 @@ import OpsSettingsDialog from '../OpsSettingsDialog.vue'
 import OpsEmailNotificationCard from '../OpsEmailNotificationCard.vue'
 import MonthlyUsageDepartmentField from '../MonthlyUsageDepartmentField.vue'
 import MonthlyUsageSender from '../MonthlyUsageSender.vue'
+import { opsAPI } from '@/api/admin/ops'
 import Toggle from '@/components/common/Toggle.vue'
 
 const { get, put, post } = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn(), post: vi.fn() }))
@@ -14,6 +15,7 @@ vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string, params?: { id?: 
 enableAutoUnmount(afterEach)
 
 const configPath = '/admin/ops/email-notification/config'
+const conditionalPath = configPath + '/conditional'
 const legacyConfig = {
   alert: {
     enabled: false, recipients: ['alerts@example.com'], min_severity: '',
@@ -50,6 +52,7 @@ describe.each([
   { editor: 'ops settings', open: openSettings, control: '#ops-monthly-usage' },
   { editor: 'email notifications', open: openEmailCard, control: '[aria-describedby="ops-email-monthly-usage-hint"]' }
 ])('monthly usage report in $editor', ({ open, control }) => {
+  let revision: string | undefined
   let report: typeof legacyConfig.report & { monthly_usage_enabled?: boolean; monthly_usage_department_attribute_id?: number }
   const attributes = [
     { id: 7, name: 'Department', type: 'text', enabled: true },
@@ -63,6 +66,7 @@ describe.each([
   beforeEach(() => {
     vi.resetAllMocks()
     sessionStorage.clear()
+    revision = 'initial'
     report = structuredClone(legacyConfig.report)
     const settings: Record<string, unknown> = {
       '/admin/ops/runtime/alert': { evaluation_interval_seconds: 30 },
@@ -77,13 +81,18 @@ describe.each([
     listAttributes.mockResolvedValue(attributes)
     get.mockImplementation(async (path: string) => {
       if (path === '/admin/user-attributes') return { data: await listAttributes() }
-      return { data: path === configPath ? structuredClone({ alert: legacyConfig.alert, report }) : settings[path] }
+      return { data: path === configPath ? structuredClone({ alert: legacyConfig.alert, report, report_revision: revision }) : settings[path] }
     })
     put.mockImplementation(async (path: string, payload) => {
       const data = JSON.parse(JSON.stringify(payload))
-      if (path === configPath) {
+      if (path === configPath) throw new Error('Unsafe unconditional PUT')
+      if (path === conditionalPath) {
+        if (data.expected_report_revision !== revision) {
+          throw { status: 409, reason: 'MONTHLY_USAGE_REPORT_REVISION_CONFLICT' }
+        }
+        revision = 'saved'
         report = { ...report, ...data.report }
-        return { data: { ...data, report: structuredClone(report) } }
+        return { data: { alert: data.alert, report: structuredClone(report), report_revision: revision } }
       }
       return { data }
     })
@@ -108,7 +117,8 @@ describe.each([
     }
     await wrapper.get('button.btn-primary').trigger('click')
     await flushPromises()
-    expect(put).toHaveBeenCalledWith(configPath, {
+    expect(put).toHaveBeenCalledWith(conditionalPath, {
+      expected_report_revision: 'initial',
       alert: legacyConfig.alert,
       report: { ...legacyConfig.report, monthly_usage_enabled: expected }
     })
@@ -143,7 +153,7 @@ describe.each([
     post.mockResolvedValue({ data: { id: 'job', month, status: 'sent', total: 1, accepted: 1, failed: 0, uncertain: 0 } })
     await sender.get('button').trigger('click')
     expect(post).toHaveBeenCalledWith('/admin/ops/email-notification/monthly-usage/send',
-      { month, request_id: expect.any(String) }, { signal: expect.any(AbortSignal) })
+      { month, request_id: expect.any(String), expected_report_revision: 'saved' }, { signal: expect.any(AbortSignal) })
   })
 
   it.each(['deleted', 'load failed'])('preserves the field when %s until Automatic is explicitly saved', async mode => {
@@ -158,7 +168,7 @@ describe.each([
     expect(field.find('[role="status"]').exists()).toBe(mode === 'load failed')
     await wrapper.get('button.btn-primary').trigger('click')
     await flushPromises()
-    expect(put.mock.calls.find(([path]) => path === configPath)?.[1].report).not.toHaveProperty('monthly_usage_department_attribute_id')
+    expect(put.mock.calls.find(([path]) => path === conditionalPath)?.[1].report).not.toHaveProperty('monthly_usage_department_attribute_id')
     expect(report.monthly_usage_department_attribute_id).toBe(41)
     wrapper.unmount()
 
@@ -170,20 +180,20 @@ describe.each([
     expect(report.monthly_usage_department_attribute_id).toBe(0)
   })
 
-  it('keeps the manual guard when an older API ignores a custom field on save', async () => {
+  it('shows the upgrade requirement and keeps unversioned email settings read-only', async () => {
+    revision = undefined
     const wrapper = await open()
-    await wrapper.getComponent(MonthlyUsageDepartmentField).get('select').setValue('7')
-    put.mockImplementation(async (path, data) => ({ data: path === configPath ? legacyConfig : data }))
-    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      await wrapper.get('button.btn-primary').trigger('click')
-      await flushPromises()
-      const sender = wrapper.getComponent(MonthlyUsageSender)
-      expect(sender.text()).toContain('verifySettings')
-      expect(sender.get('button').element.disabled).toBe(true)
-    } finally {
-      err.mockRestore()
-    }
+    expect(wrapper.text()).toContain('emailConfigUpgradeRequired')
+    expect(wrapper.get(control).element.matches(':disabled')).toBe(true)
+    const sender = wrapper.getComponent(MonthlyUsageSender)
+    expect(sender.props('reportRevision')).toBeUndefined()
+    expect(sender.get('button').element.disabled).toBe(true)
+    await sender.get('button').trigger('click')
+    await wrapper.get('button.btn-primary').trigger('click')
+    await flushPromises()
+    expect(post).not.toHaveBeenCalled()
+    expect(put.mock.calls.some(([path]) => path === configPath || path === conditionalPath)).toBe(false)
+    if (open === openSettings) expect(put).toHaveBeenCalledWith('/admin/ops/settings/metric-thresholds', expect.anything())
   })
 
   it('compares recipient and switch edits against an independent saved report', async () => {
@@ -206,28 +216,77 @@ describe.each([
     expect(sender.text()).toContain('saveFirst')
   })
 
-  it('blocks manual send after an unconfirmed settings save, even if edits are reverted', async () => {
-    const w = await open()
-    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
-    try {
-      const input = w.findAll('input[type="email"]').at(-1)!
-      await input.setValue('additional@example.com')
-      await input.trigger('keydown.enter')
-      put.mockImplementation(async (path: string, data: unknown) => {
-        if (path === configPath) throw new Error('settings update timed out')
-        return { data }
-      })
-      await w.get('button.btn-primary').trigger('click')
-      await flushPromises()
-      const chip = w.findAll('span').find(el => el.text().includes('additional@example.com') && el.find('button').exists())!
-      await chip.get('button').trigger('click')
-      const sender = w.getComponent(MonthlyUsageSender)
-      expect(sender.text()).toContain('verifySettings')
-      expect(sender.get('button').element.disabled).toBe(true)
-    } finally {
-      err.mockRestore()
-    }
+  it('can look up a legacy pending request by ID while email settings are read-only', async () => {
+    revision = undefined
+    const month = '2025-02'
+    const requestId = '2a37d66c-5e5e-429a-8f4b-6a63bbef9137'
+    sessionStorage.setItem('ops:manual-monthly:17', JSON.stringify({ month, requestId, job: null }))
+    const wrapper = await open()
+    get.mockResolvedValueOnce({ data: { id: requestId, month, status: 'sent', total: 1, accepted: 1, failed: 0, uncertain: 0 } })
+    const sender = wrapper.getComponent(MonthlyUsageSender)
+    await sender.get('button').trigger('click')
+    await flushPromises()
+    expect(get).toHaveBeenCalledWith('/admin/ops/email-notification/monthly-usage/jobs/' + requestId, { signal: expect.any(AbortSignal) })
+    expect(post).not.toHaveBeenCalled()
+    expect(sender.get('[role="status"]').text()).toContain('sent')
   })
+
+  it.each(['conflict', 'timeout', 'missing revision', 'missing conditional route', 'ignored field'])(
+    'requires a fresh config and draft before retrying a save after %s', async mode => {
+      const wrapper = await open()
+      const input = wrapper.findAll('input[type="email"]').at(-1)!
+      await input.setValue('draft@example.com')
+      await input.trigger('keydown.enter')
+      await wrapper.getComponent(MonthlyUsageDepartmentField).get('select').setValue('7')
+
+      // Another admin changed the recipients after this editor loaded its draft.
+      revision = 'newer'
+      report.recipients = ['current@example.com']
+      const defaultPut = put.getMockImplementation()!
+      put.mockImplementation(async (path, payload) => {
+        if (path === conditionalPath) {
+          if (mode === 'timeout') throw new Error('timeout')
+          if (mode === 'missing conditional route') throw { status: 404 }
+          if (mode === 'missing revision') return { data: { ...legacyConfig, report: payload.report } }
+          if (mode === 'ignored field') return { data: { ...legacyConfig, report_revision: revision } }
+        }
+        return defaultPut(path, payload)
+      })
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        const save = wrapper.get('button.btn-primary')
+        await save.trigger('click')
+        await flushPromises()
+        expect(wrapper.text()).toContain('emailConfigReloadRequired')
+        expect(save.attributes('disabled')).toBeDefined()
+        await save.trigger('click')
+        await flushPromises()
+        expect(put.mock.calls.filter(([path]) => path === conditionalPath)).toHaveLength(1)
+        expect(put).not.toHaveBeenCalledWith(configPath, expect.anything())
+        expect(report.recipients).toEqual(['current@example.com'])
+        const sender = wrapper.findComponent(MonthlyUsageSender)
+        if (sender.exists()) expect(sender.get('button').element.disabled).toBe(true)
+
+        const refresh = wrapper.findAll('button').find(button => button.text() === 'common.refresh' && !button.element.disabled)!
+        await refresh.trigger('click')
+        await flushPromises()
+        const reloaded = wrapper.getComponent(MonthlyUsageSender)
+        expect(reloaded.props('reportRevision')).toBe('newer')
+        expect(reloaded.props('draft').recipients).toEqual(['current@example.com'])
+        expect(reloaded.props('draft').monthly_usage_department_attribute_id).toBe(0)
+
+        put.mockImplementation(defaultPut)
+        await wrapper.get('button.btn-primary').trigger('click')
+        await flushPromises()
+        expect(put).toHaveBeenCalledWith(conditionalPath, expect.objectContaining({
+          expected_report_revision: 'newer',
+          report: expect.objectContaining({ recipients: ['current@example.com'] })
+        }))
+      } finally {
+        err.mockRestore()
+      }
+    }
+  )
 
   it('hides the monthly option when reports are disabled and preserves its saved preference', async () => {
     report.enabled = false
@@ -252,9 +311,19 @@ describe.each([
     } else {
       await save.trigger('click')
       await flushPromises()
-      expect(put).toHaveBeenCalledWith(configPath, {
+      expect(put).toHaveBeenCalledWith(conditionalPath, {
+        expected_report_revision: 'initial',
         alert: legacyConfig.alert, report: { ...legacyConfig.report, recipients: [], monthly_usage_enabled: true, enabled: false }
       })
     }
   })
+})
+
+it('includes the version field even when the manual send API receives no version', async () => {
+  post.mockResolvedValue({ data: {} })
+  const signal = new AbortController().signal
+  await opsAPI.sendMonthlyUsageReport('2025-02', 'test-id', signal)
+  expect(post).toHaveBeenCalledWith('/admin/ops/email-notification/monthly-usage/send', {
+    month: '2025-02', request_id: 'test-id', expected_report_revision: ''
+  }, { signal })
 })

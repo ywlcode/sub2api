@@ -3,8 +3,9 @@ package service
 // Ops settings models stored in DB `settings` table (JSON blobs).
 
 type OpsEmailNotificationConfig struct {
-	Alert  OpsEmailAlertConfig  `json:"alert"`
-	Report OpsEmailReportConfig `json:"report"`
+	ReportRevision string               `json:"report_revision,omitempty"`
+	Alert          OpsEmailAlertConfig  `json:"alert"`
+	Report         OpsEmailReportConfig `json:"report"`
 }
 
 type OpsEmailAlertConfig struct {
@@ -40,8 +41,9 @@ type OpsEmailReportConfig struct {
 // OpsEmailNotificationConfigUpdateRequest allows partial updates, while the
 // frontend can still send the full config shape.
 type OpsEmailNotificationConfigUpdateRequest struct {
-	Alert  *OpsEmailAlertConfig  `json:"alert"`
-	Report *OpsEmailReportUpdate `json:"report"`
+	ExpectedReportRevision string                `json:"expected_report_revision,omitempty"`
+	Alert                  *OpsEmailAlertConfig  `json:"alert"`
+	Report                 *OpsEmailReportUpdate `json:"report"`
 }
 
 type OpsEmailReportUpdate struct {
