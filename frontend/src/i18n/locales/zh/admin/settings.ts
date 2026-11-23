@@ -421,7 +421,7 @@ export default {
         syncCorpEmailHint: '登录时将钉钉企业邮箱写入 dingtalk_email 属性（不影响登录邮箱）',
         syncCorpEmailPermissionHint: '需在钉钉开放平台 → 应用 → 权限管理中为本应用申请「邮箱等个人信息（fieldEmail）」权限，否则 OAPI 不会返回企业邮箱字段',
         syncDept: '同步部门',
-        syncDeptHint: '登录时将钉钉首个部门完整路径写入 dingtalk_department 属性（每次登录实时拉取）',
+        syncDeptHint: '每次钉钉登录时同步层级最深的部门路径。层级相同时选路径文字较长的部门。',
         syncDeptPermissionHint: '需在钉钉开放平台 → 应用 → 权限管理中为本应用申请「通讯录部门信息读权限（qyapi_get_department_list）」，否则无法递归出部门路径',
         syncDisplayNameTarget: '属性键',
         syncDisplayNameTargetHint: '默认 dingtalk_name / 钉钉姓名；保存设置时按上述属性键和显示名称自动创建用户属性（已存在则仅同步显示名称）',

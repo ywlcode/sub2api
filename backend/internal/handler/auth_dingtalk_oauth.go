@@ -7,8 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	dbuser "github.com/Wei-Shaw/sub2api/ent/user"
@@ -567,6 +570,11 @@ func buildDingTalkUpstreamClaims(staff *DingTalkStaffInfo, unionID, corpID strin
 	if len(staff.DeptIDs) > 0 {
 		primaryDeptID = staff.DeptIDs[0]
 	}
+	// String IDs survive a pending session's JSON map round trip without loss of precision.
+	deptIDs := make([]any, 0, len(staff.DeptIDs))
+	for _, id := range staff.DeptIDs {
+		deptIDs = append(deptIDs, strconv.FormatInt(id, 10))
+	}
 	return map[string]any{
 		"email":           staff.Email,
 		"username":        staff.Name,
@@ -575,7 +583,8 @@ func buildDingTalkUpstreamClaims(staff *DingTalkStaffInfo, unionID, corpID strin
 		"corp_user_id":    staff.UserID, // 企业 userid（跨组织时为空），保留作独立字段用于 audit
 		"union_id":        unionID,
 		"corp_id":         corpID,
-		"primary_dept_id": primaryDeptID, // 首个部门 ID，用于 internal_only 同步路径
+		"dept_ids":        deptIDs,
+		"primary_dept_id": primaryDeptID, // 兼容仍只读取首个部门的旧版本
 	}
 }
 
@@ -917,21 +926,9 @@ func (h *AuthHandler) syncDingTalkIdentity(ctx context.Context, cfg config.DingT
 		fields = append(fields, syncField{cfg.SyncCorpEmailAttrKey, strings.TrimSpace(staff.Email)})
 	}
 	if cfg.SyncDept && len(staff.DeptIDs) > 0 {
-		// 跳过根部门 ID=1，找第一个真实子部门；都是根则保留 1（最终写入空字符串覆盖旧值）。
-		primaryDeptID := int64(0)
-		for _, id := range staff.DeptIDs {
-			if id > 1 {
-				primaryDeptID = id
-				break
-			}
-		}
-		if primaryDeptID == 0 {
-			primaryDeptID = staff.DeptIDs[0]
-		}
-		slog.Info("dingtalk sync: pick primary dept", "user_id", userID, "all_dept_ids", staff.DeptIDs, "primary", primaryDeptID)
-		path, err := h.resolveDingTalkDeptPath(ctx, client, primaryDeptID)
+		path, err := h.resolveDingTalkDeptPath(ctx, client, staff.DeptIDs)
 		if err != nil {
-			slog.Warn("dingtalk sync: failed to resolve dept path", "user_id", userID, "dept_id", primaryDeptID, "err", err)
+			slog.Warn("dingtalk sync: failed to resolve dept path", "user_id", userID, "dept_ids", staff.DeptIDs, "err", err)
 		} else {
 			// path="" 表示公司直属（仅在根部门下），仍写入空串覆盖旧值。
 			fields = append(fields, syncField{cfg.SyncDeptAttrKey, path})
@@ -1008,7 +1005,20 @@ func dingTalkStaffFromClaims(claims map[string]any) *DingTalkStaffInfo {
 	if v, ok := claims["corp_user_id"].(string); ok {
 		staff.UserID = v
 	}
-	// primary_dept_id 存为 int64 或 float64（JSON round-trip）
+	if ids, ok := claims["dept_ids"].([]any); ok {
+		for _, raw := range ids {
+			s, _ := raw.(string)
+			id, err := strconv.ParseInt(s, 10, 64)
+			if err != nil || id <= 0 {
+				// An incomplete list cannot establish which department is deepest.
+				staff.DeptIDs = nil
+				return staff
+			}
+			staff.DeptIDs = append(staff.DeptIDs, id)
+		}
+		return staff
+	}
+	// 旧版本创建的会话只保存了 primary_dept_id。
 	switch v := claims["primary_dept_id"].(type) {
 	case int64:
 		if v > 0 {
@@ -1040,40 +1050,42 @@ func (h *AuthHandler) setUserAttributeByKey(ctx context.Context, userID int64, k
 	return nil
 }
 
-// resolveDingTalkDeptPath 从叶部门递归向上拼 "公司/部门/子部门" 路径字符串。
-// 遇 dept_id=1（根）或 parent_id=0 停止。加 visited set 防循环，最多 50 层。
-func (h *AuthHandler) resolveDingTalkDeptPath(ctx context.Context, client *DingTalkClient, deptID int64) (string, error) {
-	slog.Info("dingtalk sync: resolve dept path start", "dept_id", deptID)
-	const maxDepth = 50
-	visited := make(map[int64]bool, maxDepth)
-	var parts []string
-
-	current := deptID
-	for i := 0; i < maxDepth; i++ {
-		if current < 1 || visited[current] {
-			break
+// Prefer the deepest membership, then the longest displayed path. Exact ties keep DingTalk's order.
+func (h *AuthHandler) resolveDingTalkDeptPath(ctx context.Context, client *DingTalkClient, deptIDs []int64) (string, error) {
+	const rootID, maxDepth = 1, 50
+	nodes := make(map[int64]*DingTalkDeptInfo) // shared ancestors are fetched once per sync
+	var best string
+	var bestDepth, bestLength int
+	for _, id := range deptIDs {
+		var parts []string
+		seen := make(map[int64]bool)
+		for current := id; current != rootID; {
+			if current <= 0 || seen[current] || len(parts) >= maxDepth {
+				return "", fmt.Errorf("invalid DingTalk department hierarchy for %d at %d", id, current)
+			}
+			seen[current] = true
+			node := nodes[current]
+			if node == nil {
+				var err error
+				node, err = client.GetDeptInfo(ctx, current)
+				if err != nil {
+					return "", fmt.Errorf("get dept info %d: %w", current, err)
+				}
+				nodes[current] = node
+			}
+			name := strings.TrimSpace(node.Name)
+			if name == "" {
+				return "", fmt.Errorf("empty DingTalk department name for %d", current)
+			}
+			parts = append(parts, name)
+			current = node.ParentID
 		}
-		visited[current] = true
-
-		info, err := client.GetDeptInfo(ctx, current)
-		if err != nil {
-			return "", fmt.Errorf("get dept info %d: %w", current, err)
+		slices.Reverse(parts)
+		path := strings.Join(parts, "/")
+		length := utf8.RuneCountInString(path)
+		if len(parts) > bestDepth || (len(parts) == bestDepth && length > bestLength) {
+			best, bestDepth, bestLength = path, len(parts), length
 		}
-		if strings.TrimSpace(info.Name) != "" {
-			parts = append([]string{strings.TrimSpace(info.Name)}, parts...)
-		}
-		// 钉钉根部门 dept_id=1，ParentID 通常为 0；遇到 0 / self 终止避免循环。
-		if info.ParentID < 1 || info.ParentID == current {
-			break
-		}
-		current = info.ParentID
 	}
-
-	// 去除根组织名（parts[0] 始终是企业全称），仅保留部门层级。
-	// 例：["公司","A","B"] → "A/B"；["公司"] → ""（公司直属）。
-	if len(parts) > 0 {
-		parts = parts[1:]
-	}
-
-	return strings.Join(parts, "/"), nil
+	return best, nil
 }

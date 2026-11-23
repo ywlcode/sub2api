@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -233,7 +235,7 @@ func TestBuildDingTalkUpstreamClaims_PrimaryDeptIDInClaims(t *testing.T) {
 	staff := &DingTalkStaffInfo{UserID: "u1", Name: "张三", Email: "a@b.com", DeptIDs: []int64{42, 99}}
 	claims := buildDingTalkUpstreamClaims(staff, "uid1", "corpX")
 
-	// 只取首个 dept_id
+	// 兼容旧会话的 primary_dept_id 仍取首个部门
 	require.Equal(t, int64(42), claims["primary_dept_id"], "primary_dept_id should be the first dept_id")
 }
 
@@ -247,50 +249,86 @@ func TestBuildDingTalkUpstreamClaims_NoDeptIDs(t *testing.T) {
 
 // TestDingTalkStaffFromClaims_RoundTrip 验证 dingTalkStaffFromClaims 能从 claims 恢复 staff 信息。
 func TestDingTalkStaffFromClaims_RoundTrip(t *testing.T) {
-	staff := &DingTalkStaffInfo{UserID: "u3", Name: "王五", Email: "ww@corp.com", DeptIDs: []int64{55}}
+	staff := &DingTalkStaffInfo{UserID: "u3", Name: "王五", Email: "ww@corp.com", DeptIDs: []int64{9007199254740993, 55, 9223372036854775807}}
 	claims := buildDingTalkUpstreamClaims(staff, "uid3", "corpZ")
+	require.Equal(t, staff.DeptIDs, dingTalkStaffFromClaims(claims).DeptIDs)
 
-	recovered := dingTalkStaffFromClaims(claims)
+	data, err := json.Marshal(claims)
+	require.NoError(t, err)
+	var stored map[string]any
+	require.NoError(t, json.Unmarshal(data, &stored))
+	require.Equal(t, []any{"9007199254740993", "55", "9223372036854775807"}, stored["dept_ids"])
+
+	recovered := dingTalkStaffFromClaims(stored)
 	require.Equal(t, "王五", recovered.Name)
 	require.Equal(t, "ww@corp.com", recovered.Email)
 	require.Equal(t, "u3", recovered.UserID)
-	require.Equal(t, []int64{55}, recovered.DeptIDs)
+	require.Equal(t, staff.DeptIDs, recovered.DeptIDs)
 }
 
-// TestResolveDingTalkDeptPath_SingleLevel 验证单层部门（parent_id=1）返回部门名。
-func TestResolveDingTalkDeptPath_SingleLevel(t *testing.T) {
-	handler := &AuthHandler{}
-	callCount := 0
-	responses := map[string]string{
-		"42": `{"errcode":0,"result":{"dept_id":42,"name":"研发部","parent_id":1}}`,
-		"1":  `{"errcode":0,"result":{"dept_id":1,"name":"公司","parent_id":0}}`,
-	}
+func TestDingTalkStaffFromClaims_LegacyPrimaryDeptID(t *testing.T) {
+	claims := map[string]any{"primary_dept_id": int64(42)}
+	require.Equal(t, []int64{42}, dingTalkStaffFromClaims(claims).DeptIDs)
+
+	var stored map[string]any
+	require.NoError(t, json.Unmarshal([]byte(`{"primary_dept_id":42}`), &stored))
+	require.Equal(t, []int64{42}, dingTalkStaffFromClaims(stored).DeptIDs)
+}
+
+// 部门表只列真实子部门，未列出的 ID 模拟上游查询失败。
+type dingTalkTestDept struct {
+	name     string
+	parentID int64
+}
+
+func newDingTalkDeptTestClient(t *testing.T, depts map[int64]dingTalkTestDept) (*DingTalkClient, func(int64) int) {
+	t.Helper()
+	var mu sync.Mutex
+	calls := map[int64]int{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		callCount++
 		var req struct {
 			DeptID int64 `json:"dept_id"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		w.Header().Set("Content-Type", "application/json")
-		if resp, ok := responses[fmt.Sprintf("%d", req.DeptID)]; ok {
-			_, _ = w.Write([]byte(resp))
-		} else {
-			_, _ = w.Write([]byte(`{"errcode":60003,"errmsg":"not found"}`))
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode department request: %v", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
+		mu.Lock()
+		calls[req.DeptID]++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		dept, ok := depts[req.DeptID]
+		if !ok {
+			_, _ = w.Write([]byte(`{"errcode":60003,"errmsg":"not found"}`))
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"errcode": 0, "result": map[string]any{
+			"dept_id": req.DeptID, "name": dept.name, "parent_id": dept.parentID,
+		}})
 	}))
-	defer server.Close()
-
+	t.Cleanup(server.Close)
 	cli := &DingTalkClient{
-		cfg:        dingTalkClientConfig{UserInfoURL: server.URL + "/stub"},
-		httpClient: server.Client(),
+		cfg:         dingTalkClientConfig{UserInfoURL: server.URL},
+		httpClient:  server.Client(),
+		appToken:    "tok",
+		appTokenExp: time.Now().Add(time.Hour),
 	}
-	cli.appToken = "tok"
-	cli.appTokenExp = time.Now().Add(time.Hour)
+	return cli, func(id int64) int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls[id]
+	}
+}
 
-	path, err := handler.resolveDingTalkDeptPath(context.Background(), cli, 42)
+func TestResolveDingTalkDeptPath_SingleLevel(t *testing.T) {
+	handler := &AuthHandler{}
+	cli, callCount := newDingTalkDeptTestClient(t, map[int64]dingTalkTestDept{42: {"研发部", 1}})
+	path, err := handler.resolveDingTalkDeptPath(context.Background(), cli, []int64{42})
 	require.NoError(t, err)
 	require.Equal(t, "研发部", path)
-	require.Equal(t, 2, callCount)
+	require.Equal(t, 1, callCount(42))
+	require.Zero(t, callCount(1))
 }
 
 // TestSyncDingTalkIdentity_UsesCfgAttrKeys 验证 syncDingTalkIdentity 使用 cfg 中配置的 attr key
@@ -353,39 +391,124 @@ func TestSyncDingTalkIdentity_DefaultAttrKeys_NoopWithNilService(t *testing.T) {
 	})
 }
 
-// TestResolveDingTalkDeptPath_MultiLevel 验证多层部门路径拼接。
 func TestResolveDingTalkDeptPath_MultiLevel(t *testing.T) {
 	handler := &AuthHandler{}
-	// 模拟：42(AI研发) → parent=10(研发部) → parent=1(根)
-	responses := map[string]string{
-		"42": `{"errcode":0,"result":{"dept_id":42,"name":"AI研发","parent_id":10}}`,
-		"10": `{"errcode":0,"result":{"dept_id":10,"name":"研发部","parent_id":1}}`,
-		"1":  `{"errcode":0,"result":{"dept_id":1,"name":"公司","parent_id":0}}`,
-	}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 解析请求 body 拿到 dept_id
-		var req struct {
-			DeptID int64 `json:"dept_id"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
-		key := fmt.Sprintf("%d", req.DeptID)
-		w.Header().Set("Content-Type", "application/json")
-		if resp, ok := responses[key]; ok {
-			_, _ = w.Write([]byte(resp))
-		} else {
-			_, _ = w.Write([]byte(`{"errcode":60003,"errmsg":"not found"}`))
-		}
-	}))
-	defer server.Close()
-
-	cli := &DingTalkClient{
-		cfg:        dingTalkClientConfig{UserInfoURL: server.URL + "/stub"},
-		httpClient: server.Client(),
-	}
-	cli.appToken = "tok"
-	cli.appTokenExp = time.Now().Add(time.Hour)
-
-	path, err := handler.resolveDingTalkDeptPath(context.Background(), cli, 42)
+	cli, _ := newDingTalkDeptTestClient(t, map[int64]dingTalkTestDept{
+		42: {"AI研发", 10}, 10: {"研发部", 1},
+	})
+	path, err := handler.resolveDingTalkDeptPath(context.Background(), cli, []int64{42})
 	require.NoError(t, err)
 	require.Equal(t, "研发部/AI研发", path)
+}
+
+func TestResolveDingTalkDeptPath_MultipleDepartments(t *testing.T) {
+	depts := map[int64]dingTalkTestDept{
+		10: {"研发", 1},
+		11: {"平台", 10},
+		12: {"算法", 10},
+		20: {"不计/显示名/里的斜线", 1},
+		30: {"Tools", 1},
+		31: {"A", 30},
+		40: {"缺少上级", 99},
+	}
+	for _, tc := range []struct {
+		name    string
+		ids     []int64
+		want    string
+		wantErr bool
+	}{
+		{name: "depth counts departments even when a name contains slashes", ids: []int64{20, 1, 11}, want: "研发/平台"},
+		// 研发/平台 有 5 个字符、13 字节；Tools/A 有 7 个字符、7 字节，且叶名更短。
+		{name: "compare runes in the full path", ids: []int64{11, 31}, want: "Tools/A"},
+		{name: "tie keeps first department", ids: []int64{11, 12}, want: "研发/平台"},
+		{name: "reversed tie keeps new first department", ids: []int64{12, 11}, want: "研发/算法"},
+		{name: "root only", ids: []int64{1}, want: ""},
+		{name: "missing leaf after valid path", ids: []int64{11, 99}, wantErr: true},
+		{name: "missing ancestor before valid path", ids: []int64{40, 11}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cli, calls := newDingTalkDeptTestClient(t, depts)
+			path, err := (&AuthHandler{}).resolveDingTalkDeptPath(context.Background(), cli, tc.ids)
+			require.Zero(t, calls(1))
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, path)
+		})
+	}
+}
+
+type dingTalkDeptDefinitionRepo struct {
+	service.UserAttributeDefinitionRepository
+	def service.UserAttributeDefinition
+}
+
+func (r *dingTalkDeptDefinitionRepo) GetByKey(_ context.Context, key string) (*service.UserAttributeDefinition, error) {
+	if key != r.def.Key {
+		return nil, fmt.Errorf("unknown attribute %q", key)
+	}
+	return &r.def, nil
+}
+
+func (r *dingTalkDeptDefinitionRepo) List(context.Context, bool) ([]service.UserAttributeDefinition, error) {
+	return []service.UserAttributeDefinition{r.def}, nil
+}
+
+type dingTalkDeptValueRepo struct {
+	service.UserAttributeValueRepository
+	value string
+}
+
+func (r *dingTalkDeptValueRepo) UpsertBatch(_ context.Context, _ int64, inputs []service.UpdateUserAttributeInput) error {
+	for _, input := range inputs {
+		r.value = input.Value
+	}
+	return nil
+}
+
+func TestSyncDingTalkIdentity_DepartmentAttribute(t *testing.T) {
+	const oldDept = "原部门"
+	cfg := config.DingTalkConnectConfig{
+		CorpRestrictionPolicy: "internal_only", SyncDept: true, SyncDeptAttrKey: "dingtalk_department",
+	}
+	defs := &dingTalkDeptDefinitionRepo{def: service.UserAttributeDefinition{
+		ID: 42, Key: cfg.SyncDeptAttrKey, Type: service.AttributeTypeText, Enabled: true,
+	}}
+	depts := map[int64]dingTalkTestDept{
+		10: {"研发", 1}, 11: {"平台", 10}, 12: {"基础架构", 10}, 13: {"八达岭项目", 10},
+	}
+	for _, tc := range []struct {
+		name           string
+		ids            []int64
+		want           string
+		sharedAncestor int64
+		pendingLogin   bool
+	}{
+		{name: "pending login with parent first and project second", ids: []int64{10, 13}, want: "研发/八达岭项目", sharedAncestor: 10, pendingLogin: true},
+		{name: "write best path and reuse shared ancestor", ids: []int64{11, 12}, want: "研发/基础架构", sharedAncestor: 10},
+		{name: "root clears previous department", ids: []int64{1}, want: ""},
+		{name: "lookup failure preserves previous department", ids: []int64{11, 99}, want: oldDept},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			values := &dingTalkDeptValueRepo{value: oldDept}
+			handler := &AuthHandler{userAttributeService: service.NewUserAttributeService(defs, values)}
+			cli, calls := newDingTalkDeptTestClient(t, depts)
+			staff := &DingTalkStaffInfo{DeptIDs: tc.ids}
+			if tc.pendingLogin {
+				data, err := json.Marshal(buildDingTalkUpstreamClaims(staff, "uid", "corp"))
+				require.NoError(t, err)
+				var stored map[string]any
+				require.NoError(t, json.Unmarshal(data, &stored))
+				handler.syncDingTalkIdentityFromClaims(context.Background(), cfg, cli, 7, stored, false)
+			} else {
+				handler.syncDingTalkIdentity(context.Background(), cfg, cli, 7, staff, false)
+			}
+			require.Equal(t, tc.want, values.value)
+			if tc.sharedAncestor != 0 {
+				require.Equal(t, 1, calls(tc.sharedAncestor), "shared ancestor lookup count")
+			}
+		})
+	}
 }

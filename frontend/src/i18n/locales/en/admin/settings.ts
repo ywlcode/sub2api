@@ -424,7 +424,7 @@ export default {
         syncCorpEmailHint: 'Write the DingTalk corporate email to the dingtalk_email attribute on each login (does not change the login email).',
         syncCorpEmailPermissionHint: 'Requires the OAPI permission "Personal info incl. email (fieldEmail)" to be granted to the app on the DingTalk open platform, otherwise OAPI will not return the email field.',
         syncDept: 'Sync department',
-        syncDeptHint: 'Write the full DingTalk department path to the dingtalk_department attribute on each login (fetched live each time).',
+        syncDeptHint: 'Each DingTalk login syncs the deepest department path. If paths have the same depth, the one with more characters is used.',
         syncDeptPermissionHint: 'Requires the OAPI "Department info read (qyapi_get_department_list)" permission to be granted to the app on the DingTalk open platform, otherwise the department path cannot be resolved.',
         syncDisplayNameTarget: 'Attribute key',
         syncDisplayNameTargetHint: 'Defaults to dingtalk_name / DingTalk Name. Saving settings auto-creates the user attribute by the key and display name above (existing definition only has its display name synced).',
