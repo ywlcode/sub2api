@@ -9,15 +9,18 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func (h *OpsHandler) requireOpsMonitoring(c *gin.Context) bool {
+	if h.opsService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
+		return false
+	}
+	return !response.ErrorFrom(c, h.opsService.RequireMonitoringEnabled(c.Request.Context()))
+}
+
 // GetEmailNotificationConfig returns Ops email notification config (DB-backed).
 // GET /api/v1/admin/ops/email-notification/config
 func (h *OpsHandler) GetEmailNotificationConfig(c *gin.Context) {
-	if h.opsService == nil {
-		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
-		return
-	}
-	if err := h.opsService.RequireMonitoringEnabled(c.Request.Context()); err != nil {
-		response.ErrorFrom(c, err)
+	if !h.requireOpsMonitoring(c) {
 		return
 	}
 

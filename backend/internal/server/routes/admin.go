@@ -297,6 +297,8 @@ func registerOpsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		// Email notification config (DB-backed)
 		ops.GET("/email-notification/config", h.Admin.Ops.GetEmailNotificationConfig)
 		ops.PUT("/email-notification/config", h.Admin.Ops.UpdateEmailNotificationConfig)
+		ops.POST("/email-notification/monthly-usage/send", h.Admin.Ops.StartManualMonthlyUsage)
+		ops.GET("/email-notification/monthly-usage/jobs/:id", h.Admin.Ops.ManualMonthlyUsageStatus)
 
 		// Runtime settings (DB-backed)
 		runtime := ops.Group("/runtime")

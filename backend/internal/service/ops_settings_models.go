@@ -17,25 +17,35 @@ type OpsEmailAlertConfig struct {
 }
 
 type OpsEmailReportConfig struct {
-	Enabled                         bool     `json:"enabled"`
-	Recipients                      []string `json:"recipients"`
-	DailySummaryEnabled             bool     `json:"daily_summary_enabled"`
-	DailySummarySchedule            string   `json:"daily_summary_schedule"`
-	WeeklySummaryEnabled            bool     `json:"weekly_summary_enabled"`
-	WeeklySummarySchedule           string   `json:"weekly_summary_schedule"`
-	ErrorDigestEnabled              bool     `json:"error_digest_enabled"`
-	ErrorDigestSchedule             string   `json:"error_digest_schedule"`
-	ErrorDigestMinCount             int      `json:"error_digest_min_count"`
-	AccountHealthEnabled            bool     `json:"account_health_enabled"`
-	AccountHealthSchedule           string   `json:"account_health_schedule"`
-	AccountHealthErrorRateThreshold float64  `json:"account_health_error_rate_threshold"`
+	Enabled               bool     `json:"enabled"`
+	Recipients            []string `json:"recipients"`
+	DailySummaryEnabled   bool     `json:"daily_summary_enabled"`
+	DailySummarySchedule  string   `json:"daily_summary_schedule"`
+	WeeklySummaryEnabled  bool     `json:"weekly_summary_enabled"`
+	WeeklySummarySchedule string   `json:"weekly_summary_schedule"`
+	MonthlyUsageEnabled   bool     `json:"monthly_usage_enabled"`
+	// Set by the server when monthly delivery becomes active; never trust a
+	// client-supplied start period when deciding which past months to send.
+	MonthlyUsageFirstPeriod         string  `json:"monthly_usage_first_period,omitempty"`
+	ErrorDigestEnabled              bool    `json:"error_digest_enabled"`
+	ErrorDigestSchedule             string  `json:"error_digest_schedule"`
+	ErrorDigestMinCount             int     `json:"error_digest_min_count"`
+	AccountHealthEnabled            bool    `json:"account_health_enabled"`
+	AccountHealthSchedule           string  `json:"account_health_schedule"`
+	AccountHealthErrorRateThreshold float64 `json:"account_health_error_rate_threshold"`
 }
 
 // OpsEmailNotificationConfigUpdateRequest allows partial updates, while the
 // frontend can still send the full config shape.
 type OpsEmailNotificationConfigUpdateRequest struct {
 	Alert  *OpsEmailAlertConfig  `json:"alert"`
-	Report *OpsEmailReportConfig `json:"report"`
+	Report *OpsEmailReportUpdate `json:"report"`
+}
+
+type OpsEmailReportUpdate struct {
+	OpsEmailReportConfig
+	// Older clients may save the daily/weekly controls without this field.
+	MonthlyUsageEnabled *bool `json:"monthly_usage_enabled"`
 }
 
 type OpsDistributedLockSettings struct {

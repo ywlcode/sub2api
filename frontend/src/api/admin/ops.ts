@@ -739,7 +739,7 @@ export interface AlertEvent {
   created_at: string
 }
 
-export interface EmailNotificationConfig {
+interface EmailNotificationConfigResponse {
   alert: {
     enabled: boolean
     recipients: string[]
@@ -755,6 +755,7 @@ export interface EmailNotificationConfig {
     daily_summary_schedule: string
     weekly_summary_enabled: boolean
     weekly_summary_schedule: string
+    monthly_usage_enabled?: boolean
     error_digest_enabled: boolean
     error_digest_schedule: string
     error_digest_min_count: number
@@ -762,6 +763,10 @@ export interface EmailNotificationConfig {
     account_health_schedule: string
     account_health_error_rate_threshold: number
   }
+}
+
+export interface EmailNotificationConfig extends EmailNotificationConfigResponse {
+  report: EmailNotificationConfigResponse['report'] & { monthly_usage_enabled: boolean }
 }
 
 export interface OpsMetricThresholds {
@@ -1254,13 +1259,44 @@ export async function createAlertSilence(payload: {
 }
 
 // Email notification config
+function normalizeEmailNotificationConfig(config: EmailNotificationConfigResponse): EmailNotificationConfig {
+  return {
+    ...config,
+    report: { ...config.report, monthly_usage_enabled: config.report.monthly_usage_enabled ?? false }
+  }
+}
+
 export async function getEmailNotificationConfig(): Promise<EmailNotificationConfig> {
-  const { data } = await apiClient.get<EmailNotificationConfig>('/admin/ops/email-notification/config')
-  return data
+  const { data } = await apiClient.get<EmailNotificationConfigResponse>('/admin/ops/email-notification/config')
+  return normalizeEmailNotificationConfig(data)
 }
 
 export async function updateEmailNotificationConfig(config: EmailNotificationConfig): Promise<EmailNotificationConfig> {
-  const { data } = await apiClient.put<EmailNotificationConfig>('/admin/ops/email-notification/config', config)
+  const { data } = await apiClient.put<EmailNotificationConfigResponse>('/admin/ops/email-notification/config', config)
+  return normalizeEmailNotificationConfig(data)
+}
+
+export interface MonthlyUsageJob {
+  id: string
+  month: string
+  status: 'running' | 'sent' | 'failed' | 'uncertain'
+  total: number
+  accepted: number
+  failed: number
+  uncertain: number
+}
+
+export async function sendMonthlyUsageReport(month: string, requestId: string, signal: AbortSignal): Promise<MonthlyUsageJob> {
+  const { data } = await apiClient.post<MonthlyUsageJob>('/admin/ops/email-notification/monthly-usage/send', {
+    month, request_id: requestId
+  }, { signal })
+  return data
+}
+
+export async function getMonthlyUsageJob(id: string, signal: AbortSignal): Promise<MonthlyUsageJob> {
+  const { data } = await apiClient.get<MonthlyUsageJob>(
+    `/admin/ops/email-notification/monthly-usage/jobs/${encodeURIComponent(id)}`, { signal }
+  )
   return data
 }
 
@@ -1365,6 +1401,8 @@ export const opsAPI = {
   updateAlertEventStatus,
   createAlertSilence,
   getEmailNotificationConfig,
+  sendMonthlyUsageReport,
+  getMonthlyUsageJob,
   updateEmailNotificationConfig,
   getAlertRuntimeSettings,
   updateAlertRuntimeSettings,

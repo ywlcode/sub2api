@@ -48,11 +48,13 @@ type OpsScheduledReportService struct {
 	distributedLockOn bool
 	warnNoRedisOnce   sync.Once
 
-	startOnce sync.Once
-	stopOnce  sync.Once
-	stopCtx   context.Context
-	stop      context.CancelFunc
-	wg        sync.WaitGroup
+	startOnce  sync.Once
+	stopOnce   sync.Once
+	stopCtx    context.Context
+	stop       context.CancelFunc
+	wg         sync.WaitGroup
+	manualMu   sync.Mutex
+	manualOpen bool
 }
 
 func NewOpsScheduledReportService(
@@ -70,7 +72,7 @@ func NewOpsScheduledReportService(
 			loc = parsed
 		}
 	}
-	return &OpsScheduledReportService{
+	s := &OpsScheduledReportService{
 		opsService:   opsService,
 		userService:  userService,
 		emailService: emailService,
@@ -87,6 +89,10 @@ func NewOpsScheduledReportService(
 		stop:              nil,
 		wg:                sync.WaitGroup{},
 	}
+	if opsService != nil {
+		opsService.monthlyReports = s
+	}
+	return s
 }
 
 func (s *OpsScheduledReportService) Start() {
@@ -100,7 +106,7 @@ func (s *OpsScheduledReportService) StartWithContext(ctx context.Context) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if s.cfg != nil && !s.cfg.Ops.Enabled {
+	if !s.cfg.RunsBackgroundJobs() || (s.cfg != nil && !s.cfg.Ops.Enabled) {
 		return
 	}
 	if s.opsService == nil || s.emailService == nil {
@@ -108,9 +114,13 @@ func (s *OpsScheduledReportService) StartWithContext(ctx context.Context) {
 	}
 
 	s.startOnce.Do(func() {
+		s.manualMu.Lock()
+		defer s.manualMu.Unlock()
 		s.stopCtx, s.stop = context.WithCancel(ctx)
-		s.wg.Add(1)
+		s.manualOpen = true
+		s.wg.Add(2)
 		go s.run()
+		go s.runMonthlyUsage()
 	})
 }
 
@@ -119,6 +129,9 @@ func (s *OpsScheduledReportService) Stop() {
 		return
 	}
 	s.stopOnce.Do(func() {
+		s.manualMu.Lock()
+		defer s.manualMu.Unlock()
+		s.manualOpen = false
 		if s.stop != nil {
 			s.stop()
 		}

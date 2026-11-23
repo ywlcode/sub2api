@@ -4,6 +4,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { opsAPI } from '@/api/admin/ops'
 import type { EmailNotificationConfig, AlertSeverity } from '../types'
+import MonthlyUsageSender from './MonthlyUsageSender.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 
@@ -12,6 +13,7 @@ const appStore = useAppStore()
 
 const loading = ref(false)
 const config = ref<EmailNotificationConfig | null>(null)
+const reportVerified = ref(false)
 
 const showEditor = ref(false)
 const saving = ref(false)
@@ -33,6 +35,7 @@ async function loadConfig() {
   try {
     const data = await opsAPI.getEmailNotificationConfig()
     config.value = data
+    reportVerified.value = true
   } catch (err: any) {
     console.error('[OpsEmailNotificationCard] Failed to load config', err)
     appStore.showError(err?.response?.data?.detail || t('admin.ops.email.loadFailed'))
@@ -49,7 +52,9 @@ async function saveConfig() {
   }
   saving.value = true
   try {
+    reportVerified.value = false
     config.value = await opsAPI.updateEmailNotificationConfig(draft.value)
+    reportVerified.value = true
     showEditor.value = false
     appStore.showSuccess(t('admin.ops.email.saveSuccess'))
   } catch (err: any) {
@@ -397,6 +402,17 @@ onMounted(() => {
                   <input v-model="draft.report.weekly_summary_schedule" type="text" class="input" :placeholder="t('admin.ops.email.cronPlaceholder')" />
                 </div>
               </div>
+              <div v-if="draft.report.enabled" class="md:col-span-2">
+                <label class="inline-flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                  <input v-model="draft.report.monthly_usage_enabled" type="checkbox" class="h-4 w-4 rounded border-gray-300" aria-describedby="ops-email-monthly-usage-hint" />
+                  {{ t('admin.ops.settings.monthlyUsage') }}
+                </label>
+                <p id="ops-email-monthly-usage-hint" class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.settings.monthlyUsageHint') }}</p>
+              </div>
+              <MonthlyUsageSender
+                v-if="showEditor && config" class="md:col-span-2"
+                :saved="reportVerified ? config.report : null" :draft="draft.report" :recipient-input="reportRecipientInput" :saving="saving"
+              />
               <div>
                 <div class="mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">{{ t('admin.ops.email.errorDigest') }}</div>
                 <div class="flex items-center gap-2">

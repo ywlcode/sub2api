@@ -23,7 +23,7 @@ const { opsAPI, showError } = vi.hoisted(() => ({
     updateAdvancedSettings: vi.fn(), updateMetricThresholds: vi.fn(),
   }, showError: vi.fn(),
 }))
-vi.mock('@/api/admin/ops', () => ({ opsAPI }))
+vi.mock('@/api/admin/ops', () => ({ opsAPI, default: opsAPI }))
 vi.mock('@/stores/app', () => ({ useAppStore: () => ({ showError, showSuccess: vi.fn() }) }))
 async function openDialog() {
   const wrapper = shallowMount(OpsSettingsDialog, {
@@ -40,6 +40,7 @@ describe('ops settings load guard', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
     opsAPI.getAlertRuntimeSettings.mockResolvedValue({ evaluation_interval_seconds: 30 })
     opsAPI.getEmailNotificationConfig.mockResolvedValue({ alert: { enabled: false }, report: { enabled: false } })
+    opsAPI.updateEmailNotificationConfig.mockResolvedValue({ report: { enabled: false } })
     opsAPI.getAdvancedSettings.mockResolvedValue({ data_retention: { error_log_retention_days: 7, minute_metrics_retention_days: 7, hourly_metrics_retention_days: 7 } })
     opsAPI.getMetricThresholds.mockResolvedValue({ sla_percent_min: 98 })
   })

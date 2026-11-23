@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { opsAPI } from '@/api/admin/ops'
+import MonthlyUsageSender from './MonthlyUsageSender.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
@@ -28,6 +29,7 @@ const saving = ref(false)
 const runtimeSettings = ref<OpsAlertRuntimeSettings | null>(null)
 // 邮件通知配置
 const emailConfig = ref<EmailNotificationConfig | null>(null)
+const savedReport = ref<EmailNotificationConfig['report'] | null>(null)
 // 高级设置
 const advancedSettings = ref<OpsAdvancedSettings | null>(null)
 // 指标阈值配置
@@ -50,6 +52,7 @@ async function loadAllSettings() {
       opsAPI.getMetricThresholds()
     ])
     runtimeSettings.value = runtime
+    savedReport.value = structuredClone(email.report)
     emailConfig.value = email
     advancedSettings.value = advanced
     if (advancedSettings.value?.data_retention) {
@@ -223,6 +226,13 @@ const validation = computed(() => {
   return { valid: errors.length === 0, errors }
 })
 
+async function saveEmailConfig(config: EmailNotificationConfig) {
+  // Other settings save in parallel. Only this response confirms which report settings are saved.
+  savedReport.value = null
+  const saved = await opsAPI.updateEmailNotificationConfig(config)
+  savedReport.value = saved.report
+}
+
 // 保存所有配置
 async function saveAllSettings() {
   if (loading.value || !settingsLoaded.value || saving.value) return
@@ -244,7 +254,7 @@ async function saveAllSettings() {
     }
     await Promise.all([
       runtimeSettings.value ? opsAPI.updateAlertRuntimeSettings(runtimeSettings.value) : Promise.resolve(),
-      emailConfig.value ? opsAPI.updateEmailNotificationConfig(emailConfig.value) : Promise.resolve(),
+      emailConfig.value ? saveEmailConfig(emailConfig.value) : Promise.resolve(),
       advancedSettings.value ? opsAPI.updateAdvancedSettings(advancedSettings.value) : Promise.resolve(),
       opsAPI.updateMetricThresholds(metricThresholds.value)
     ])
@@ -376,7 +386,7 @@ async function saveAllSettings() {
               </span>
             </div>
             <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">
-              {{ t('admin.ops.settings.recipientsHint') }}
+              {{ t('admin.ops.settings.reportRecipientsHint') }}
             </p>
           </div>
 
@@ -395,7 +405,18 @@ async function saveAllSettings() {
             <div v-if="emailConfig.report.weekly_summary_enabled">
               <input v-model="emailConfig.report.weekly_summary_schedule" type="text" class="input" placeholder="0 9 * * 1" />
             </div>
+            <div class="grid items-center gap-1 md:col-span-2 md:grid-cols-2 md:gap-4">
+              <div class="flex items-center justify-between">
+                <label for="ops-monthly-usage" class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.ops.settings.monthlyUsage') }}</label>
+                <Toggle id="ops-monthly-usage" v-model="emailConfig.report.monthly_usage_enabled" aria-describedby="ops-monthly-usage-hint" />
+              </div>
+              <p id="ops-monthly-usage-hint" class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.ops.settings.monthlyUsageHint') }}</p>
+            </div>
           </div>
+          <MonthlyUsageSender
+            v-if="show && settingsLoaded"
+            :saved="savedReport" :draft="emailConfig.report" :recipient-input="reportRecipientInput" :saving="saving"
+          />
         </div>
       </div>
 

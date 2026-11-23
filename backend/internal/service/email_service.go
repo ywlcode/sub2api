@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"net"
 	"net/smtp"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -202,36 +203,54 @@ func (s *EmailService) SendEmailWithConfig(config *SMTPConfig, to, subject, body
 		return err
 	}
 
+	_, err = s.sendSMTPMessage(context.Background(), config, message)
+	return err
+}
+
+func (s *EmailService) sendSMTPMessage(ctx context.Context, config *SMTPConfig, message smtpMessage) (uncertain bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	client, err := s.connectSMTP(config)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = client.Close() }()
 
+	stop := context.AfterFunc(ctx, func() { _ = client.Close() })
+	defer stop()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+
 	auth := smtp.PlainAuth("", config.Username, config.Password, config.Host)
 	if err = client.Auth(auth); err != nil {
-		return fmt.Errorf("smtp auth: %w", err)
+		return false, fmt.Errorf("smtp auth: %w", err)
 	}
 	if err = client.Mail(message.envelopeFrom); err != nil {
-		return fmt.Errorf("smtp mail: %w", err)
+		return false, fmt.Errorf("smtp mail: %w", err)
 	}
 	if err = client.Rcpt(message.envelopeTo); err != nil {
-		return fmt.Errorf("smtp rcpt: %w", err)
+		return false, fmt.Errorf("smtp rcpt: %w", err)
 	}
 	w, err := client.Data()
 	if err != nil {
-		return fmt.Errorf("smtp data: %w", err)
+		return false, fmt.Errorf("smtp data: %w", err)
 	}
 	if _, err = w.Write(message.data); err != nil {
-		return fmt.Errorf("write msg: %w", err)
+		return false, fmt.Errorf("write msg: %w", err)
 	}
 	if err = w.Close(); err != nil {
-		return fmt.Errorf("close writer: %w", err)
+		// Close sends the DATA terminator and waits for the final 250.
+		// Only an explicit negative completion rules out acceptance here.
+		var reply *textproto.Error
+		rejected := errors.As(err, &reply) && reply.Code >= 400 && reply.Code < 600
+		return !rejected, fmt.Errorf("close writer: %w", err)
 	}
 	// Email is sent successfully after w.Close(), ignore Quit errors
 	// Some SMTP servers return non-standard responses on QUIT
 	_ = client.Quit()
-	return nil
+	return false, nil
 }
 
 // smtpTestRootCAs 仅供单元测试注入自签 CA，生产环境始终为 nil（走系统信任链）。

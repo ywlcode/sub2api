@@ -43,6 +43,8 @@ type OpsRuntimeSettingsRefreshHealth struct {
 
 // OpsService provides ingestion and query APIs for the Ops monitoring module.
 type OpsService struct {
+	// Wired at startup, before admin handlers serve requests.
+	monthlyReports     *OpsScheduledReportService
 	aiOpsMu            sync.Mutex
 	aiOpsCancel        context.CancelFunc
 	aiOpsDone          chan struct{}

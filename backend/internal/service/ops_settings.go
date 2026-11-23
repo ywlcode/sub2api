@@ -79,7 +79,14 @@ func (s *OpsService) UpdateEmailNotificationConfig(ctx context.Context, req *Ops
 	}
 
 	if req.Report != nil {
+		wasMonthly := cfg.Report.Enabled && cfg.Report.MonthlyUsageEnabled
 		cfg.Report.Enabled = req.Report.Enabled
+		if req.Report.MonthlyUsageEnabled != nil {
+			cfg.Report.MonthlyUsageEnabled = *req.Report.MonthlyUsageEnabled
+		}
+		if cfg.Report.Enabled && cfg.Report.MonthlyUsageEnabled && (!wasMonthly || cfg.Report.MonthlyUsageFirstPeriod == "") {
+			cfg.Report.MonthlyUsageFirstPeriod = firstMonthlyUsagePeriod(time.Now())
+		}
 		if req.Report.Recipients != nil {
 			cfg.Report.Recipients = req.Report.Recipients
 		}
@@ -188,6 +195,18 @@ func validateOpsEmailNotificationConfig(cfg *OpsEmailNotificationConfig) error {
 
 	if cfg.Report.ErrorDigestMinCount < 0 {
 		return errors.New("report.error_digest_min_count must be >= 0")
+	}
+	if cfg.Report.Enabled && cfg.Report.MonthlyUsageEnabled {
+		recipients := normalizeEmails(cfg.Report.Recipients)
+		if len(recipients) == 0 {
+			return errors.New("monthly usage report requires at least one report recipient")
+		}
+		for _, recipient := range recipients {
+			addr, err := parseSMTPAddress(recipient, "recipient")
+			if err != nil || addr.Address != recipient {
+				return errors.New("monthly usage report requires individual email addresses in report.recipients")
+			}
+		}
 	}
 	if cfg.Report.AccountHealthErrorRateThreshold < 0 || cfg.Report.AccountHealthErrorRateThreshold > 100 {
 		return errors.New("report.account_health_error_rate_threshold must be between 0 and 100")
