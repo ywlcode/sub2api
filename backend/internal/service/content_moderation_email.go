@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"html"
+	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 )
 
 // Suppression is distinct from successful delivery and from template failures.
@@ -45,6 +48,74 @@ func (s *ContentModerationService) sendModerationEmail(ctx context.Context, log 
 	return s.emailService.SendEmail(ctx, log.UserEmail, subject, body)
 }
 
+func (s *ContentModerationService) sendAccountDisabledEmail(ctx context.Context, cfg *ContentModerationConfig, log *ContentModerationLog) error {
+	if err := s.checkModerationEmailExemption(ctx, log); err != nil {
+		return err
+	}
+	event := NotificationEmailEventContentModerationDisabled
+	if log.BanScope == ContentModerationBanScopeOpenAI {
+		event = NotificationEmailEventOpenAIRestricted
+	}
+	userID := contentModerationEmailUserID(log)
+	variables := contentModerationEmailVariables(log, cfg)
+	recipientName := emailRecipientName(log.UserEmail)
+	templates := s.emailService.notificationEmailService
+	if templates != nil {
+		err := templates.Send(ctx, NotificationEmailSendInput{
+			Event:          event,
+			RecipientEmail: log.UserEmail,
+			RecipientName:  recipientName,
+			UserID:         userID,
+			SourceType:     "content_moderation",
+			SourceID:       contentModerationEmailSourceID(log),
+			Variables:      variables,
+			beforeSend:     func(ctx context.Context) error { return s.checkModerationEmailExemption(ctx, log) },
+		})
+		if err == nil || !shouldFallbackNotificationEmail(err) {
+			return err
+		}
+		slog.Warn("ban notification template unavailable; using official template", "event", event, "log_id", log.ID, "err", err)
+	}
+
+	// Use the same locale and scope even when the saved template cannot be loaded.
+	if templates == nil {
+		templates = &NotificationEmailService{settingRepo: s.settingRepo}
+	}
+	locale := templates.ResolveRecipientLocale(ctx, userID, log.UserEmail)
+	official := notificationEmailOfficialTemplates[event][locale]
+	siteName := s.siteName(ctx)
+	if locale == notificationEmailLocaleChinese {
+		subject, err := renderNotificationEmailString(event, official.Subject, map[string]string{"site_name": siteName}, nil, false)
+		if err != nil {
+			return err
+		}
+		return s.sendModerationEmail(ctx, log, subject, buildContentModerationAccountDisabledEmailBody(siteName, log, cfg))
+	}
+	variables["site_name"] = siteName
+	variables["recipient_name"] = recipientName
+	variables["recipient_email"] = log.UserEmail
+	rendered, err := renderLocalizedNotificationEmail(event, locale, official.Subject, official.HTML, variables, nil)
+	if err != nil {
+		return err
+	}
+	return s.sendModerationEmail(ctx, log, rendered.Subject, rendered.HTML)
+}
+
+func formatModerationBanDeadline(expiresAt *time.Time) string {
+	if expiresAt == nil || expiresAt.IsZero() {
+		return ""
+	}
+	return expiresAt.In(timezone.Location()).Format("2006-01-02 15:04:05 UTC-07:00")
+}
+
+func moderationBanDeadlineParagraph(log *ContentModerationLog) string {
+	deadline := formatModerationBanDeadline(log.BanExpiresAt)
+	if deadline == "" {
+		return ""
+	}
+	return "<p>预计自动解封时间：<strong>" + html.EscapeString(deadline) + "</strong>。管理员可提前解除限制。</p>"
+}
+
 func buildContentModerationViolationEmailBody(siteName string, log *ContentModerationLog, cfg *ContentModerationConfig) string {
 	if log == nil {
 		return ""
@@ -59,10 +130,11 @@ func buildContentModerationViolationEmailBody(siteName string, log *ContentModer
 	}
 	statusBlock := ""
 	if log.AutoBanned {
-		statusBlock = `<div style="margin-top:24px;padding:18px 20px;border-radius:10px;background:#ff3b30;color:#fff;font-size:18px;font-weight:700;text-align:center;line-height:1.6;">账户当前处于封禁状态，所有 API 请求将被拒绝</div>`
+		statusBlock = `<div style="margin-top:24px;padding:18px 20px;border-radius:10px;background:#ff3b30;color:#fff;font-size:18px;font-weight:700;text-align:center;line-height:1.6;">全部平台的模型请求已被拦截。您仍可正常登录并使用控制台。</div>`
 		if log.BanScope == ContentModerationBanScopeOpenAI {
-			statusBlock = `<p>OpenAI 平台访问已受限；仍可登录账号并使用其他平台的服务。</p>`
+			statusBlock = `<p>内容审计已拦截您的 OpenAI 模型请求。您仍可正常登录、使用控制台及其他平台。</p>`
 		}
+		statusBlock += moderationBanDeadlineParagraph(log)
 	}
 	return fmt.Sprintf(`<!doctype html>
 <html>
@@ -122,9 +194,9 @@ func buildContentModerationAccountDisabledEmailBody(siteName string, log *Conten
   <div style="max-width:680px;margin:0 auto;padding:32px 20px;">
     <div style="height:8px;background:#ef4444;border-radius:14px 14px 0 0;"></div>
     <div style="background:#fff;border-radius:0 0 14px 14px;padding:40px 48px;box-shadow:0 8px 28px rgba(15,23,42,.08);">
-      <div style="letter-spacing:4px;color:#999;font-size:14px;text-transform:uppercase;">Risk Control / 账户封禁</div>
-      <h1 style="margin:20px 0 28px;font-size:30px;line-height:1.25;">账户已被自动禁用</h1>
-      <p style="font-size:17px;line-height:1.9;margin:0 0 24px;">尊敬的用户 <strong>%s</strong>，您的账户在计数周期内多次触发平台风控策略，系统已自动禁用该账户。详情如下。</p>
+      <div style="letter-spacing:4px;color:#999;font-size:14px;text-transform:uppercase;">Risk Control / 平台访问限制</div>
+      <h1 style="margin:20px 0 28px;font-size:30px;line-height:1.25;">全部平台的模型请求已受限</h1>
+      <p style="font-size:17px;line-height:1.9;margin:0 0 24px;">尊敬的用户 <strong>%s</strong>，您的请求在计数周期内多次触发内容审计规则，已达到自动封禁阈值。详情如下。</p>
       <div style="background:#fff1f2;border:1px solid #fecdd3;border-radius:12px;padding:22px 28px;margin:28px 0;">
         <h2 style="margin:0 0 18px;color:#b91c1c;font-size:18px;">封禁详情</h2>
         <table style="width:100%%;border-collapse:collapse;font-size:16px;">
@@ -135,8 +207,9 @@ func buildContentModerationAccountDisabledEmailBody(siteName string, log *Conten
           <tr><td style="padding:12px 0;color:#888;">累计触发次数</td><td style="padding:12px 0;color:#dc2626;font-weight:700;">%d 次（阈值 %d）</td></tr>
         </table>
       </div>
-      <div style="margin-top:24px;padding:18px 20px;border-radius:10px;background:#ff3b30;color:#fff;font-size:18px;font-weight:700;text-align:center;line-height:1.6;">账户当前处于封禁状态，所有 API 请求将被拒绝</div>
-      <p style="font-size:15px;line-height:1.8;color:#666;margin-top:24px;">如需申诉或恢复账号，请联系平台管理员处理。</p>
+      <div style="margin-top:24px;padding:18px 20px;border-radius:10px;background:#ff3b30;color:#fff;font-size:18px;font-weight:700;text-align:center;line-height:1.6;">全部平台的模型请求已被拦截。您仍可正常登录并使用控制台。</div>
+      %s
+      <p style="font-size:15px;line-height:1.8;color:#666;margin-top:24px;">如需申诉，请联系平台管理员。</p>
       <p style="font-size:14px;line-height:1.8;color:#777;margin-top:28px;">此邮件由 %s 自动发送，请勿回复。</p>
     </div>
   </div>
@@ -149,6 +222,7 @@ func buildContentModerationAccountDisabledEmailBody(siteName string, log *Conten
 		log.HighestScore,
 		log.ViolationCount,
 		threshold,
+		moderationBanDeadlineParagraph(log),
 		html.EscapeString(siteName),
 	)
 }

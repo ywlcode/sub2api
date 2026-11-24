@@ -238,7 +238,10 @@ func provideCleanup(
 				}
 				return nil
 			}},
-			{"CyberEvidence", func() error {
+			{"ContentModeration", func() error {
+				if cyberModeration != nil {
+					cyberModeration.StopBanExpiry()
+				}
 				if cyberModeration != nil && cyberModeration.CyberEvidence() != nil {
 					cyberModeration.CyberEvidence().Close()
 				}

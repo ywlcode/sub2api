@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ const (
 	NotificationEmailEventAccountQuotaAlert           = "account.quota_alert"
 	NotificationEmailEventContentModerationViolation  = "content_moderation.violation_notice"
 	NotificationEmailEventContentModerationDisabled   = "content_moderation.account_disabled"
+	NotificationEmailEventOpenAIRestricted            = "content_moderation.openai_restricted"
 	NotificationEmailEventCyberPolicyNotice           = "content_moderation.cyber_policy_notice"
 	NotificationEmailEventOpsAlert                    = "ops.alert"
 	NotificationEmailEventOpsScheduledReport          = "ops.scheduled_report"
@@ -369,10 +371,13 @@ func (s *NotificationEmailService) PreviewTemplate(ctx context.Context, input No
 		return NotificationEmailPreview{}, err
 	}
 	variables := s.sampleVariables(ctx, normalizedEvent, normalizedLocale)
+	if normalizedEvent == NotificationEmailEventContentModerationDisabled || normalizedEvent == NotificationEmailEventOpenAIRestricted {
+		variables["ban_expires_at"] = "2026-05-21 12:00:00 UTC+08:00"
+	}
 	for key, value := range input.Variables {
 		variables[key] = value
 	}
-	return renderNotificationEmail(normalizedEvent, subject, htmlBody, variables, nil)
+	return renderLocalizedNotificationEmail(normalizedEvent, normalizedLocale, subject, htmlBody, variables, nil)
 }
 
 func (s *NotificationEmailService) Send(ctx context.Context, input NotificationEmailSendInput) error {
@@ -404,7 +409,7 @@ func (s *NotificationEmailService) Send(ctx context.Context, input NotificationE
 		return notificationEmailTemplateErr(err)
 	}
 	variables := s.runtimeVariables(ctx, normalizedEvent, locale, input)
-	rendered, err := renderNotificationEmail(normalizedEvent, tmpl.Subject, tmpl.HTML, variables, input.RawHTMLVariables)
+	rendered, err := renderLocalizedNotificationEmail(normalizedEvent, locale, tmpl.Subject, tmpl.HTML, variables, input.RawHTMLVariables)
 	if err != nil {
 		return notificationEmailTemplateErr(err)
 	}
@@ -716,6 +721,50 @@ func validateNotificationEmailTemplate(event, subject, htmlBody string) error {
 		}
 	}
 	return nil
+}
+
+var notificationEmailBodyEnd = regexp.MustCompile(`(?i)</body\s*>`)
+
+func renderLocalizedNotificationEmail(event, locale, subject, htmlBody string, variables, rawHTMLVariables map[string]string) (NotificationEmailPreview, error) {
+	if event != NotificationEmailEventContentModerationDisabled && event != NotificationEmailEventOpenAIRestricted {
+		return renderNotificationEmail(event, subject, htmlBody, variables, rawHTMLVariables)
+	}
+	deadline := variables["ban_expires_at"]
+	if deadline == "" {
+		// Older ban records may have no deadline. Never infer one from the current policy.
+		variables["ban_expires_at"] = "No automatic release scheduled"
+		if locale == notificationEmailLocaleChinese {
+			variables["ban_expires_at"] = "未记录自动解封时间"
+		}
+	}
+
+	rendered, err := renderNotificationEmail(event, subject, htmlBody, variables, rawHTMLVariables)
+	if err != nil || deadline == "" {
+		return rendered, err
+	}
+	label := "Scheduled automatic release: "
+	note := "An administrator can lift the restriction sooner."
+	if locale == notificationEmailLocaleChinese {
+		label = "预计自动解封时间："
+		note = "管理员可提前解除限制。"
+	}
+	// Old saved bodies may predate the deadline placeholder or the early release notice.
+	paragraph := ""
+	if !slices.Contains(notificationEmailPlaceholdersIn(htmlBody), "ban_expires_at") {
+		paragraph = "<p>" + label + html.EscapeString(deadline) + "</p>"
+	}
+	if !strings.Contains(htmlBody, note) {
+		paragraph += "<p>" + note + "</p>"
+	}
+	if paragraph == "" {
+		return rendered, nil
+	}
+	end := len(rendered.HTML)
+	if match := notificationEmailBodyEnd.FindStringIndex(rendered.HTML); match != nil {
+		end = match[0]
+	}
+	rendered.HTML = rendered.HTML[:end] + paragraph + rendered.HTML[end:]
+	return rendered, nil
 }
 
 func renderNotificationEmail(event, subject, htmlBody string, variables map[string]string, rawHTMLVariables map[string]string) (NotificationEmailPreview, error) {
@@ -1050,6 +1099,7 @@ var notificationEmailEventOrder = []string{
 	NotificationEmailEventAccountQuotaAlert,
 	NotificationEmailEventContentModerationViolation,
 	NotificationEmailEventContentModerationDisabled,
+	NotificationEmailEventOpenAIRestricted,
 	NotificationEmailEventCyberPolicyNotice,
 	NotificationEmailEventOpsAlert,
 	NotificationEmailEventOpsScheduledReport,
@@ -1138,12 +1188,21 @@ var notificationEmailEventDefinitions = map[string]NotificationEmailEventInfo{
 	},
 	NotificationEmailEventContentModerationDisabled: {
 		Event:       NotificationEmailEventContentModerationDisabled,
-		Label:       "Risk control account disabled",
-		Description: "Sent to users when content moderation automatically disables their account.",
+		Label:       "Model requests blocked on all platforms",
+		Description: "Sent when content moderation blocks model requests on all platforms. Users can still sign in and use their dashboard.",
 		Category:    "risk_control",
 		Optional:    false,
 		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
-			"triggered_at", "group_name", "moderation_category", "moderation_score", "violation_count", "ban_threshold"),
+			"triggered_at", "group_name", "moderation_category", "moderation_score", "violation_count", "ban_threshold", "ban_expires_at"),
+	},
+	NotificationEmailEventOpenAIRestricted: {
+		Event:       NotificationEmailEventOpenAIRestricted,
+		Label:       "OpenAI model requests blocked",
+		Description: "Sent when content moderation blocks OpenAI model requests. Users can still sign in, use their dashboard, and use other platforms.",
+		Category:    "risk_control",
+		Optional:    false,
+		Placeholders: append(append([]string{}, notificationEmailCommonPlaceholders...),
+			"triggered_at", "group_name", "moderation_category", "moderation_score", "violation_count", "ban_threshold", "ban_expires_at"),
 	},
 	NotificationEmailEventCyberPolicyNotice: {
 		Event:       NotificationEmailEventCyberPolicyNotice,
@@ -1385,30 +1444,62 @@ var notificationEmailOfficialTemplates = map[string]map[string]notificationEmail
 	},
 	NotificationEmailEventContentModerationDisabled: {
 		notificationEmailDefaultLocale: {
-			Subject: "[{{site_name}}] Account disabled by risk control",
-			HTML: notificationEmailCard("#b91c1c", "Account disabled", `
+			Subject: "[{{site_name}}] Model requests blocked on all platforms",
+			HTML: notificationEmailCard("#b91c1c", "Model requests blocked on all platforms", `
 <p>Hello {{recipient_name}},</p>
-<p>Your account has repeatedly triggered platform content moderation/risk-control rules and has been automatically disabled.</p>
+<p>Repeated content moderation violations have blocked your model requests on all platforms. You can still sign in and use your dashboard.</p>
 <table style="width:100%;border-collapse:collapse;">
-  <tr><td>Disabled at</td><td>{{triggered_at}}</td></tr>
+  <tr><td>Scheduled automatic release</td><td>{{ban_expires_at}}</td></tr>
+  <tr><td>Restricted at</td><td>{{triggered_at}}</td></tr>
   <tr><td>Group</td><td>{{group_name}}</td></tr>
   <tr><td>Category / Score</td><td>{{moderation_category}} / {{moderation_score}}</td></tr>
   <tr><td>Violation count</td><td>{{violation_count}} / {{ban_threshold}}</td></tr>
 </table>
-<p>Please contact the administrator if you need to appeal or restore access.</p>`),
+<p>An administrator can lift the restriction sooner. Contact the administrator if you wish to appeal.</p>`),
 		},
 		notificationEmailLocaleChinese: {
-			Subject: "[{{site_name}}] 账户已被禁用",
-			HTML: notificationEmailCard("#b91c1c", "账户已被禁用", `
+			Subject: "[{{site_name}}] 全部平台的模型请求已受限",
+			HTML: notificationEmailCard("#b91c1c", "全部平台的模型请求已受限", `
 <p>{{recipient_name}}，您好：</p>
-<p>您的账户在统计周期内多次触发平台内容审核/风控规则，系统已自动禁用该账户。</p>
+<p>由于您的请求多次触发内容审计规则，系统已拦截全部平台的模型请求。您仍可正常登录并使用控制台。</p>
 <table style="width:100%;border-collapse:collapse;">
-  <tr><td>禁用时间</td><td>{{triggered_at}}</td></tr>
+  <tr><td>预计自动解封时间</td><td>{{ban_expires_at}}</td></tr>
+  <tr><td>限制开始时间</td><td>{{triggered_at}}</td></tr>
   <tr><td>所属分组</td><td>{{group_name}}</td></tr>
   <tr><td>命中类别 / 分数</td><td>{{moderation_category}} / {{moderation_score}}</td></tr>
   <tr><td>累计触发次数</td><td>{{violation_count}} / {{ban_threshold}}</td></tr>
 </table>
-<p>如需申诉或恢复账号，请联系平台管理员处理。</p>`),
+<p>管理员可提前解除限制。如需申诉，请联系平台管理员。</p>`),
+		},
+	},
+	NotificationEmailEventOpenAIRestricted: {
+		notificationEmailDefaultLocale: {
+			Subject: "[{{site_name}}] OpenAI model requests blocked",
+			HTML: notificationEmailCard("#b91c1c", "OpenAI model requests blocked", `
+<p>Hello {{recipient_name}},</p>
+<p>Content moderation has blocked your OpenAI model requests. You can still sign in, use your dashboard, and use other platforms.</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>Scheduled automatic release</td><td>{{ban_expires_at}}</td></tr>
+  <tr><td>Restricted at</td><td>{{triggered_at}}</td></tr>
+  <tr><td>Group</td><td>{{group_name}}</td></tr>
+  <tr><td>Category / Score</td><td>{{moderation_category}} / {{moderation_score}}</td></tr>
+  <tr><td>Violation count</td><td>{{violation_count}} / {{ban_threshold}}</td></tr>
+</table>
+<p>An administrator can lift the restriction sooner. Contact the administrator if you wish to appeal.</p>`),
+		},
+		notificationEmailLocaleChinese: {
+			Subject: "[{{site_name}}] OpenAI 模型请求受限",
+			HTML: notificationEmailCard("#b91c1c", "OpenAI 模型请求受限", `
+<p>{{recipient_name}}，您好：</p>
+<p>内容审计已拦截您的 OpenAI 模型请求。您仍可正常登录、使用控制台及其他平台。</p>
+<table style="width:100%;border-collapse:collapse;">
+  <tr><td>预计自动解封时间</td><td>{{ban_expires_at}}</td></tr>
+  <tr><td>限制开始时间</td><td>{{triggered_at}}</td></tr>
+  <tr><td>所属分组</td><td>{{group_name}}</td></tr>
+  <tr><td>命中类别 / 分数</td><td>{{moderation_category}} / {{moderation_score}}</td></tr>
+  <tr><td>累计触发次数</td><td>{{violation_count}} / {{ban_threshold}}</td></tr>
+</table>
+<p>管理员可提前解除限制。如需申诉，请联系平台管理员。</p>`),
 		},
 	},
 	NotificationEmailEventCyberPolicyNotice: {

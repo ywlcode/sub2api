@@ -37,7 +37,7 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 		open: func(ctx context.Context, account *service.Account, token string) (*service.GrokRealtimeUpstream, error) {
 			return h.gatewayService.OpenGrokRealtime(ctx, account, token, model)
 		},
-		proxy: func(ctx context.Context, conn *coderws.Conn, upstream *service.GrokRealtimeUpstream) (*service.OpenAIForwardResult, error) {
+		proxy: func(ctx context.Context, conn service.GatewayClientWebSocket, upstream *service.GrokRealtimeUpstream) (*service.OpenAIForwardResult, error) {
 			started := time.Now()
 			audioObserved, err := h.gatewayService.ProxyGrokRealtimeConn(ctx, c, conn, upstream)
 			return grokRealtimeBillingResult(model, time.Since(started), audioObserved), err
@@ -60,7 +60,7 @@ func (h *OpenAIGatewayHandler) GrokTTSStream(c *gin.Context) {
 		open: func(ctx context.Context, account *service.Account, token string) (*service.GrokRealtimeUpstream, error) {
 			return h.gatewayService.OpenGrokTTSStream(ctx, account, token, query)
 		},
-		proxy: func(ctx context.Context, conn *coderws.Conn, upstream *service.GrokRealtimeUpstream) (*service.OpenAIForwardResult, error) {
+		proxy: func(ctx context.Context, conn service.GatewayClientWebSocket, upstream *service.GrokRealtimeUpstream) (*service.OpenAIForwardResult, error) {
 			started := time.Now()
 			chars, err := h.gatewayService.ProxyGrokTTSStreamConn(ctx, conn, upstream)
 			return grokTTSStreamBillingResult(chars, time.Since(started)), err
@@ -76,7 +76,7 @@ type grokVoiceWebSocket struct {
 	inflight service.InflightEstimateRequest
 	open     func(ctx context.Context, account *service.Account, token string) (*service.GrokRealtimeUpstream, error)
 	// proxy relays the accepted session and returns its billing result (nil = nothing to bill).
-	proxy func(ctx context.Context, conn *coderws.Conn, upstream *service.GrokRealtimeUpstream) (*service.OpenAIForwardResult, error)
+	proxy func(ctx context.Context, conn service.GatewayClientWebSocket, upstream *service.GrokRealtimeUpstream) (*service.OpenAIForwardResult, error)
 }
 
 // serveGrokVoiceWebSocket selects a Grok account, completes the upstream
@@ -219,10 +219,10 @@ func (h *OpenAIGatewayHandler) serveGrokVoiceWebSocket(c *gin.Context, ws grokVo
 	}
 	defer func() { _ = conn.CloseNow() }()
 
-	result, proxyErr := ws.proxy(c.Request.Context(), conn, upstream)
+	result, proxyErr := ws.proxy(c.Request.Context(), h.moderatedWebSocket(conn, apiKey.UserID, service.PlatformGrok), upstream)
 	if proxyErr != nil {
 		reqLog.Info("grok_"+ws.name+".proxy_failed", zap.Error(proxyErr))
-		if !isExpectedGrokRealtimeClose(proxyErr) {
+		if !closeModeratedWebSocket(conn, proxyErr) && !isExpectedGrokRealtimeClose(proxyErr) {
 			_ = conn.Close(coderws.StatusInternalError, "upstream voice websocket failed")
 			return
 		}

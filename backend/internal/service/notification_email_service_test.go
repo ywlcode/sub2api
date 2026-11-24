@@ -702,3 +702,28 @@ func (s *notificationEmailTestSMTPServer) handleConn(conn net.Conn) {
 		}
 	}
 }
+
+func TestBanNotificationDeadlinePreviewAndMissingValue(t *testing.T) {
+	ctx := context.Background()
+	svc := NewNotificationEmailService(newNotificationEmailMemorySettingRepo(), nil)
+	for _, event := range []string{NotificationEmailEventContentModerationDisabled, NotificationEmailEventOpenAIRestricted} {
+		for _, locale := range []string{"en", "zh"} {
+			tmpl, err := svc.GetTemplate(ctx, event, locale)
+			require.NoError(t, err)
+			require.Contains(t, tmpl.Placeholders, "ban_expires_at")
+			preview, err := svc.PreviewTemplate(ctx, NotificationEmailPreviewInput{Event: event, Locale: locale})
+			require.NoError(t, err)
+			require.Contains(t, preview.HTML, "2026-05-21 12:00:00 UTC+08:00")
+
+			variables := svc.runtimeVariables(ctx, event, locale, NotificationEmailSendInput{})
+			live, err := renderLocalizedNotificationEmail(event, locale, tmpl.Subject, tmpl.HTML, variables, nil)
+			require.NoError(t, err)
+			require.NotContains(t, live.HTML, "2026-05-21")
+			if locale == "zh" {
+				require.Contains(t, live.HTML, "未记录自动解封时间")
+			} else {
+				require.Contains(t, live.HTML, "No automatic release scheduled")
+			}
+		}
+	}
+}

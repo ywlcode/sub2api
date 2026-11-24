@@ -1,16 +1,15 @@
 <template>
   <section class="card space-y-4 p-5" data-testid="security-records">
     <div class="flex items-center justify-between gap-3">
-      <h2 class="text-lg font-semibold">{{ t('securityRecords.title') }}</h2>
+      <h2 class="text-lg font-semibold">{{ t(admin ? 'securityRecords.title' : 'securityRecords.penaltyTitle') }}</h2>
       <button class="btn btn-secondary btn-sm" :disabled="loading" @click="refresh">{{ t('common.refresh') }}</button>
     </div>
     <p v-if="error" role="alert" class="text-red-600">{{ error }}</p>
     <p v-if="loading" role="status">{{ t('common.loading') }}</p>
     <template v-if="!admin && summary">
-      <p :class="summary.restricted ? 'font-medium text-red-600' : 'text-emerald-600'" data-testid="restriction-status">
+      <p :class="summary.restricted ? 'font-medium text-red-600' : 'text-gray-500'" data-testid="restriction-status">
         {{ summary.restricted ? t('securityRecords.restricted') : t('securityRecords.unrestricted') }}
       </p>
-      <p class="text-sm text-gray-500">{{ t('securityRecords.loginUnaffected') }}</p>
       <p v-if="summary.observe_only && summary.enabled" class="text-sm">{{ t('securityRecords.observation') }}</p>
       <article v-for="state in summary.states" :key="state.scope + state.subject_key" class="rounded-lg border p-3 dark:border-dark-600">
         <p>{{ t(`securityRecords.scopes.${state.scope}`) }} · {{ t(`securityRecords.actions.${state.action}`) }} · {{ state.count }} / {{ summary.threshold }}</p>
@@ -20,7 +19,7 @@
       </article>
     </template>
     <p class="text-sm text-gray-500">{{ t('securityRecords.originalHint') }}</p>
-    <p v-if="!loading && !events.items.length">{{ t('securityRecords.empty') }}</p>
+    <p v-if="!error && !loading && !events.items.length">{{ t('securityRecords.empty') }}</p>
     <article v-for="event in events.items" :key="event.id" class="space-y-2 rounded-lg border p-3 dark:border-dark-600">
       <p class="text-sm text-gray-500">#{{ event.id }} · {{ date(event.created_at) }} · {{ event.model }}<span v-if="admin"> · UID {{ event.user_id }}</span></p>
       <p>{{ t('securityRecords.reason') }}: {{ event.reason }}</p>
@@ -34,11 +33,13 @@
       <button class="btn btn-secondary btn-sm" :disabled="loading || events.page * events.page_size >= events.total" @click="loadPage(events.page + 1)">{{ t('securityRecords.next') }}</button>
     </div>
   </section>
+  <ModerationRecords v-if="!admin" />
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import ModerationRecords from './ModerationRecords.vue'
 import { getEvent, getSummary, listEvents, type PenaltyEvent, type PenaltyPage, type PenaltySummary } from './api'
 const props = withDefaults(defineProps<{ admin?: boolean; userId?: number }>(), { admin: false })
 const { t } = useI18n()

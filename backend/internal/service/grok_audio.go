@@ -252,10 +252,17 @@ func (s *OpenAIGatewayService) HandleGrokRealtimeUpstreamError(ctx context.Conte
 	s.handleGrokAccountUpstreamError(ctx, account, statusCode, nil, body)
 }
 
+// GatewayClientWebSocket is the downstream side of a bidirectional model relay.
+type GatewayClientWebSocket interface {
+	Read(context.Context) (coderws.MessageType, []byte, error)
+	Write(context.Context, coderws.MessageType, []byte) error
+	SetReadLimit(int64)
+}
+
 // ProxyGrokRealtimeConn relays an accepted client socket to the upstream
 // session. JSON events are validated and sent as text; raw audio binary frames
 // (xAI binary transport) pass through in both directions as binary.
-func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin.Context, client *coderws.Conn, upstream *GrokRealtimeUpstream) (bool, error) {
+func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin.Context, client GatewayClientWebSocket, upstream *GrokRealtimeUpstream) (bool, error) {
 	if s == nil || client == nil || upstream == nil || upstream.conn == nil {
 		return false, fmt.Errorf("realtime connection is required")
 	}
@@ -337,7 +344,7 @@ func (s *OpenAIGatewayService) ProxyGrokRealtimeConn(ctx context.Context, c *gin
 // ProxyGrokTTSStreamConn relays xAI streaming TTS events (JSON text frames in
 // both directions) and returns the characters of text.delta events that reached
 // upstream, which is what xAI bills for the session.
-func (s *OpenAIGatewayService) ProxyGrokTTSStreamConn(ctx context.Context, client *coderws.Conn, upstream *GrokRealtimeUpstream) (int64, error) {
+func (s *OpenAIGatewayService) ProxyGrokTTSStreamConn(ctx context.Context, client GatewayClientWebSocket, upstream *GrokRealtimeUpstream) (int64, error) {
 	if s == nil || client == nil || upstream == nil || upstream.conn == nil {
 		return 0, fmt.Errorf("tts stream connection is required")
 	}

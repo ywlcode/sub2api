@@ -45,6 +45,17 @@ func (s *SiteStore) initializeProjection(ctx context.Context) error {
 			}
 		}
 	}
+	// Moderation stays on the primary. Only eligibility changes enqueue the
+	// existing user/key rows that the secondary uses for admission.
+	var installed bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM pg_trigger WHERE tgname='site_moderation_change' AND tgrelid='content_moderation_user_state'::regclass)`).Scan(&installed); err != nil {
+		return err
+	}
+	if !installed {
+		if _, err = tx.ExecContext(ctx, `CREATE TRIGGER site_moderation_change AFTER INSERT OR UPDATE OR DELETE ON content_moderation_user_state FOR EACH ROW EXECUTE FUNCTION site_capture_moderation_change()`); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 func (s *SiteStore) registerProjectionOn(ctx context.Context, executor interface {
@@ -339,6 +350,22 @@ func (s *SiteStore) refreshProjection(ctx context.Context, tx *sql.Tx, p site.Pe
 			return false, err
 		}
 	}
+	// Group platform and fallback edits also affect routing for restricted
+	// users. Avoid rebuilding every key on an ordinary group update.
+	if !full && dirty["groups"] != nil && !dirty["api_keys"]["*"] {
+		var keyIDs pq.Int64Array
+		if err = tx.QueryRowContext(ctx, `SELECT ARRAY(SELECT k.id FROM api_keys k
+			JOIN content_moderation_user_state s ON s.user_id=k.user_id
+			WHERE s.openai_blocked AND k.deleted_at IS NULL)`).Scan(&keyIDs); err != nil {
+			return false, err
+		}
+		if dirty["api_keys"] == nil {
+			dirty["api_keys"] = map[string]bool{}
+		}
+		for _, id := range keyIDs {
+			dirty["api_keys"][strconv.FormatInt(id, 10)] = true
+		}
+	}
 	if dirty["account_performance_monitors"] != nil || dirty["ai_ops_controls"] != nil {
 		dirty["accounts"] = map[string]bool{"*": true}
 	}
@@ -374,6 +401,23 @@ func (s *SiteStore) refreshProjection(ctx context.Context, tx *sql.Tx, p site.Pe
 			where += ` AND t."` + t.keys[0] + `"=ANY($1::bigint[])`
 		}
 		projection := siteProjectionSQL(t.name, legacy)
+		switch t.name {
+		case "users":
+			// Older replicas already reject inactive users in gateway auth.
+			projection += ` || CASE WHEN EXISTS (SELECT 1 FROM content_moderation_user_state s
+				WHERE s.user_id=t.id AND s.all_platforms_blocked)
+				THEN jsonb_build_object('status','disabled') ELSE '{}'::jsonb END`
+		case "api_keys":
+			// The primary resolves mixed groups and fallbacks. Withhold the
+			// routing digest for these keys while an OpenAI restriction applies.
+			projection += ` || CASE WHEN EXISTS (SELECT 1 FROM content_moderation_user_state s
+				WHERE s.user_id=t.user_id AND s.openai_blocked)
+				AND (t.group_id IS NULL OR EXISTS (
+					SELECT 1 FROM groups g
+					WHERE g.id IN (SELECT t.group_id UNION ALL SELECT kg.group_id FROM api_key_groups kg WHERE kg.api_key_id=t.id)
+					AND (g.platform IN ('openai','composite','') OR g.fallback_group_id IS NOT NULL OR g.fallback_group_id_on_invalid_request IS NOT NULL)))
+				THEN jsonb_build_object('key',NULL) ELSE '{}'::jsonb END`
+		}
 		if t.name == "api_keys" && legacy {
 			// Redaction uses this permission to remove the legacy routing hint.
 			// It is stripped before transmission to replicas that cannot enforce it.

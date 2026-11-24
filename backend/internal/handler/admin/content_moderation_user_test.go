@@ -149,7 +149,7 @@ func TestModerationUserHandlerListFilterPrivacy(t *testing.T) {
 	require.Len(t, items, 1)
 	require.ElementsMatch(t, []string{
 		"user_id", "version", "generation", "auto_ban_exempt", "keyword_exempt",
-		"api_audit_exempt", "email_exempt", "owned_disable", "openai_blocked", "status",
+		"api_audit_exempt", "email_exempt", "owned_disable", "openai_blocked", "all_platforms_blocked", "status",
 		"current_count", "reason", "actor_id", "updated_at",
 	}, keys(items[0]))
 	require.JSONEq(t, "false", string(items[0]["email_exempt"]))

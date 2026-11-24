@@ -503,23 +503,41 @@ describe('admin RiskControlView', () => {
   })
 
   it.each([
-    ['all', 'openai'],
-    ['openai', 'all'],
-  ] as const)('saves ban scope from %s to %s and retains it when reopening settings', async (initial, selected) => {
-    getConfig.mockResolvedValue({ ...baseConfig(), ban_scope: initial })
+    ['all', 'openai', undefined, 1],
+    ['openai', 'all', 48, 8760],
+  ] as const)('changes ban scope from %s to %s and saves the automatic ban duration', async (initial, selected, storedHours, hours) => {
+    getConfig.mockResolvedValue({ ...baseConfig(), ban_scope: initial, ban_duration_hours: storedHours })
     const wrapper = mount(RiskControlView, { global: { stubs: { AppLayout: AppLayoutStub, BaseDialog: BaseDialogStub, Icon: true, Select: true, Toggle: true, Pagination: true, ProxySelector: true } } })
     await flushPromises()
     await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
     await findButtonByText(wrapper, 'admin.riskControl.tabs.response').trigger('click')
     expect(wrapper.get<HTMLSelectElement>('[data-test="moderation-ban-scope"]').element.value).toBe(initial)
+    const duration = () => wrapper.get<HTMLInputElement>('#moderation-ban-duration')
+    expect(duration().element.value).toBe(String(storedHours ?? 24))
     await wrapper.get('[data-test="moderation-ban-scope"]').setValue(selected)
+    await duration().setValue(String(hours))
     await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
     await flushPromises()
-    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({ ban_scope: selected, all_groups: baseConfig().all_groups }))
+    expect(updateConfig).toHaveBeenCalledWith(expect.objectContaining({ ban_scope: selected, ban_duration_hours: hours, all_groups: baseConfig().all_groups }))
     await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
     await findButtonByText(wrapper, 'admin.riskControl.tabs.response').trigger('click')
     expect(wrapper.get<HTMLSelectElement>('[data-test="moderation-ban-scope"]').element.value).toBe(selected)
+    expect(duration().element.value).toBe(String(hours))
     expect(showError).not.toHaveBeenCalled()
+    wrapper.unmount()
+  })
+
+  it('rejects invalid automatic ban durations before sending the configuration', async () => {
+    const wrapper = mount(RiskControlView, { global: { stubs: { AppLayout: AppLayoutStub, BaseDialog: BaseDialogStub, Icon: true, Select: true, Toggle: true, Pagination: true, ProxySelector: true } } })
+    await flushPromises()
+    await findButtonByText(wrapper, 'admin.riskControl.openSettings').trigger('click')
+    await findButtonByText(wrapper, 'admin.riskControl.tabs.response').trigger('click')
+    for (const value of ['', '0', '1.5', '8761']) {
+      await wrapper.get('#moderation-ban-duration').setValue(value)
+      await findButtonByText(wrapper, 'admin.riskControl.saveConfig').trigger('click')
+      expect(showError).toHaveBeenLastCalledWith('admin.riskControl.banDurationInvalid')
+      expect(updateConfig).not.toHaveBeenCalled()
+    }
     wrapper.unmount()
   })
 

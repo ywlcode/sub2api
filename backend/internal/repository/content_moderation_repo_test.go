@@ -17,7 +17,7 @@ func TestContentModerationRepositoryEngineMetaInsert(t *testing.T) {
 	for _, meta := range []*service.ContentModerationEngineMeta{nil, {Engine: "typesafe", Model: "jev-fixed", RulesVersion: "rules-v1", SkippedImages: 1}} {
 		db, mock, err := sqlmock.New()
 		require.NoError(t, err)
-		args := make([]driver.Value, 28)
+		args := make([]driver.Value, 30)
 		for i := range args {
 			args[i] = sqlmock.AnyArg()
 		}

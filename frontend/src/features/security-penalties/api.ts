@@ -65,3 +65,35 @@ export async function saveConfig(config: PenaltyConfig): Promise<PenaltyConfig> 
 export async function release(userId: number, reason: string): Promise<void> {
   await apiClient.post(`/admin/security-penalties/users/${userId}/release`, { reason })
 }
+
+export interface ModerationRecord {
+  id: number
+  action: string
+  created_at: string
+  model: string
+  category: string
+  violation_count: number
+  ban_applied: boolean | null
+  ban_scope?: 'all' | 'openai' | null
+  ban_expires_at?: string | null
+  input_excerpt?: string | null
+}
+
+export interface ModerationRecordsPage {
+  current_count: number
+  threshold: number
+  auto_ban_enabled: boolean
+  account_banned: boolean // All-platform model request restriction
+  openai_banned: boolean
+  recorded_ban_count: number
+  items: ModerationRecord[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export async function listMyModerationRecords(page: number, pageSize = 10): Promise<ModerationRecordsPage> {
+  return (await apiClient.get<ModerationRecordsPage>('/user/security/moderation', {
+    params: { page, page_size: pageSize }
+  })).data
+}

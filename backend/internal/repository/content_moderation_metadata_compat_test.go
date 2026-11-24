@@ -56,7 +56,7 @@ func TestContentModerationRepositoryOptionalMetadataCompatibility(t *testing.T) 
 		t.Run(tc.name, func(t *testing.T) {
 			db, mock, err := sqlmock.New()
 			require.NoError(t, err)
-			args := make([]driver.Value, 28)
+			args := make([]driver.Value, 30)
 			for i := range args {
 				args[i] = sqlmock.AnyArg()
 			}

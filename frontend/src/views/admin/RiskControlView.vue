@@ -349,7 +349,7 @@
                       <div>{{ violationCountText(row) }}</div>
                       <div class="text-xs text-gray-400">
                         {{ row.email_sent ? t('admin.riskControl.emailSent') : t('admin.riskControl.emailNotSent') }}
-                        <span v-if="row.auto_banned"> / {{ t(row.ban_scope === 'openai' ? 'admin.riskControl.openaiRestricted' : 'admin.riskControl.autoBanned') }}</span>
+                        <span v-if="row.auto_banned"> / {{ t(banScopeLabel(row)) }}</span>
                       </div>
                       <button
                         v-if="canUnbanRow(row)"
@@ -961,6 +961,10 @@
                 <p class="mt-1 text-xs text-gray-500">{{ t('admin.riskControl.banScopeHint') }}</p>
               </div>
               <div>
+                <label for="moderation-ban-duration" class="input-label">{{ t('admin.riskControl.banDurationHours') }}</label>
+                <input id="moderation-ban-duration" v-model.number="configForm.ban_duration_hours" type="number" min="1" max="8760" step="1" required class="input" />
+              </div>
+              <div>
                 <label class="input-label">{{ t('admin.riskControl.banThreshold') }}</label>
                 <input v-model.number="configForm.ban_threshold" type="number" min="1" max="1000" class="input" />
               </div>
@@ -1324,6 +1328,7 @@ const engineOptions: SelectOption[] = [{ value: 'openai', label: 'OpenAI' }, { v
 const engineLabel = (engine: ModerationEngine) => engine === 'typesafe' ? 'TypeSafe AI' : 'OpenAI'
 let statusTimer: number | null = null
 
+const defaultBanDurationHours = 24
 const configForm = reactive({
   engine: 'openai' as ModerationEngine,
   enabled: false,
@@ -1354,6 +1359,7 @@ const configForm = reactive({
   email_on_hit: true,
   auto_ban_enabled: true,
   ban_scope: 'all' as 'all' | 'openai',
+  ban_duration_hours: defaultBanDurationHours,
   cyber_policy_exclude_from_ban_count: false,
   ban_threshold: 10,
   violation_window_hours: 720,
@@ -1885,6 +1891,7 @@ function applyConfig(config: ContentModerationConfig) {
   configForm.email_on_hit = config.email_on_hit ?? true
   configForm.auto_ban_enabled = config.auto_ban_enabled ?? true
   configForm.ban_scope = config.ban_scope ?? 'all'
+  configForm.ban_duration_hours = config.ban_duration_hours ?? defaultBanDurationHours
   configForm.cyber_policy_exclude_from_ban_count = config.cyber_policy_exclude_from_ban_count ?? false
   configForm.ban_threshold = config.ban_threshold || 10
   configForm.violation_window_hours = config.violation_window_hours || 720
@@ -1968,6 +1975,12 @@ async function loadStatus(silent = true) {
 
 async function saveConfig() {
   if (saving.value || upstreamSelecting.value) return
+  const duration = configForm.ban_duration_hours
+  if (!Number.isInteger(duration) || duration < 1 || duration > 8760) {
+    activeSettingsTab.value = 'response'
+    appStore.showError(t('admin.riskControl.banDurationInvalid'))
+    return
+  }
   saving.value = true
   try {
     const modelFilterPayload = buildModelFilterPayload()
@@ -1999,6 +2012,7 @@ async function saveConfig() {
       email_on_hit: configForm.email_on_hit,
       auto_ban_enabled: configForm.auto_ban_enabled,
       ban_scope: configForm.ban_scope,
+      ban_duration_hours: duration,
       cyber_policy_exclude_from_ban_count: configForm.cyber_policy_exclude_from_ban_count,
       ban_threshold: Number(configForm.ban_threshold) || 10,
       violation_window_hours: Number(configForm.violation_window_hours) || 720,
@@ -2089,6 +2103,12 @@ function closeInputDetail() {
 }
 
 const recoveryUserID = ref<number | null>(null)
+function banScopeLabel(row: ContentModerationLog) {
+  if (row.ban_scope === 'all') return 'admin.riskControl.allPlatformsRestricted'
+  if (row.ban_scope === 'openai') return 'admin.riskControl.openaiRestricted'
+  return 'admin.riskControl.autoBanned'
+}
+
 function unbanUser(row: ContentModerationLog) { recoveryUserID.value = row.user_id ?? null }
 
 async function deleteFlaggedHash() {

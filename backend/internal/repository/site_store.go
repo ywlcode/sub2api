@@ -228,7 +228,13 @@ func redactSiteRow(table string, raw []byte, p site.Peer) (json.RawMessage, erro
 		if err := json.Unmarshal(obj["key"], &key); err != nil {
 			return nil, err
 		}
-		set("key", site.KeyDigest(p.Token, key))
+		if string(obj["key"]) == "null" {
+			// Outside the hex HMAC namespace, so even the sentinel itself
+			// cannot be presented as a credential on the secondary.
+			set("key", "!site-primary-admission:"+string(obj["id"]))
+		} else {
+			set("key", site.KeyDigest(p.Token, key))
+		}
 		if siteLegacySchemas[p.ConfigSchema] {
 			var limit int64
 			if raw, ok := obj["context_token_limit"]; ok {

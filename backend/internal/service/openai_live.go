@@ -757,7 +757,7 @@ func (s *OpenAIGatewayService) GetLiveCallForIdentity(
 func (s *OpenAIGatewayService) ProxyLiveSideband(
 	ctx context.Context,
 	record *LiveCallRecord,
-	downstream *coderws.Conn,
+	downstream GatewayClientWebSocket,
 ) error {
 	if record == nil || downstream == nil {
 		return ErrLiveCallNotFound

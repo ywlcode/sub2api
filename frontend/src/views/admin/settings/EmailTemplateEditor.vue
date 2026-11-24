@@ -280,6 +280,7 @@ const fallbackPlaceholders = [
   "{{moderation_score}}",
   "{{violation_count}}",
   "{{ban_threshold}}",
+  "{{ban_expires_at}}",
   "{{rule_name}}",
   "{{severity}}",
   "{{alert_status}}",
@@ -390,12 +391,17 @@ const eventDisplayMeta: Record<string, EventDisplayMeta> = {
   },
   "content_moderation.violation_notice": {
     label: "内容审计违规提醒",
-    timing: "用户请求命中内容审计或风控规则、但尚未被禁用时发送。",
+    timing: "用户请求命中内容审计或风控规则时发送。",
     categoryLabel: "风控",
   },
   "content_moderation.account_disabled": {
-    label: "内容审计禁用账号",
-    timing: "内容审计违规次数达到封禁阈值并自动禁用用户账号时发送。",
+    label: "全部平台的模型请求受限",
+    timing: "内容审计违规次数达到封禁阈值并限制全部平台的模型请求时发送。用户仍可登录并使用控制台。",
+    categoryLabel: "风控",
+  },
+  "content_moderation.openai_restricted": {
+    label: "OpenAI 模型请求受限",
+    timing: "内容审计自动限制 OpenAI 模型请求时发送。用户仍可登录、使用控制台及其他平台。",
     categoryLabel: "风控",
   },
   "ops.alert": {
@@ -454,12 +460,17 @@ const eventDisplayMetaEn: Record<string, EventDisplayMeta> = {
   },
   "content_moderation.violation_notice": {
     label: "Risk Control Violation Notice",
-    timing: "Sent when a user request triggers content moderation or risk-control rules but the account is not disabled yet.",
+    timing: "Sent when a user request triggers content moderation or risk-control rules.",
     categoryLabel: "Risk Control",
   },
   "content_moderation.account_disabled": {
-    label: "Risk Control Account Disabled",
-    timing: "Sent when content moderation reaches the ban threshold and automatically disables the user account.",
+    label: "Model Requests Blocked on All Platforms",
+    timing: "Sent when content moderation reaches the ban threshold and blocks model requests on all platforms. The user can still sign in and use the dashboard.",
+    categoryLabel: "Risk Control",
+  },
+  "content_moderation.openai_restricted": {
+    label: "OpenAI Model Requests Blocked",
+    timing: "Sent when content moderation blocks OpenAI model requests. The user can still sign in, use the dashboard, and use other platforms.",
     categoryLabel: "Risk Control",
   },
   "ops.alert": {

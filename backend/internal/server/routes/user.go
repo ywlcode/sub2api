@@ -55,6 +55,9 @@ func RegisterUserRoutes(
 				user.GET("/security/events", h.Admin.PromptAudit.MyPenaltyEvents)
 				user.GET("/security/events/:id", h.Admin.PromptAudit.MyPenaltyEvent)
 			}
+			if h.Admin != nil && h.Admin.ContentModeration != nil {
+				user.GET("/security/moderation", h.Admin.ContentModeration.MyModerationRecords)
+			}
 			user.PUT("/password", h.User.ChangePassword)
 			user.PUT("", h.User.UpdateProfile)
 			user.GET("/aff", h.User.GetAffiliate)

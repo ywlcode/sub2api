@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/stretchr/testify/require"
@@ -66,15 +67,19 @@ func TestContentModerationPlatformAccessIndependentOfAuditAndOtherPlatforms(t *t
 }
 
 func TestContentModerationOpenAIBanEvidenceAndEmail(t *testing.T) {
-	r := &moderationRecoveryRepo{contentModerationTestRepo: &contentModerationTestRepo{}, result: ModerationHitResult{Accepted: true, Count: 3, BanApplied: true, OpenAIBlocked: true}}
+	deadline := time.Date(2026, 12, 1, 23, 30, 0, 0, time.UTC)
+	r := &moderationRecoveryRepo{contentModerationTestRepo: &contentModerationTestRepo{}, result: ModerationHitResult{Accepted: true, Count: 3, BanApplied: true, OpenAIBlocked: true, BanExpiresAt: &deadline}}
 	s := &ContentModerationService{repo: r}
 	id, version := int64(7), int64(0)
 	log := &ContentModerationLog{UserID: &id, UserEmail: "fixture@example.test", Flagged: true, moderationVersion: &version}
 	cfg := defaultContentModerationConfig()
 	cfg.AutoBanEnabled = true
 	cfg.BanScope = ContentModerationBanScopeOpenAI
+	cfg.BanDurationHours = 48
 	require.True(t, s.applyFlaggedAccountSideEffects(context.Background(), cfg, log))
 	require.Equal(t, ContentModerationBanScopeOpenAI, r.hits[0].BanScope)
+	require.Equal(t, 48, r.hits[0].BanDurationHours)
+	require.Equal(t, &deadline, log.BanExpiresAt)
 	require.True(t, log.AutoBanned)
 	require.Equal(t, ContentModerationBanScopeOpenAI, log.BanScope)
 	body := buildContentModerationAccountDisabledEmailBody("Fixture", log, cfg)

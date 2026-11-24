@@ -10,6 +10,24 @@ const initial = { user_id: 306, version: 2, generation: 1, current_count: 10, au
 const options = { global: { stubs: { BaseDialog: { props: ['show'], template: '<div v-if="show"><slot /></div>' } } } }
 beforeEach(() => { vi.resetAllMocks(); get.mockResolvedValue({ ...initial }); manage.mockResolvedValue({ ...initial, version: 3, current_count: 0, generation: 2 }); list.mockResolvedValue({ items: [], total: 0 }) })
 describe('moderation user controls', () => {
+  it.each([
+    { state: { status: 'active', all_platforms_blocked: true }, label: 'admin.riskControl.allPlatformsRestricted' },
+    { state: { status: 'disabled', owned_disable: true }, label: 'admin.moderationUsers.legacyDisable' },
+  ])('can lift the moderation restriction indicated by $label', async ({ state, label }) => {
+    get.mockResolvedValue({ ...initial, owned_disable: false, ...state })
+    manage.mockResolvedValue({ ...initial, status: 'active', owned_disable: false, all_platforms_blocked: false })
+    const wrapper = mount(Panel, { props: { userId: 306 } })
+    await flushPromises()
+    expect(wrapper.text()).toContain(label)
+    expect(wrapper.get('[data-test="unban"]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-test="reason"]').setValue('review complete')
+    await wrapper.get('[data-test="confirm"]').setValue(true)
+    await wrapper.get('[data-test="unban"]').trigger('click')
+    await flushPromises()
+    expect(manage).toHaveBeenCalledWith(306, { action: 'unban', version: 2, reason: 'review complete', confirm: true })
+    expect(wrapper.text()).not.toContain(label)
+  })
+
   it('releases an OpenAI ban while the account is active', async () => {
     get.mockResolvedValue({ ...initial, status: 'active', owned_disable: false, openai_blocked: true })
     manage.mockResolvedValue({ ...initial, status: 'active', owned_disable: false, openai_blocked: false, version: 3 })
@@ -88,8 +106,9 @@ describe('moderation user controls', () => {
     expect(wrapper.get('[data-test="email-exempt"]').element).toHaveProperty('checked', false)
   })
   it('lists concrete types and filters each independently', async () => {
-    list.mockResolvedValue({ items: [{ ...initial, keyword_exempt: true, api_audit_exempt: true, email_exempt: true }], total: 1 })
+    list.mockResolvedValue({ items: [{ ...initial, status: 'active', all_platforms_blocked: true, owned_disable: false, keyword_exempt: true, api_audit_exempt: true, email_exempt: true }], total: 1 })
     const wrapper = mount(Summary, options); await flushPromises()
+    expect(wrapper.get('tbody').text()).toContain('admin.riskControl.allPlatformsRestricted')
     expect(wrapper.get('tbody').text()).toContain('admin.moderationUsers.keywordExemption')
     expect(wrapper.get('tbody').text()).toContain('admin.moderationUsers.apiAuditExemption')
     expect(wrapper.get('tbody').text()).toContain('admin.moderationUsers.emailExemption')

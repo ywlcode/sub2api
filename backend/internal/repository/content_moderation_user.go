@@ -17,14 +17,14 @@ const moderationUserProjection = `SELECT u.id, COALESCE(s.version,0), COALESCE(s
  u.status, (SELECT COUNT(*) FROM content_moderation_user_hits h WHERE h.user_id=u.id
  AND h.generation=COALESCE(s.generation,0) AND h.created_at >= $1
  AND ($2::bool=FALSE OR h.action<>'cyber_policy')),
- COALESCE(s.reason,''),s.actor_id,s.updated_at,COALESCE(s.openai_blocked,FALSE)
+ COALESCE(s.reason,''),s.actor_id,s.updated_at,COALESCE(s.openai_blocked,FALSE),COALESCE(s.all_platforms_blocked,FALSE)
  FROM users u LEFT JOIN content_moderation_user_state s ON s.user_id=u.id `
 
 type moderationScanner interface{ Scan(...any) error }
 
 func scanModerationUser(row moderationScanner) (*service.ModerationUserState, error) {
 	s := new(service.ModerationUserState)
-	err := row.Scan(&s.UserID, &s.Version, &s.Generation, &s.AutoBanExempt, &s.KeywordExempt, &s.APIAuditExempt, &s.EmailExempt, &s.OwnedDisable, &s.Status, &s.CurrentCount, &s.Reason, &s.ActorID, &s.UpdatedAt, &s.OpenAIBlocked)
+	err := row.Scan(&s.UserID, &s.Version, &s.Generation, &s.AutoBanExempt, &s.KeywordExempt, &s.APIAuditExempt, &s.EmailExempt, &s.OwnedDisable, &s.Status, &s.CurrentCount, &s.Reason, &s.ActorID, &s.UpdatedAt, &s.OpenAIBlocked, &s.AllPlatformsBlocked)
 	return s, err
 }
 
@@ -75,7 +75,7 @@ type lockedModerationUser struct {
 	revision, version, generation              int64
 	exempt                                     bool
 	keywordExempt, apiAuditExempt, emailExempt bool
-	openaiBlocked                              bool
+	openaiBlocked, allPlatformsBlocked         bool
 	owned                                      sql.NullInt64
 }
 
@@ -92,7 +92,7 @@ func lockModerationUser(ctx context.Context, tx *sql.Tx, id int64) (lockedModera
 	if err != nil {
 		return u, err
 	}
-	err = tx.QueryRowContext(ctx, `SELECT version, generation, auto_ban_exempt, owned_status_revision, keyword_exempt, api_audit_exempt, email_exempt, openai_blocked FROM content_moderation_user_state WHERE user_id=$1 FOR UPDATE`, id).Scan(&u.version, &u.generation, &u.exempt, &u.owned, &u.keywordExempt, &u.apiAuditExempt, &u.emailExempt, &u.openaiBlocked)
+	err = tx.QueryRowContext(ctx, `SELECT version, generation, auto_ban_exempt, owned_status_revision, keyword_exempt, api_audit_exempt, email_exempt, openai_blocked, all_platforms_blocked FROM content_moderation_user_state WHERE user_id=$1 FOR UPDATE`, id).Scan(&u.version, &u.generation, &u.exempt, &u.owned, &u.keywordExempt, &u.apiAuditExempt, &u.emailExempt, &u.openaiBlocked, &u.allPlatformsBlocked)
 	return u, err
 }
 
@@ -113,7 +113,7 @@ func (r *contentModerationRepository) ManageModerationUser(ctx context.Context, 
 	case "unban":
 		if u.status == service.StatusDisabled {
 			if !u.owned.Valid || u.owned.Int64 != u.revision {
-				if !u.openaiBlocked {
+				if !u.openaiBlocked && !u.allPlatformsBlocked {
 					return infraerrors.Conflict("MODERATION_DISABLE_NOT_OWNED", "MODERATION_DISABLE_NOT_OWNED: current disable is not owned by content moderation; review its source separately")
 				}
 				// Releasing our platform ban must not undo another source's disable.
@@ -131,6 +131,7 @@ func (r *contentModerationRepository) ManageModerationUser(ctx context.Context, 
 		}
 		u.owned = sql.NullInt64{}
 		u.openaiBlocked = false
+		u.allPlatformsBlocked = false
 	case "reset":
 		u.generation++
 	case "exemption":
@@ -153,7 +154,7 @@ func (r *contentModerationRepository) ManageModerationUser(ctx context.Context, 
 	if u.owned.Valid {
 		owned = u.owned.Int64
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE content_moderation_user_state SET version=version+1,generation=$2,auto_ban_exempt=$3,owned_status_revision=$4,reason=$5,actor_id=$6,keyword_exempt=$7,api_audit_exempt=$8,email_exempt=$9,openai_blocked=$10,updated_at=NOW() WHERE user_id=$1`, id, u.generation, u.exempt, owned, in.Reason, in.ActorID, u.keywordExempt, u.apiAuditExempt, u.emailExempt, u.openaiBlocked)
+	_, err = tx.ExecContext(ctx, `UPDATE content_moderation_user_state SET version=version+1,generation=$2,auto_ban_exempt=$3,owned_status_revision=$4,reason=$5,actor_id=$6,keyword_exempt=$7,api_audit_exempt=$8,email_exempt=$9,openai_blocked=$10,all_platforms_blocked=$11,updated_at=NOW() WHERE user_id=$1`, id, u.generation, u.exempt, owned, in.Reason, in.ActorID, u.keywordExempt, u.apiAuditExempt, u.emailExempt, u.openaiBlocked, u.allPlatformsBlocked)
 	if err != nil {
 		return err
 	}
@@ -197,30 +198,35 @@ func (r *contentModerationRepository) ApplyModerationHit(ctx context.Context, in
 		return result, err
 	}
 	if in.AutoBan && in.Threshold > 0 && result.Count >= in.Threshold && !u.exempt && u.role != service.RoleAdmin && u.status == service.StatusActive {
+		hours := in.BanDurationHours
+		if hours == 0 {
+			hours = service.DefaultContentModerationBanDurationHours
+		}
 		if service.NormalizeContentModerationBanScope(in.BanScope) == service.ContentModerationBanScopeOpenAI {
-			if !u.openaiBlocked {
-				_, err = tx.ExecContext(ctx, `UPDATE content_moderation_user_state SET openai_blocked=TRUE,version=version+1,updated_at=NOW() WHERE user_id=$1`, in.UserID)
+			if !u.openaiBlocked && !u.allPlatformsBlocked {
+				err = tx.QueryRowContext(ctx, `UPDATE content_moderation_user_state SET openai_blocked=TRUE,
+					recorded_ban_count=recorded_ban_count+1,openai_ban_expires_at=statement_timestamp()+make_interval(hours => $2),
+					version=version+1,updated_at=NOW() WHERE user_id=$1 RETURNING openai_ban_expires_at`, in.UserID, hours).Scan(&result.BanExpiresAt)
 				if err != nil {
 					return result, err
 				}
 				result.BanApplied = true
 				u.openaiBlocked = true
 			}
-		} else {
-			var revision int64
-			if err = tx.QueryRowContext(ctx, `UPDATE users SET status='disabled',updated_at=NOW() WHERE id=$1 AND status='active' RETURNING moderation_status_revision`, in.UserID).Scan(&revision); err != nil {
-				return result, err
-			}
-			_, err = tx.ExecContext(ctx, `UPDATE content_moderation_user_state SET owned_status_revision=$2,version=version+1,updated_at=NOW() WHERE user_id=$1`, in.UserID, revision)
+		} else if !u.allPlatformsBlocked {
+			err = tx.QueryRowContext(ctx, `UPDATE content_moderation_user_state SET all_platforms_blocked=TRUE,
+				recorded_ban_count=recorded_ban_count+1,account_ban_expires_at=statement_timestamp()+make_interval(hours => $2),
+				version=version+1,updated_at=NOW() WHERE user_id=$1 RETURNING account_ban_expires_at`, in.UserID, hours).Scan(&result.BanExpiresAt)
 			if err != nil {
 				return result, err
 			}
 			result.BanApplied = true
-			result.OwnedDisable = true
+			u.allPlatformsBlocked = true
 		}
 	} else {
 		result.OwnedDisable = u.status == service.StatusDisabled && u.owned.Valid && u.owned.Int64 == u.revision
 	}
+	result.AllPlatformsBlocked = u.allPlatformsBlocked
 	result.OpenAIBlocked = u.openaiBlocked
 	if err = tx.Commit(); err != nil {
 		return service.ModerationHitResult{}, err
@@ -233,4 +239,13 @@ func (r *contentModerationRepository) IsOpenAIBlocked(ctx context.Context, userI
 	var blocked bool
 	err := r.db.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM content_moderation_user_state WHERE user_id=$1 AND openai_blocked)`, userID).Scan(&blocked)
 	return blocked, err
+}
+
+func (r *contentModerationRepository) ModerationPlatformAccess(ctx context.Context, userID int64) (allBlocked, openAIBlocked bool, err error) {
+	err = r.db.QueryRowContext(ctx, `SELECT all_platforms_blocked,openai_blocked
+		FROM content_moderation_user_state WHERE user_id=$1`, userID).Scan(&allBlocked, &openAIBlocked)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, false, nil
+	}
+	return allBlocked, openAIBlocked, err
 }

@@ -48,6 +48,7 @@ export interface ContentModerationConfig {
   email_on_hit: boolean
   auto_ban_enabled: boolean
   ban_scope?: 'all' | 'openai'
+  ban_duration_hours?: number
   ban_threshold: number
   violation_window_hours: number
   retry_count: number
@@ -141,6 +142,7 @@ export interface UpdateContentModerationConfig {
   email_on_hit?: boolean
   auto_ban_enabled?: boolean
   ban_scope?: 'all' | 'openai'
+  ban_duration_hours?: number
   ban_threshold?: number
   violation_window_hours?: number
   retry_count?: number
@@ -312,7 +314,8 @@ export interface ModerationUserState {
   keyword_exempt: boolean
   api_audit_exempt: boolean
   email_exempt: boolean
-  owned_disable: boolean
+  owned_disable: boolean // Legacy account disable owned by content moderation
+  all_platforms_blocked?: boolean
   openai_blocked?: boolean
   status: string
   current_count: number

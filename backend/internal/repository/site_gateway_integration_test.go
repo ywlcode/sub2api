@@ -162,3 +162,69 @@ func TestSiteSecondaryGatewayUsesLocalAuthSchedulerProtocolAndBilling(t *testing
 	require.NoError(t, primaryDB.QueryRow(`SELECT balance FROM users WHERE id=$1`, user.ID).Scan(&primaryBalance))
 	require.Equal(t, localBalance, primaryBalance)
 }
+
+// An unreplicated key must reach primary admission with its original credential,
+// including while a secondary's last installed configuration predates the ban.
+func TestSiteModerationForwardedKeyUsesCurrentPrimaryRestriction(t *testing.T) {
+	ctx := context.Background()
+	db, client := repository.SiteTestDatabase(t)
+	replica, _ := repository.SiteTestDatabase(t)
+	group := repository.SiteTestGroup(t, client, &service.Group{Name: "primary-only", Platform: service.PlatformDeepseek, Status: service.StatusActive})
+	user := repository.SiteTestUser(t, client, &service.User{Email: "forward@example.invalid", PasswordHash: "unused", Balance: 10})
+	key := repository.SiteTestKey(t, client, &service.APIKey{UserID: user.ID, GroupID: &group.ID, Key: uuid.NewString(), Name: "primary-only"})
+	peer := site.Peer{ID: "office", Token: strings.Repeat("t", 32)}
+	cfg := &config.Config{Site: site.Config{Mode: site.Primary, ID: "main", Peers: []site.Peer{peer}}}
+	primary, err := repository.NewSiteStore(db, cfg)
+	require.NoError(t, err)
+	manager, err := site.New(cfg.Site, primary, 1<<20)
+	require.NoError(t, err)
+	primaryRouter := gin.New()
+	primaryRouter.POST(site.SyncPath, manager.SyncHandler)
+	keys := service.NewAPIKeyService(repository.NewAPIKeyRepository(client, db), nil, nil, nil, nil, nil, cfg)
+	moderation := service.NewContentModerationService(nil, repository.NewContentModerationRepository(db), nil, nil, nil, nil, nil, nil)
+	gateway := handler.NewOpenAIGatewayHandler(nil, nil, nil, keys, nil, nil, moderation, nil, cfg)
+	primaryRouter.POST("/v1/responses", gin.HandlerFunc(middleware.NewAPIKeyAuthMiddleware(keys, nil, cfg)),
+		gateway.ContentModerationPreAdmission, gateway.ContentModerationPlatformAdmission, func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	server := httptest.NewServer(primaryRouter)
+	defer server.Close()
+
+	localCfg := &config.Config{Site: site.Config{Mode: site.Secondary, ID: peer.ID, Token: peer.Token, PrimaryURL: server.URL, AllowHTTP: true}}
+	local, err := repository.NewSiteStore(replica, localCfg)
+	require.NoError(t, err)
+	secondary, err := site.New(localCfg.Site, local, 1<<20)
+	require.NoError(t, err)
+	secondary.Start()
+	defer secondary.Stop()
+	require.Eventually(t, secondary.Ready, 3*time.Second, 10*time.Millisecond)
+	var count int
+	require.NoError(t, replica.QueryRowContext(ctx, `SELECT count(*) FROM api_keys`).Scan(&count))
+	require.Zero(t, count)
+	router := gin.New()
+	router.Use(secondary.Ingress())
+	router.POST("/v1/responses", func(c *gin.Context) { t.Error("unreplicated key reached local gateway") })
+	ingress := httptest.NewServer(router)
+	defer ingress.Close()
+	request := func(want int, reason string) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, ingress.URL+"/v1/responses", strings.NewReader(`{"model":"deepseek-chat","input":"hello"}`))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+key.Key)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := ingress.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		require.Equal(t, want, resp.StatusCode, string(body))
+		if reason != "" {
+			require.Contains(t, string(body), reason)
+		}
+	}
+	request(http.StatusNoContent, "")
+	_, err = db.ExecContext(ctx, `INSERT INTO content_moderation_user_state(user_id,all_platforms_blocked) VALUES($1,TRUE)`, user.ID)
+	require.NoError(t, err)
+	request(http.StatusForbidden, "all_platforms_access_restricted")
+	_, err = db.ExecContext(ctx, `DELETE FROM content_moderation_user_state WHERE user_id=$1`, user.ID)
+	require.NoError(t, err)
+	request(http.StatusNoContent, "")
+}

@@ -159,7 +159,7 @@ export default {
           cyberSessionBlock: 'Cyber session auto-block',
           cyberSessionBlockHint: 'When enabled, locally block an upstream cyber_policy hit for the TTL when an explicit session ID is available. Without a session ID, an identical retry is blocked using a fingerprint of the visible request content; other requests still go upstream. IP, client type, cache keys and history length never identify a blocked session.',
           riskControlUserAllowlist: 'Risk control allowlist',
-          riskControlUserAllowlistHint: 'Enter any email keyword to search for matching users. Allowlisted users will not trigger account bans or local blocking, but upstream restrictions still apply. This feature is typically used for trusted downstream relays.',
+          riskControlUserAllowlistHint: 'Enter any email keyword to search for matching users. Allowlisted users will not trigger platform bans or local blocking, but upstream restrictions still apply. This feature is typically used for trusted downstream relays.',
           cyberSessionBlockTTL: 'Block TTL (seconds)',
           cyberSessionIdentityStrict: 'Require explicit session identity',
           cyberSessionIdentityStrictHint: 'High-risk option, disabled by default. When enabled, missing, invalid, or conflicting identities are rejected before account selection and upstream forwarding. Later WebSocket turns may inherit the first verified identity on that connection, but an explicit identity switch closes the connection. Verify every client reliably sends thread_id or session_id before enabling.',

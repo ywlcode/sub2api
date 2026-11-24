@@ -235,15 +235,16 @@ func TestModerationMailManagementSaveFencesQueuedTasks(t *testing.T) {
 			state, err = svc.GetModerationUser(ctx, id)
 			require.NoError(t, err)
 			require.Equal(t, 1, state.CurrentCount)
-			require.Equal(t, service.StatusDisabled, state.Status)
-			require.True(t, state.OwnedDisable)
+			require.Equal(t, service.StatusActive, state.Status)
+			require.True(t, state.AllPlatformsBlocked)
+			require.False(t, state.OwnedDisable)
 			require.EqualValues(t, 2, state.Version, "the fresh hit applies the original auto-ban version increment")
 			assertLog("after-mail-save", 1, true, false)
 			require.Zero(t, delivered.Load(), "accepted current-version penalties do not imply an email exemption bypass")
 
 			state = saveEmail(state, false) // Revocation is another real save; it does not unban or reset.
-			require.Equal(t, service.StatusDisabled, state.Status)
-			// Restore the moderation-owned disable explicitly so a future authenticated request can run.
+			require.Equal(t, service.StatusActive, state.Status)
+			// Release all platforms so the next model request can run.
 			beforeUnban := state.Version
 			state, err = svc.ManageModerationUser(ctx, id, service.ModerationUserAction{Action: "unban", Version: beforeUnban, ActorID: 7, Reason: "restore separately", Confirm: true})
 			require.NoError(t, err)
@@ -258,11 +259,12 @@ func TestModerationMailManagementSaveFencesQueuedTasks(t *testing.T) {
 			state, err = svc.GetModerationUser(ctx, id)
 			require.NoError(t, err)
 			require.Equal(t, 2, state.CurrentCount)
-			require.True(t, state.OwnedDisable)
-			require.Equal(t, service.StatusDisabled, state.Status)
+			require.True(t, state.AllPlatformsBlocked)
+			require.False(t, state.OwnedDisable)
+			require.Equal(t, service.StatusActive, state.Status)
 			require.Equal(t, future.hit.Version+1, state.Version)
 			assertLog("after-mail-revocation", 2, true, true)
-			require.EqualValues(t, 2, delivered.Load(), "fresh revoked-version task sends violation and account-disable notices")
+			require.EqualValues(t, 2, delivered.Load(), "fresh revoked-version task sends violation and platform-ban notices")
 			assertLog("before-mail-save", 0, false, false)
 			assertLog("after-mail-save", 1, true, false)
 			wantAuditCalls := int64(0)

@@ -12,20 +12,21 @@ import (
 // Independent exemptions apply only to their content-moderation layer.
 // They never bypass upstream safety stops, authentication or other hard gates.
 type ModerationUserState struct {
-	UserID         int64      `json:"user_id"`
-	Version        int64      `json:"version"`
-	Generation     int64      `json:"generation"`
-	AutoBanExempt  bool       `json:"auto_ban_exempt"`
-	KeywordExempt  bool       `json:"keyword_exempt"`
-	APIAuditExempt bool       `json:"api_audit_exempt"`
-	EmailExempt    bool       `json:"email_exempt"`
-	OwnedDisable   bool       `json:"owned_disable"`
-	OpenAIBlocked  bool       `json:"openai_blocked"`
-	Status         string     `json:"status"`
-	CurrentCount   int        `json:"current_count"`
-	Reason         string     `json:"reason"`
-	ActorID        *int64     `json:"actor_id"`
-	UpdatedAt      *time.Time `json:"updated_at"`
+	UserID              int64      `json:"user_id"`
+	Version             int64      `json:"version"`
+	Generation          int64      `json:"generation"`
+	AutoBanExempt       bool       `json:"auto_ban_exempt"`
+	KeywordExempt       bool       `json:"keyword_exempt"`
+	APIAuditExempt      bool       `json:"api_audit_exempt"`
+	EmailExempt         bool       `json:"email_exempt"`
+	OwnedDisable        bool       `json:"owned_disable"`
+	OpenAIBlocked       bool       `json:"openai_blocked"`
+	AllPlatformsBlocked bool       `json:"all_platforms_blocked"`
+	Status              string     `json:"status"`
+	CurrentCount        int        `json:"current_count"`
+	Reason              string     `json:"reason"`
+	ActorID             *int64     `json:"actor_id"`
+	UpdatedAt           *time.Time `json:"updated_at"`
 }
 
 type ModerationUserAction struct {
@@ -41,23 +42,26 @@ type ModerationUserAction struct {
 }
 
 type ModerationHit struct {
-	UserID       int64
-	Version      int64
-	RequestID    string
-	Action       string
-	Since        time.Time
-	AutoBan      bool
-	BanScope     string
-	Threshold    int
-	ExcludeCyber bool
+	UserID           int64
+	Version          int64
+	RequestID        string
+	Action           string
+	Since            time.Time
+	AutoBan          bool
+	BanScope         string
+	BanDurationHours int
+	Threshold        int
+	ExcludeCyber     bool
 }
 
 type ModerationHitResult struct {
-	Accepted      bool
-	Count         int
-	BanApplied    bool
-	OwnedDisable  bool
-	OpenAIBlocked bool
+	Accepted            bool
+	Count               int
+	BanApplied          bool
+	AllPlatformsBlocked bool
+	BanExpiresAt        *time.Time
+	OwnedDisable        bool
+	OpenAIBlocked       bool
 }
 
 // Platform admission reads durable state directly so releasing a ban takes effect
@@ -66,18 +70,56 @@ type ContentModerationPlatformBanRepository interface {
 	IsOpenAIBlocked(context.Context, int64) (bool, error)
 }
 
-func (s *ContentModerationService) CheckPlatformAccess(ctx context.Context, userID int64, platform string) error {
-	if s == nil || userID <= 0 || (platform != PlatformOpenAI && platform != PlatformComposite && platform != "") {
-		return nil
+type ContentModerationPlatformAccessRepository interface {
+	ModerationPlatformAccess(context.Context, int64) (allBlocked bool, openAIBlocked bool, err error)
+}
+
+// ModerationPlatformAccess is valid for one HTTP request or one WebSocket turn.
+// Older repositories can answer the OpenAI question only after target resolution.
+type ModerationPlatformAccess struct {
+	openAIBlocked bool
+	legacy        ContentModerationPlatformBanRepository
+	userID        int64
+}
+
+func platformCheckUnavailable() error {
+	return infraerrors.ServiceUnavailable("security_platform_check_unavailable", "平台权限检查暂时不可用")
+}
+
+// ReadPlatformAccess checks the user-wide restriction before platform selection.
+func (s *ContentModerationService) ReadPlatformAccess(ctx context.Context, userID int64) (ModerationPlatformAccess, error) {
+	var access ModerationPlatformAccess
+	if s == nil || userID <= 0 {
+		return access, nil
 	}
-	repo, ok := s.repo.(ContentModerationPlatformBanRepository)
+	repo, ok := s.repo.(ContentModerationPlatformAccessRepository)
 	if !ok {
-		// Legacy adapters that cannot persist platform bans cannot issue them.
+		access.legacy, _ = s.repo.(ContentModerationPlatformBanRepository)
+		access.userID = userID
+		return access, nil
+	}
+	allBlocked, openAIBlocked, err := repo.ModerationPlatformAccess(ctx, userID)
+	if err != nil {
+		return access, platformCheckUnavailable()
+	}
+	if allBlocked {
+		return access, infraerrors.Forbidden("all_platforms_access_restricted", "所有平台的模型访问已被内容审查限制，请联系管理员")
+	}
+	access.openAIBlocked = openAIBlocked
+	return access, nil
+}
+
+func (a ModerationPlatformAccess) Check(ctx context.Context, platform string) error {
+	if platform != PlatformOpenAI && platform != PlatformComposite && platform != "" {
 		return nil
 	}
-	blocked, err := repo.IsOpenAIBlocked(ctx, userID)
-	if err != nil {
-		return infraerrors.ServiceUnavailable("security_platform_check_unavailable", "平台权限检查暂时不可用")
+	blocked := a.openAIBlocked
+	if a.legacy != nil {
+		var err error
+		blocked, err = a.legacy.IsOpenAIBlocked(ctx, a.userID)
+		if err != nil {
+			return platformCheckUnavailable()
+		}
 	}
 	if blocked {
 		if platform != PlatformOpenAI {
@@ -86,6 +128,14 @@ func (s *ContentModerationService) CheckPlatformAccess(ctx context.Context, user
 		return infraerrors.Forbidden("openai_access_restricted", "OpenAI 平台访问已被内容审查限制，请联系管理员；其他平台仍可使用")
 	}
 	return nil
+}
+
+func (s *ContentModerationService) CheckPlatformAccess(ctx context.Context, userID int64, platform string) error {
+	access, err := s.ReadPlatformAccess(ctx, userID)
+	if err != nil {
+		return err
+	}
+	return access.Check(ctx, platform)
 }
 
 type ModerationUserRepository interface {
