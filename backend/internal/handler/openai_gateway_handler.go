@@ -1006,6 +1006,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	var rpmAdmission openAIRPMAdmission
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	var passthroughFailoverState openAIPassthroughFailoverState
+	var recoveryCapacity service.OpenAIRecoveryCapacityFailover
+	remainingWireCandidates := -1
 	omittedEncryptedHistory := false
 	upstreamAttempted := false
 
@@ -1046,7 +1048,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		body, forwardBody = clean, mapped
 		previousResponseID = ""
 		omittedEncryptedHistory = true
-		c.Request = c.Request.WithContext(next)
+		c.Request = c.Request.WithContext(recoveryCapacity.WithContext(next))
 		reqLog.Info("openai.encrypted_history_409_omitted", zap.Bool("context_loss", true))
 		return nil
 	}
@@ -1254,6 +1256,23 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if result != nil {
 			result.HeaderTimeoutRetries = headerTimeoutRetries
 		}
+		// The scheduler filters the rejected authority before ranking. A fresh
+		// native projection can still differ at the final wire gate. No request
+		// left for that candidate; finish the already-budgeted selection using
+		// distinct candidates, bounded by the scheduler's observed pool size.
+		if errors.Is(err, service.ErrOpenAIRecoveryCapacityCandidate) && recoveryCapacity.Matches(lastFailoverErr) {
+			if remainingWireCandidates < 0 {
+				remainingWireCandidates = max(1, scheduleDecision.CandidateCount)
+			}
+			remainingWireCandidates--
+			_, excluded := failedAccountIDs[account.ID]
+			if !excluded && remainingWireCandidates > 0 && !streamStarted && !c.Writer.Written() && !service.IsResponseCommitted(c) && openAIRequestAllowsFailoverReplay(c) {
+				failedAccountIDs[account.ID] = struct{}{}
+				continue
+			}
+			h.handleFailoverExhausted(c, lastFailoverErr, streamStarted || c.Writer.Written())
+			return
+		}
 		if retryOpenAIInitialAdmission(c, err, result, forwardBody, account.ID, failedAccountIDs, &switchCount, maxAccountSwitches) {
 			lastAdmissionErr = err
 			reqLog.Info("openai.admission_reselecting", zap.Int64("account_id", account.ID), zap.Int("switch_count", switchCount))
@@ -1383,10 +1402,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					if c.Writer.Written() {
 						streamStarted = true
 					}
-					if failoverErr.ShouldReportAccountScheduleFailure() {
+					capacityRejection := recoveryCapacity.Matches(failoverErr)
+					if !capacityRejection && failoverErr.ShouldReportAccountScheduleFailure() {
 						h.gatewayService.ReportOpenAIAccountScheduleResult(account, openAIAccountScheduleModel(c, account, forwardModel, requireCompact, nil), false, nil, err)
 					}
-					if service.OpenAIAgentRecoveryNoReplay(c.Request.Context()) {
+					allowCapacitySwitch := capacityRejection && !streamStarted && !service.IsResponseCommitted(c) && lastFailoverErr != failoverErr
+					if service.OpenAIAgentRecoveryNoReplay(c.Request.Context()) && !allowCapacitySwitch {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -4701,7 +4722,7 @@ func (h *OpenAIGatewayHandler) acquireImageGenerationSlot(c *gin.Context, stream
 
 // handleConcurrencyError handles concurrency-related acquire errors.
 func (h *OpenAIGatewayHandler) handleConcurrencyError(c *gin.Context, err error, slotType string, streamStarted bool) {
-	status, errType, code, message := concurrencyErrorResponse(err, slotType)
+	status, errType, code, message := localConcurrencyErrorResponse(c, err, slotType)
 	h.handleStreamingAwareErrorWithCode(c, status, errType, code, message, streamStarted, false)
 }
 

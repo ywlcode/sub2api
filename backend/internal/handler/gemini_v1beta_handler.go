@@ -1011,7 +1011,7 @@ func googleClientErrorType(status int) string {
 // googleConcurrencyError 以 Google 错误格式回写并发槽获取失败，状态码与文案
 // 沿用 concurrencyErrorResponse 的统一映射（客户端断开为 499）。
 func googleConcurrencyError(c *gin.Context, err error, slotType string) {
-	status, errType, code, message := concurrencyErrorResponse(err, slotType)
+	status, errType, code, message := localConcurrencyErrorResponse(c, err, slotType)
 	googleErrorWithType(c, status, errType, code, message)
 }
 

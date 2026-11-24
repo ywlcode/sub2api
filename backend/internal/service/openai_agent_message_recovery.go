@@ -529,6 +529,11 @@ func (s *OpenAIGatewayService) prepareOpenAIAgentRecoveryAttempt(ctx context.Con
 			return noop, nil
 		}
 	}
+	if capacity := recoveryCapacityFromContext(ctx); capacity != nil && request.omittedHistory {
+		if err := capacity.checkWire(account, req, body); err != nil {
+			return noop, err
+		}
+	}
 	wire := openAIAgentRecoveryWireDigest(req.URL.String(), req.Header, gjson.GetBytes(body, "model").String())
 	binding := openAIAgentRecoveryBinding{accountID: account.ID, config: openAIAgentRecoveryConfig(account, request.model), wire: wire, expiresAt: time.Now().Add(s.openAIWSSessionStickyTTL())}
 	if request.omittedErrorHistory && (request.errorHistoryRoute == nil || !sameOpenAIAgentRecoveryRoute(*request.errorHistoryRoute, binding)) {

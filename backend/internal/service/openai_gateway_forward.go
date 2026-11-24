@@ -1490,6 +1490,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			return nil, err
 		}
+		if capacity := recoveryCapacityFromContext(ctx); capacity != nil && capacity.failure != nil && (c.Writer.Written() || IsResponseCommitted(c)) {
+			if headerGuard != nil {
+				headerGuard.close()
+			}
+			return nil, capacity.failure
+		}
 		completeAgentRecovery, recoveryErr := s.prepareOpenAIAgentRecoveryAttempt(ctx, account, upstreamReq)
 		if recoveryErr != nil {
 			if headerGuard != nil {
@@ -1605,6 +1611,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				return s.handleErrorResponse(ctx, resp, c, account, body, resolveOpenAIErrorSchedulingModel(billingModel, upstreamModel))
 			}
 			if openAIAgentRecoveryPreservesHistory(ctx) {
+				if resp.StatusCode == http.StatusTooManyRequests {
+					if retry := s.recoveryCapacityRejection(ctx, c, account, resp, respBody); retry != nil {
+						return nil, retry
+					}
+					if after := resp.Header.Get("Retry-After"); !c.Writer.Written() && validOpenAIPassthroughRetryAfter(after, time.Now()) {
+						c.Header("Retry-After", after)
+					}
+				}
 				return s.handleErrorResponse(ctx, resp, c, account, body, resolveOpenAIErrorSchedulingModel(billingModel, upstreamModel))
 			}
 			if retryBody, reason, changed, retryErr := normalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, respBody); retryErr != nil {

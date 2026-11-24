@@ -210,6 +210,13 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletionsWithStartTime(
 	if err != nil {
 		return nil, err
 	}
+	// The official Flash Chat endpoint rejects JSON Schema. A relay serving
+	// the same model name can implement it, so use the resolved destination.
+	if upstreamModel == "deepseek-flash" && gjson.GetBytes(upstreamBody, "response_format.type").Str == "json_schema" && isDeepSeekAPIHost(targetURL) {
+		err := fmt.Errorf("model %q does not support response_format.type %q on the DeepSeek Chat API", originalModel, "json_schema")
+		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return nil, err
+	}
 	upstreamBody, err = normalizeStrictChatDeveloperRoles(account, targetURL, upstreamBody)
 	if err != nil {
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", err.Error())

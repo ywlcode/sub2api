@@ -734,7 +734,7 @@ func (s *OpenAIGatewayService) openAI409AccountRouteSupported(ctx context.Contex
 	if r == nil || !r.omittedHistory {
 		return true
 	}
-	return account != nil && account.IsOpenAI() && !account.HasManagedOpenAIConnections() && account.AuthConnectionID == "" &&
+	return recoveryCapacityFromContext(ctx).acceptsAccount(account) && account != nil && account.IsOpenAI() && !account.HasManagedOpenAIConnections() && account.AuthConnectionID == "" &&
 		!account.IsCopilotSDKEnabled() && !account.IsSIWCEnabled() &&
 		!account.IsExcelBPSEnabledForModel(model) && !account.IsPrismBrowserEnabledForModel(model) &&
 		s.resolveUpstreamProtocolFor(ctx, account, APIProtocolResponses, account.GetMappedModel(model)) == APIProtocolResponses &&

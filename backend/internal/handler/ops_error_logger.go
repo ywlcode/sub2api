@@ -31,6 +31,7 @@ const (
 	opsStreamKey                 = "ops_stream"
 	opsAccountIDKey              = "ops_account_id"
 	opsRoutingCapacityLimitedKey = "ops_routing_capacity_limited"
+	opsUserConcurrencyLimitedKey = "ops_user_concurrency_limited"
 	opsDedicatedErrorRecordedKey = "ops_dedicated_error_recorded"
 
 	opsUpstreamModelKey = service.OpsUpstreamModelKey
@@ -1180,7 +1181,12 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				parsed = terminal
 			}
 		}
-		if status < 400 {
+		// A provider can send the same response.failed code and message. Only
+		// the local slot rejection can assign this logical 429.
+		if c.GetBool(opsUserConcurrencyLimitedKey) {
+			status = http.StatusTooManyRequests
+			parsed = parsedOpsError{ErrorType: "rate_limit_error", Code: gatewayConcurrencyLimitCode, Message: "用户并发超限"}
+		} else if status < 400 {
 			if parsed.StreamFailure {
 				status = inferStreamFailureStatus(c, parsed)
 			} else {
@@ -2390,6 +2396,9 @@ func classifyOpsSeverity(errType string, status int) string {
 }
 
 func classifyOpsErrorLog(c *gin.Context, errType, message, code string, status int) (phase string, isBusinessLimited bool, errorOwner string, errorSource string) {
+	if c != nil && c.GetBool(opsUserConcurrencyLimitedKey) {
+		return "request", true, "client", "client_request"
+	}
 	phase = classifyOpsPhase(errType, message, code)
 	if service.IsOpsRequestScopedError(c) {
 		// 失败由请求内容决定：只按错误类型分类，上游错误上下文不参与归因。

@@ -10,6 +10,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	coderws "github.com/coder/websocket"
+	"github.com/gin-gonic/gin"
 )
 
 const statusClientClosedRequest = 499
@@ -104,6 +105,10 @@ func queueAuthRejectedResponse(err error) (int, string, string, string) {
 }
 
 func concurrencyErrorResponse(err error, slotType string) (int, string, string, string) {
+	return localConcurrencyErrorResponse(nil, err, slotType)
+}
+
+func localConcurrencyErrorResponse(c *gin.Context, err error, slotType string) (int, string, string, string) {
 	var queueErr *service.APIKeyQueueError
 	if errors.As(err, &queueErr) {
 		switch queueErr.Kind {
@@ -137,6 +142,9 @@ func concurrencyErrorResponse(err error, slotType string) (int, string, string, 
 	if errors.As(err, &concurrencyErr) {
 		if concurrencyErr.SlotType != "" {
 			slotType = concurrencyErr.SlotType
+		}
+		if slotType == "user" && c != nil {
+			c.Set(opsUserConcurrencyLimitedKey, true)
 		}
 		return http.StatusTooManyRequests, "rate_limit_error", gatewayConcurrencyLimitCode,
 			fmt.Sprintf("Concurrency limit exceeded for %s, please retry later", slotType)
