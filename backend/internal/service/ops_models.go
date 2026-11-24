@@ -51,6 +51,7 @@ type OpsErrorLog struct {
 	ClientRequestID string `json:"client_request_id"`
 	RequestID       string `json:"request_id"`
 	Message         string `json:"message"`
+	ClientMessage   string `json:"-"`
 
 	UserID      *int64 `json:"user_id"`
 	UserEmail   string `json:"user_email"`

@@ -56,9 +56,10 @@ INSERT INTO ops_error_logs (
   time_to_first_token_ms,
   created_at,
   api_key_prefix,
-  duration_ms
+  duration_ms,
+  client_error_message
 ) VALUES (
-  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39
+  $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40
 )`
 
 func NewOpsRepository(db *sql.DB) service.OpsRepository {
@@ -169,6 +170,7 @@ func opsInsertErrorLogArgs(input *service.OpsInsertErrorLogInput) []any {
 		input.CreatedAt,
 		opsNullString(input.APIKeyPrefix),
 		opsNullableDurationMs(input.DurationMs),
+		opsNullString(input.ClientMessage),
 	}
 }
 
@@ -252,6 +254,7 @@ SELECT
   COALESCE(e.client_request_id, ''),
   COALESCE(e.request_id, ''),
   COALESCE(e.error_message, ''),
+  COALESCE(e.client_error_message, ''),
   e.user_id,
   COALESCE(u.email, ''),
   e.api_key_id,
@@ -322,6 +325,7 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 			&item.ClientRequestID,
 			&item.RequestID,
 			&item.Message,
+			&item.ClientMessage,
 			&userID,
 			&userEmail,
 			&apiKeyID,

@@ -33,7 +33,7 @@ func observerOwnUsageRoute(c *gin.Context) bool {
 		return false
 	}
 	switch c.FullPath() {
-	case "/api/v1/usage", "/api/v1/usage/:id", "/api/v1/usage/:id/timing", "/api/v1/usage/stats", "/api/v1/usage/filter-options", "/api/v1/usage/errors", "/api/v1/usage/errors/:id", "/api/v1/usage/dashboard/models", "/api/v1/usage/dashboard/snapshot-v2":
+	case "/api/v1/usage", "/api/v1/usage/:id", "/api/v1/usage/:id/timing", "/api/v1/usage/stats", "/api/v1/usage/filter-options", "/api/v1/usage/errors", "/api/v1/usage/dashboard/models", "/api/v1/usage/dashboard/snapshot-v2":
 		return true
 	default:
 		return false

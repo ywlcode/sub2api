@@ -430,6 +430,7 @@ var siteContractColumns = map[string][]siteColumn{
 		{Name: "updated_at", Type: "timestamptz", Nullable: false},
 	},
 	"ops_error_logs": {
+		{Name: "client_error_message", Type: "text", Nullable: true, Optional: true, Default: "null"},
 		{Name: "id", Type: "int8", Nullable: false},
 		{Name: "request_id", Type: "varchar", Nullable: true},
 		{Name: "client_request_id", Type: "varchar", Nullable: true},

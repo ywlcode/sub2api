@@ -95,8 +95,9 @@ type OpsInsertErrorLogInput struct {
 	IsBusinessLimited bool
 	IsCountTokens     bool // 是否为 count_tokens 请求
 
-	ErrorMessage string
-	ErrorBody    string
+	ErrorMessage  string
+	ClientMessage string // Only the public message emitted on the final response.
+	ErrorBody     string
 
 	ErrorSource string
 	ErrorOwner  string

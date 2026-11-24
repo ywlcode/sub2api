@@ -77,9 +77,9 @@ func TestToUserErrorRequest_RedactsSensitiveFields(t *testing.T) {
 		Platform:        "openai",
 		Phase:           "request",
 		Type:            "rate_limit_error",
-		Message:         "rate limit exceeded",
-		APIKeyName:      "my-key",
-		APIKeyDeleted:   true,
+		Message:         "private diagnostic", ClientMessage: "rate limit exceeded",
+		APIKeyName:    "my-key",
+		APIKeyDeleted: true,
 	}
 	out := ToUserErrorRequest(src)
 	if out.ID != 123 {
@@ -110,16 +110,16 @@ func TestToUserErrorRequestDetail_WhitelistAndRedacts(t *testing.T) {
 	upstreamStatus := 503
 	src := &OpsErrorLogDetail{
 		OpsErrorLog: OpsErrorLog{
-			ID:               999,
-			CreatedAt:        time.Unix(1000, 0).UTC(),
-			Model:            "gpt-4",
-			RequestedModel:   "gpt-4-turbo",
-			InboundEndpoint:  "/v1/chat/completions",
-			StatusCode:       502,
-			Platform:         "openai",
-			Phase:            "upstream",
-			Type:             "api_error",
-			Message:          "upstream error",
+			ID:              999,
+			CreatedAt:       time.Unix(1000, 0).UTC(),
+			Model:           "gpt-4",
+			RequestedModel:  "gpt-4-turbo",
+			InboundEndpoint: "/v1/chat/completions",
+			StatusCode:      502,
+			Platform:        "openai",
+			Phase:           "upstream",
+			Type:            "api_error",
+			Message:         "private diagnostic", ClientMessage: "upstream error",
 			UserID:           &uid,
 			UserEmail:        "secret@example.com",
 			ClientIP:         func() *string { s := "1.2.3.4"; return &s }(),

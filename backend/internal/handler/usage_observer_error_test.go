@@ -40,7 +40,6 @@ func ownErrorsRouter(repo *observerErrorRepo, role, enabled string) *gin.Engine 
 		c.Set(string(middleware.ContextKeyUserRole), role)
 	})
 	router.GET("/usage/errors", h.ListErrors)
-	router.GET("/usage/errors/:id", h.GetErrorDetail)
 	return router
 }
 
@@ -61,10 +60,10 @@ func TestOwnUsageErrorsKeepCyberEvidenceOutOfUserResponses(t *testing.T) {
 					ErrorBody:   tc.body,
 				}}
 				router := ownErrorsRouter(repo, role, "true")
-				for path, record := range map[string]string{"/usage/errors": "data.items.0", "/usage/errors/7": "data"} {
-					w := usageGET(router, path)
+				{
+					w := usageGET(router, "/usage/errors")
 					require.Equal(t, 200, w.Code)
-					row := gjson.Get(w.Body.String(), record)
+					row := gjson.Get(w.Body.String(), "data.items.0")
 					require.EqualValues(t, tc.status, row.Get("status_code").Int())
 					if tc.kind == "cyber_session_identity_rejected" {
 						require.Contains(t, row.Get("message").String(), "session_id")
@@ -93,7 +92,7 @@ func TestObserverUsageErrorsScopeAndVisibility(t *testing.T) {
 			w := usageGET(router, "/usage/errors?user_id=999&account_id=8&group_id=9&phase=upstream&status_code=502&start_date=2026-09-01&end_date=2026-09-02")
 			if enabled == "false" {
 				require.Equal(t, 403, w.Code)
-				require.Equal(t, 403, usageGET(router, "/usage/errors/7").Code)
+				require.Equal(t, 404, usageGET(router, "/usage/errors/7").Code)
 				require.Zero(t, repo.calls)
 				return
 			}
@@ -105,11 +104,6 @@ func TestObserverUsageErrorsScopeAndVisibility(t *testing.T) {
 			require.Equal(t, []int{502}, repo.filter.StatusCodes)
 			require.NotNil(t, repo.filter.StartTime)
 			require.NotContains(t, w.Body.String(), "secret-prefix")
-			w = usageGET(router, "/usage/errors/7")
-			require.Equal(t, 200, w.Code, w.Body.String())
-			require.Contains(t, w.Body.String(), "own-error")
-			require.NotContains(t, w.Body.String(), "secret-prefix")
-			owner = 999
 			require.Equal(t, 404, usageGET(router, "/usage/errors/7").Code)
 		})
 	}

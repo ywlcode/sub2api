@@ -473,6 +473,7 @@ func TestOpsErrorLoggerMiddleware_CapturesSplitResponsesFailedSSE(t *testing.T) 
 	job := <-opsErrorLogQueue
 	require.Equal(t, http.StatusTooManyRequests, job.entry.StatusCode)
 	require.Equal(t, "rate_limit_error", job.entry.ErrorType)
+	require.Equal(t, "Too many pending requests", job.entry.ClientMessage)
 	require.Contains(t, job.entry.ErrorMessage, "Too many pending requests")
 }
 
@@ -2371,4 +2372,15 @@ func TestLogOpsStreamError_UserBalanceClearsAccountAttribution(t *testing.T) {
 	require.Nil(t, entry.UpstreamStatusCode)
 	require.Empty(t, entry.UpstreamModel)
 	require.Empty(t, entry.UpstreamEndpoint)
+}
+
+func TestPublicErrorMessageNeverFallsBackToAuditPayload(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{`{"error":{"message":"configured public message","provider_debug":"private"}}`, "configured public message"},
+		{`{"provider_debug":"private"}`, ""},
+		{"<html>private upstream trace</html>", ""},
+		{"event: error\ndata: {\"type\":\"error\",\"error\":{\"code\":\"internal\"}}\n\n", ""},
+	} {
+		require.Equal(t, tc.want, parseOpsErrorResponse([]byte(tc.body)).ClientMessage)
+	}
 }

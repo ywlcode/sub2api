@@ -41,7 +41,7 @@ func logOpsSubagentRejection(c *gin.Context, ops *service.OpsService) {
 		Stream: rejection.Stream, RequestType: &requestTypeValue, UserAgent: c.GetHeader("User-Agent"),
 		ErrorPhase: "request", ErrorType: "permission_error", Severity: "P3",
 		StatusCode: http.StatusForbidden, IsBusinessLimited: true,
-		ErrorMessage: middleware2.GroupSubagentsBlockedMessage, ErrorBody: body,
+		ErrorMessage: middleware2.GroupSubagentsBlockedMessage, ClientMessage: middleware2.GroupSubagentsBlockedMessage, ErrorBody: body,
 		ErrorSource: "client_request", ErrorOwner: "client", CreatedAt: time.Now(),
 		DurationMs: getContextLatencyMs(c, service.OpsRequestDurationMsKey),
 	}

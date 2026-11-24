@@ -15,7 +15,6 @@ import type {
   GroupStat,
   UsageRequestType,
   UserErrorRequest,
-  UserErrorRequestDetail,
   UserErrorListParams
 } from '@/types'
 
@@ -372,11 +371,6 @@ export async function listMyErrorRequests(
   return data
 }
 
-export async function getMyErrorDetail(id: number): Promise<UserErrorRequestDetail> {
-  const { data } = await apiClient.get<UserErrorRequestDetail>(`/usage/errors/${id}`)
-  return data
-}
-
 export const usageAPI = {
   list,
   query,
@@ -392,8 +386,7 @@ export const usageAPI = {
   getDashboardSnapshotV2,
   getDashboardApiKeysUsage,
   // Error requests
-  listMyErrorRequests,
-  getMyErrorDetail
+  listMyErrorRequests
 }
 
 export default usageAPI

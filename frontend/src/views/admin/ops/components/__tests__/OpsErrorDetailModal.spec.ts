@@ -81,7 +81,7 @@ describe('OpsErrorDetailModal', () => {
   })
 })
 
-it('loads only the owned observer error and never requests correlated admin details', async () => {
+it('never fetches error details for an observer', async () => {
   vi.clearAllMocks()
   mocks.own.mockResolvedValue({ id: 42, status_code: 502, message: 'own error' })
   const wrapper = shallowMount(OpsErrorDetailModal, {
@@ -89,7 +89,7 @@ it('loads only the owned observer error and never requests correlated admin deta
     global: { provide: { [observerUsageContext as symbol]: true } },
   })
   await flushPromises()
-  expect(mocks.own).toHaveBeenCalledWith(42)
+  expect(mocks.own).not.toHaveBeenCalled()
   expect(mocks.getRequestErrorDetail).not.toHaveBeenCalled()
   expect(mocks.listRequestErrorUpstreamErrors).not.toHaveBeenCalled()
   wrapper.unmount()

@@ -7,12 +7,10 @@
         :columns="columns"
         :data="rows"
         :loading="loading"
-        clickable-rows
         server-side-sort
         default-sort-key="created_at"
         default-sort-order="desc"
         @sort="onSort"
-        @rowClick="(row) => openDetail(row.id)"
       >
         <template #cell-model="{ row }">
           <span v-if="row.model" class="text-sm font-medium text-gray-900 dark:text-white">{{ row.model }}</span>
@@ -52,8 +50,8 @@
           <span
             v-if="row.message"
             class="block max-w-[280px] truncate text-sm text-gray-600 dark:text-gray-400"
-            :title="userErrorMessage(row, t)"
-          >{{ userErrorMessage(row, t) }}</span>
+            :title="row.message"
+          >{{ row.message }}</span>
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
@@ -116,18 +114,15 @@
       />
     </div>
 
-    <UserErrorDetailModal v-model:show="showDetail" :error-id="selectedId" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { userErrorMessage } from '@/utils/userErrorMessage'
-import { ref, computed } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import DataTable from '@/components/common/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import Pagination from '@/components/common/Pagination.vue'
-import UserErrorDetailModal from '@/components/user/UserErrorDetailModal.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'
 import IpGeoBatchToolbar from '@/components/common/IpGeoBatchToolbar.vue'
 import { formatDateTime } from '@/utils/format'
@@ -191,14 +186,6 @@ function requestTypeBadge(row: UserErrorRequest): { label: string; className: st
   const kind = numericRequestTypeKind(row.request_type, row.stream)
   if (!kind) return null
   return { label: t(requestTypeLabelKey(kind)), className: requestTypeBadgeClass(kind) }
-}
-
-const showDetail = ref(false)
-const selectedId = ref<number | null>(null)
-
-function openDetail(id: number) {
-  selectedId.value = id
-  showDetail.value = true
 }
 
 const statusClass = statusCodeBadgeClass

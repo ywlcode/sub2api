@@ -164,6 +164,7 @@
             :page="errPage" :page-size="errPageSize"
             :visible-column-keys="errVisibleColumnKeys"
             :user-clickable="!props.observerMode"
+            :summary-only="props.observerMode"
             @userClick="handleUserClick"
             @openErrorDetail="openError"
             @sort="onErrSort"
@@ -202,7 +203,7 @@
           />
         </div>
       </div>
-      <OpsErrorDetailModal v-model:show="showErrorModal" :error-id="selectedErrorId" :error-type="'request'" />
+      <OpsErrorDetailModal v-if="!props.observerMode" v-model:show="showErrorModal" :error-id="selectedErrorId" :error-type="'request'" />
     </div>
   </AppLayout>
   <UsageExportProgress :show="exportProgress.show" :progress="exportProgress.progress" :current="exportProgress.current" :total="exportProgress.total" :estimated-time="exportProgress.estimatedTime" @cancel="cancelExport" />

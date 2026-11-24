@@ -1181,6 +1181,7 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 				parsed = terminal
 			}
 		}
+		clientMessage := parsed.ClientMessage
 		// A provider can send the same response.failed code and message. Only
 		// the local slot rejection can assign this logical 429.
 		if c.GetBool(opsUserConcurrencyLimitedKey) {
@@ -1311,7 +1312,8 @@ func OpsErrorLoggerMiddleware(ops *service.OpsService) gin.HandlerFunc {
 			IsBusinessLimited: isBusinessLimited,
 			IsCountTokens:     isCountTokensRequest(c),
 
-			ErrorMessage: parsed.Message,
+			ErrorMessage:  parsed.Message,
+			ClientMessage: clientMessage,
 			// Sanitize each SSE data payload before the body enters the async queue.
 			ErrorBody:   sanitizeOpsSSEDataForPersistence(body),
 			ErrorSource: errorSource,
@@ -1666,10 +1668,11 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 		IsBusinessLimited: isBusinessLimited,
 		IsCountTokens:     isCountTokensRequest(c),
 
-		ErrorMessage: streamErr.Message,
-		ErrorBody:    errorBody,
-		ErrorSource:  errorSource,
-		ErrorOwner:   errorOwner,
+		ErrorMessage:  streamErr.Message,
+		ClientMessage: streamErr.Message,
+		ErrorBody:     errorBody,
+		ErrorSource:   errorSource,
+		ErrorOwner:    errorOwner,
 
 		CreatedAt: time.Now(),
 	}
@@ -1710,6 +1713,9 @@ func logOpsStreamErrorValue(c *gin.Context, ops *service.OpsService, wireStatus 
 		// A WS business status is not an HTTP response from the provider.
 		entry.UpstreamStatusCode, entry.UpstreamErrorMessage, entry.UpstreamErrorDetail = nil, nil, nil
 		entry.UpstreamErrors = nil
+	}
+	if streamErr.Code == service.OpsClientCanceledCode {
+		entry.ClientMessage = "" // No message was written to a disconnected client.
 	}
 	suppressOpsUpstreamAttributionForClientRejection(entry)
 
@@ -1956,6 +1962,7 @@ func getContextLatencyMs(c *gin.Context, key string) *int64 {
 }
 
 type parsedOpsError struct {
+	ClientMessage string // Never populated from a raw-body fallback.
 	ErrorType     string
 	Message       string
 	Code          string
@@ -1985,14 +1992,14 @@ func parseOpsErrorResponse(body []byte) parsedOpsError {
 			t = "api_error"
 		}
 		code := opsJSONScalarString(errObj["code"])
-		return parsedOpsError{ErrorType: t, Message: msg, Code: code}
+		return parsedOpsError{ErrorType: t, Message: msg, ClientMessage: msg, Code: code}
 	}
 	if errMessage, ok := m["error"].(string); ok && strings.TrimSpace(errMessage) != "" {
 		t, _ := m["type"].(string)
 		if t == "" || t == "error" {
 			t = "api_error"
 		}
-		return parsedOpsError{ErrorType: t, Message: strings.TrimSpace(errMessage), Code: opsJSONScalarString(m["code"])}
+		return parsedOpsError{ErrorType: t, Message: strings.TrimSpace(errMessage), ClientMessage: strings.TrimSpace(errMessage), Code: opsJSONScalarString(m["code"])}
 	}
 
 	// APIKeyAuth-style: { code:"INSUFFICIENT_BALANCE", message:"..." }
@@ -2003,7 +2010,7 @@ func parseOpsErrorResponse(body []byte) parsedOpsError {
 		if t == "" || t == "error" {
 			t = "api_error"
 		}
-		return parsedOpsError{ErrorType: t, Message: msg, Code: code}
+		return parsedOpsError{ErrorType: t, Message: msg, ClientMessage: msg, Code: code}
 	}
 
 	return parsedOpsError{Message: truncateString(string(body), 1024)}
@@ -2085,6 +2092,7 @@ func parseOpsSSEFailure(body []byte) (parsedOpsError, bool) {
 				parsed.ErrorType = ""
 			}
 			parsed.Message, _ = errObj["message"].(string)
+			parsed.ClientMessage = parsed.Message
 			switch code := errObj["code"].(type) {
 			case string:
 				parsed.Code = strings.TrimSpace(code)

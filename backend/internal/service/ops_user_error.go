@@ -130,10 +130,10 @@ func ToUserErrorRequest(e *OpsErrorLog) *UserErrorRequest {
 	if e.ClientIP != nil {
 		clientIP = *e.ClientIP
 	}
-	message := e.Message
+	message := e.ClientMessage
 	if public := userCyberAuditMessage(e.Type); public != "" {
 		message = public
-	} else if e.Type == "transport_error" {
+	} else if message == "" && e.Type == "transport_error" {
 		message = openAIHTTP2PeerResetMessage("")
 	}
 	return &UserErrorRequest{

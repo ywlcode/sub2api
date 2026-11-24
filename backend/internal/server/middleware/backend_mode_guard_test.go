@@ -414,7 +414,7 @@ func TestBackendModeObserverOwnUsageOnly(t *testing.T) {
 					w := httptest.NewRecorder()
 					router.ServeHTTP(w, httptest.NewRequest(method, strings.ReplaceAll(path, ":id", "1"), nil))
 					want := 403
-					if role == service.RoleObserver && method == http.MethodGet && path != "/api/v1/keys" && path != "/api/v1/usage/cleanup-tasks" {
+					if role == service.RoleObserver && method == http.MethodGet && path != "/api/v1/keys" && path != "/api/v1/usage/cleanup-tasks" && path != "/api/v1/usage/errors/:id" {
 						want = 200
 					}
 					require.Equal(t, want, w.Code)

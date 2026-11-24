@@ -7,12 +7,12 @@
         :columns="columns"
         :data="rows"
         :loading="loading"
-        clickable-rows
+        :clickable-rows="!props.summaryOnly"
         server-side-sort
         default-sort-key="created_at"
         default-sort-order="desc"
         @sort="onSort"
-        @rowClick="(row) => emit('openErrorDetail', row.id)"
+        @rowClick="(row) => !props.summaryOnly && emit('openErrorDetail', row.id)"
       >
         <template #cell-created_at="{ row }">
           <span
@@ -126,14 +126,14 @@
         </template>
 
         <template #cell-message="{ row }">
-          <span v-if="balanceErrorSource(row)" class="block text-sm font-medium text-amber-700 dark:text-amber-300" data-testid="balance-source">
+          <span v-if="!props.summaryOnly && balanceErrorSource(row)" class="block text-sm font-medium text-amber-700 dark:text-amber-300" data-testid="balance-source">
             {{ t(`admin.ops.balanceError.${balanceErrorSource(row)}`) }}
           </span>
           <span
             v-if="row.message"
             class="block max-w-[280px] truncate text-sm text-gray-600 dark:text-gray-400"
             :title="row.message"
-          >{{ formatSmartMessage(row.message) || '-' }}</span>
+          >{{ props.summaryOnly ? row.message : formatSmartMessage(row.message) || '-' }}</span>
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
         </template>
 
@@ -223,9 +223,10 @@ const allColumns = computed<Column[]>(() => [
 
 // 传入 visibleColumnKeys 时按其过滤(列设置);未传则全量(Ops 弹窗等使用方)
 const columns = computed<Column[]>(() => {
+  const available = allColumns.value.filter((c) => !props.summaryOnly || c.key !== 'actions')
   const visibleColumns = props.visibleColumnKeys
-    ? allColumns.value.filter((c) => props.visibleColumnKeys!.includes(c.key))
-    : allColumns.value
+    ? available.filter((c) => props.visibleColumnKeys!.includes(c.key))
+    : available
   if (!props.summaryFirst) return visibleColumns
 
   return [
@@ -304,6 +305,7 @@ interface Props {
   visibleColumnKeys?: string[]
   /** 运维弹窗优先展示时间和响应内容 */
   summaryFirst?: boolean
+  summaryOnly?: boolean
   /** 嵌入统一卡片内使用：去掉自身卡片外观 */
   flat?: boolean
 }

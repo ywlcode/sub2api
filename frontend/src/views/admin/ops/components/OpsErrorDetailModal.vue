@@ -234,7 +234,6 @@
 <script setup lang="ts">
 import { balanceErrorSource } from '../utils/balanceError'
 import { computed, ref, watch, inject } from 'vue'
-import { observerUsageAPI } from '@/api/observerUsage'
 import { observerUsageContext } from '@/components/admin/usage/observerUsageContext'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -405,10 +404,11 @@ function prettyJSON(raw?: string): string {
 }
 
 async function fetchDetail(id: number) {
+  if (observerMode) return
   loading.value = true
   try {
     const kind = props.errorType || (detail.value?.phase === 'upstream' ? 'upstream' : 'request')
-    const d = observerMode ? await observerUsageAPI.getErrorDetail(id) : kind === 'upstream' ? await opsAPI.getUpstreamErrorDetail(id) : await opsAPI.getRequestErrorDetail(id)
+    const d = kind === 'upstream' ? await opsAPI.getUpstreamErrorDetail(id) : await opsAPI.getRequestErrorDetail(id)
     detail.value = d
   } catch (err: any) {
     detail.value = null

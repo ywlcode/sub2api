@@ -409,44 +409,6 @@ func (h *UsageHandler) ListErrors(c *gin.Context) {
 	response.Paginated(c, result.Items, int64(result.Total), result.Page, result.PageSize)
 }
 
-// GetErrorDetail handles fetching one of the current user's failed-request details (redacted).
-// GET /api/v1/usage/errors/:id
-func (h *UsageHandler) GetErrorDetail(c *gin.Context) {
-	subject, ok := middleware2.GetAuthSubjectFromContext(c)
-	if !ok {
-		response.Unauthorized(c, "User not authenticated")
-		return
-	}
-	if h.settingService == nil || !h.settingService.IsUserErrorViewAllowed(c.Request.Context()) {
-		response.Forbidden(c, "Error requests view is disabled")
-		return
-	}
-	if h.opsService == nil {
-		response.Error(c, http.StatusServiceUnavailable, "Ops service not available")
-		return
-	}
-	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
-	if err != nil || id <= 0 {
-		response.BadRequest(c, "Invalid id")
-		return
-	}
-	if isObserverUsageRequest(c) {
-		detail, err := h.opsService.GetObserverErrorRequestDetail(c.Request.Context(), subject.UserID, id)
-		if err != nil {
-			response.ErrorFrom(c, err)
-			return
-		}
-		response.Success(c, detail)
-		return
-	}
-	detail, err := h.opsService.GetUserErrorRequestDetail(c.Request.Context(), subject.UserID, id)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, detail)
-}
-
 // GetByID handles getting a single usage record
 // GET /api/v1/usage/:id
 func (h *UsageHandler) GetByID(c *gin.Context) {

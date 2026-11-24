@@ -526,6 +526,8 @@ func (s *OpsService) prepareErrorLogInput(ctx context.Context, entry *OpsInsertE
 	// known, for both middleware and direct/batched producers.
 	NormalizeOpsClientRejection(entry)
 
+	entry.ClientMessage = truncateString(sanitizeUpstreamErrorMessage(entry.ClientMessage), 2048)
+
 	// Sanitize + truncate error_body to avoid storing sensitive data.
 	if strings.TrimSpace(entry.ErrorBody) != "" {
 		sanitized, _ := sanitizeErrorBodyForStorage(entry.ErrorBody, opsMaxStoredErrorBodyBytes)
