@@ -85,5 +85,10 @@ func (s *OpsService) GetObserverErrorRequestDetail(ctx context.Context, userID, 
 	if err != nil {
 		return nil, err
 	}
-	return &ObserverErrorRequestDetail{ObserverErrorRequest: *toObserverErrorRequest(&detail.OpsErrorLog), ErrorBody: detail.ErrorBody, UpstreamStatusCode: detail.UpstreamStatusCode, IsBusinessLimited: detail.IsBusinessLimited}, nil
+	return &ObserverErrorRequestDetail{
+		ObserverErrorRequest: *toObserverErrorRequest(&detail.OpsErrorLog),
+		ErrorBody:            userErrorBody(detail),
+		UpstreamStatusCode:   detail.UpstreamStatusCode,
+		IsBusinessLimited:    detail.IsBusinessLimited,
+	}, nil
 }

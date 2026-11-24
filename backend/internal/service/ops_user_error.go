@@ -97,6 +97,26 @@ func CategoryToFilter(category string) (phases []string, errorTypes []string) {
 	}
 }
 
+// Cyber audit rows retain provider messages and session diagnostics for admins.
+// Apply the public wording on read, including to rows written before this policy.
+func userCyberAuditMessage(errorType string) string {
+	switch errorType {
+	case "cyber_policy", "cyber_policy_session_blocked":
+		return CyberPolicyClientMessage
+	case "cyber_session_identity_rejected":
+		return "请提供有效且一致的 thread_id 或 session_id。"
+	default:
+		return ""
+	}
+}
+
+func userErrorBody(e *OpsErrorLogDetail) string {
+	if userCyberAuditMessage(e.Type) != "" {
+		return ""
+	}
+	return e.ErrorBody
+}
+
 // ToUserErrorRequest 把内部 OpsErrorLog 裁剪为用户安全视图。
 func ToUserErrorRequest(e *OpsErrorLog) *UserErrorRequest {
 	if e == nil {
@@ -111,7 +131,9 @@ func ToUserErrorRequest(e *OpsErrorLog) *UserErrorRequest {
 		clientIP = *e.ClientIP
 	}
 	message := e.Message
-	if e.Type == "transport_error" {
+	if public := userCyberAuditMessage(e.Type); public != "" {
+		message = public
+	} else if e.Type == "transport_error" {
 		message = openAIHTTP2PeerResetMessage("")
 	}
 	return &UserErrorRequest{
@@ -164,7 +186,7 @@ func ToUserErrorRequestDetail(e *OpsErrorLogDetail) *UserErrorRequestDetail {
 	}
 	return &UserErrorRequestDetail{
 		UserErrorRequest:   *base,
-		ErrorBody:          e.ErrorBody,
+		ErrorBody:          userErrorBody(e),
 		UpstreamStatusCode: e.UpstreamStatusCode,
 	}
 }
