@@ -235,7 +235,9 @@ func TestSecurityPlatformAdmissionStreamingFrames(t *testing.T) {
 				r.all = false
 				// No explicit turn boundary during continuous audio: expiry must
 				// also force a check without depending on wall-clock sleeps.
-				ws.(*moderatedWebSocket).nextChunkCheck = time.Now().Add(-time.Second)
+				moderated, ok := ws.(*moderatedWebSocket)
+				require.True(t, ok, "expected a moderated WebSocket, got %T", ws)
+				moderated.nextChunkCheck = time.Now().Add(-time.Second)
 				r.err = context.DeadlineExceeded
 				_, payload, err = ws.Read(ctx)
 				require.Empty(t, payload)
