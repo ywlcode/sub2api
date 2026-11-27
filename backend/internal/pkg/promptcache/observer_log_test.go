@@ -73,7 +73,9 @@ func TestShadowLogIndependentJSONAndFinalCounters(t *testing.T) {
 		case "prompt_cache.shadow_stats":
 			snapshots++
 			require.Equal(t, true, row["final"])
-			require.Equal(t, float64(10), row["logging"].(map[string]any)["written_events"])
+			logging, ok := row["logging"].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, float64(10), logging["written_events"])
 		default:
 			t.Fatalf("unexpected event %v", row["msg"])
 		}

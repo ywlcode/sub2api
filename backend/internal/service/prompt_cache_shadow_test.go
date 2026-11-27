@@ -30,7 +30,8 @@ func shadowTestService(t *testing.T) (*OpenAIGatewayService, *Account, *gin.Cont
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	c.Set("api_key", &APIKey{ID: 7, GroupID: ptrInt64(2)})
+	groupID := int64(2)
+	c.Set("api_key", &APIKey{ID: 7, GroupID: &groupID})
 	var events []map[string]any
 	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{PromptCacheShadow: config.PromptCacheShadowConfig{Enabled: true, MinPrefixTokens: 32, PrefixTokensStep: 16}}}}
 	svc.promptCacheShadow.emit = func(fields []zap.Field) {
@@ -456,7 +457,7 @@ func TestPromptCacheShadowUnknownInputAndOversizedLateModel(t *testing.T) {
 	require.Equal(t, "unknown", (*events)[0]["model"])
 	require.Nil(t, (*events)[0]["input_tokens"])
 	require.Equal(t, "body_limit", (*events)[0]["skip_reason"])
-	ctx, a = svc.beginPromptCacheShadow(ctx, c, account)
+	_, a = svc.beginPromptCacheShadow(ctx, c, account)
 	require.NotNil(t, a, "a later attempt must replace the completed context")
 	a.finish(nil, context.Canceled)
 }

@@ -220,8 +220,11 @@ func (e *Engine) Begin(scope Scope, body []byte, encode Encode, now time.Time) *
 			a.Decision = "hit"
 			break
 		}
-		if elem := e.entries[key]; elem != nil && !now.Before(elem.Value.(entry).expires) {
-			a.Expired = true
+		if elem := e.entries[key]; elem != nil {
+			item, ok := elem.Value.(entry)
+			if ok && !now.Before(item.expires) {
+				a.Expired = true
+			}
 		}
 	}
 	for i := len(a.points) - 1; i >= 0; i-- {
@@ -286,8 +289,8 @@ func (e *Engine) key(namespace, hash [32]byte) [32]byte {
 }
 func (e *prefixCache) lookup(key [32]byte, now time.Time) (entry, bool) {
 	if elem := e.entries[key]; elem != nil {
-		item := elem.Value.(entry)
-		if !item.written.After(now) && (item.expires.IsZero() || now.Before(item.expires)) {
+		item, ok := elem.Value.(entry)
+		if ok && !item.written.After(now) && (item.expires.IsZero() || now.Before(item.expires)) {
 			e.lru.MoveToFront(elem)
 			return item, true
 		}
@@ -312,7 +315,9 @@ func (e *prefixCache) put(key [32]byte, now time.Time, ttl time.Duration) {
 	}
 	for len(e.entries) >= e.limit {
 		last := e.lru.Back()
-		delete(e.entries, last.Value.(entry).key)
+		// This private list only contains entry values inserted below.
+		evicted, _ := last.Value.(entry)
+		delete(e.entries, evicted.key)
 		e.lru.Remove(last)
 		e.evictions++
 	}
@@ -395,8 +400,8 @@ func promptText(body []byte, hint string) (text, protocol, layout, identity, rea
 	identityJSON, _ := json.Marshal(cacheIdentity)
 	identity = string(identityJSON)
 	var out strings.Builder
-	out.Write(canonicalControls)
-	out.WriteByte('\n')
+	_, _ = out.Write(canonicalControls)
+	_ = out.WriteByte('\n')
 	for _, raw := range sequence {
 		var value any
 		if decodeExactJSON(raw, &value) != nil {
@@ -408,8 +413,8 @@ func promptText(body []byte, hint string) (text, protocol, layout, identity, rea
 			reason = "invalid_prompt"
 			return
 		}
-		out.Write(canonical)
-		out.WriteByte('\n')
+		_, _ = out.Write(canonical)
+		_ = out.WriteByte('\n')
 	}
 	text = out.String()
 	return

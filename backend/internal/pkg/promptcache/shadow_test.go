@@ -51,7 +51,10 @@ func TestShadowPrefixAppendAndMutation(t *testing.T) {
 	if changed.MatchedPrefixTokens >= next.MatchedPrefixTokens {
 		t.Fatal("non-prefix text was reused")
 	}
-	if next.Commit(now) && next.Commit(now) {
+	if !next.Commit(now) {
+		t.Fatal("first commit failed")
+	}
+	if next.Commit(now) {
 		t.Fatal("double commit")
 	}
 }
