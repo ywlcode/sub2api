@@ -128,6 +128,26 @@ class WriterLogTests(unittest.TestCase):
 
 
 class MetricsTests(unittest.TestCase):
+    def test_new_and_legacy_warmth_are_not_merged(self):
+        report = aggregate([event(), event(warm_scope="account_model", decision="miss",
+                                         simulated_cache_read_tokens=0,
+                                         account_cache_evictions=12, shared_cache_evictions=25,
+                                         warm_state_evictions=0)])
+        self.assertEqual(len(report["groups"]), 2)
+        current = next(group for group in report["groups"] if group["warm_scope"] == "account_model")
+        self.assertEqual(current["warm_only"]["samples"], 1)
+        self.assertEqual(current["warm_only"]["simulated_cache_read_tokens"], 0)
+        self.assertEqual(current["max_observed_process_eviction_counters"],
+                         {"account": 12, "shared": 25, "warm_state": 0})
+        self.assertIn('warm_scope="account_model"', analyze.render_text(report))
+
+    def test_eviction_counters_unknown_or_maximum_never_summed(self):
+        report = aggregate([event(account_cache_evictions=7), event(account_cache_evictions=10),
+                            event(account_cache_evictions=-1)])
+        self.assertEqual(report["counts"]["invalid_event_lines"], 1)
+        stats = report["groups"][0]["max_observed_process_eviction_counters"]
+        self.assertEqual(stats, {"account": 10, "shared": None, "warm_state": None})
+
     def test_token_weighting_instead_of_request_average(self):
         stats = aggregate([
             event(input_tokens=100, upstream_cache_read_tokens=100, simulated_cache_read_tokens=0),

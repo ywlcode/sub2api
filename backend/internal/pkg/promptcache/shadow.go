@@ -43,7 +43,15 @@ func (o Options) Defaults() Options {
 type Scope struct {
 	Tenant, Platform, Model string
 	AccountID               int64
+	Protocol                string
+	RoutingFingerprint      string
 }
+
+const (
+	ProtocolResponses       = "responses"
+	ProtocolChatCompletions = "chat_completions"
+	ProtocolMessages        = "messages"
+)
 
 type Encode func(string) ([]uint, error)
 
@@ -57,20 +65,33 @@ type entry struct {
 }
 
 type Engine struct {
+	prefixCache
+	shared, warm   prefixCache
 	mu             sync.Mutex
 	options        Options
 	secret         [32]byte
 	instanceID     string
-	entries        map[[32]byte]*list.Element
-	lru            *list.List
 	retainedPoints int
+}
+
+type prefixCache struct {
+	entries   map[[32]byte]*list.Element
+	lru       *list.List
+	limit     int
+	evictions uint64
+}
+
+func newPrefixCache(limit int) prefixCache {
+	return prefixCache{entries: make(map[[32]byte]*list.Element), lru: list.New(), limit: limit}
 }
 
 const maxAttemptPoints = 16384
 const maxRetainedPoints = 65536
 
 func New(options Options) (*Engine, error) {
-	e := &Engine{options: options.Defaults(), entries: make(map[[32]byte]*list.Element), lru: list.New()}
+	opts := options.Defaults()
+	accountLimit := max(1, opts.MaxEntries*3/4)
+	e := &Engine{options: opts, prefixCache: newPrefixCache(accountLimit), shared: newPrefixCache(opts.MaxEntries - accountLimit), warm: newPrefixCache(min(10000, max(16, opts.MaxEntries)))}
 	if _, err := rand.Read(e.secret[:]); err != nil {
 		return nil, err
 	}
@@ -82,25 +103,41 @@ func New(options Options) (*Engine, error) {
 func (e *Engine) InstanceID() string { return e.instanceID }
 func (e *Engine) Options() Options   { return e.options }
 func (e *Engine) MaxBodyBytes() int  { return e.options.MaxBodyBytes }
+func (e *Engine) CacheCapacities() (account, shared, warm int) {
+	return e.limit, e.shared.limit, e.warm.limit
+}
+
+// RoutingFingerprint hashes actual outbound routing headers. Raw session or
+// conversation identifiers are not retained by the cache or written to logs.
+func (e *Engine) RoutingFingerprint(session, conversation string) string {
+	if session == "" && conversation == "" {
+		return ""
+	}
+	raw, _ := json.Marshal([]string{session, conversation})
+	digest := e.digest(raw)
+	return hex.EncodeToString(digest[:])
+}
 
 // Attempt contains fingerprints only and freezes the lookup before submission.
 // Concurrent requests cannot claim their own future cache writes as hits.
 type Attempt struct {
-	engine                                 *Engine
-	points                                 []point
-	accountNamespace, sharedNamespace      [32]byte
-	EstimatedInputTokens                   int
-	CacheableInputTokens                   int
-	MatchedPrefixTokens                    int
-	SharedPrefixTokens                     int
-	CacheAge                               time.Duration
-	Decision, SkipReason, Protocol, Layout string
-	PrefixFingerprint                      string
-	Expired                                bool
-	ComputedIn                             time.Duration
-	once                                   sync.Once
-	releaseOnce                            sync.Once
-	reserved                               int
+	engine                                                *Engine
+	points                                                []point
+	accountNamespace, sharedNamespace, warmNamespace      [32]byte
+	EstimatedInputTokens                                  int
+	CacheableInputTokens                                  int
+	MatchedPrefixTokens                                   int
+	SharedPrefixTokens                                    int
+	CacheAge                                              time.Duration
+	Decision, SkipReason, Protocol, Layout                string
+	PrefixFingerprint                                     string
+	RoutingFingerprint                                    string
+	AccountEvictions, SharedEvictions, WarmStateEvictions uint64
+	Expired                                               bool
+	ComputedIn                                            time.Duration
+	once                                                  sync.Once
+	releaseOnce                                           sync.Once
+	reserved                                              int
 }
 
 func (e *Engine) Begin(scope Scope, body []byte, encode Encode, now time.Time) *Attempt {
@@ -111,7 +148,7 @@ func (e *Engine) Begin(scope Scope, body []byte, encode Encode, now time.Time) *
 		a.SkipReason = "body_limit"
 		return a
 	}
-	prompt, protocol, layout, identity, reason := promptText(body)
+	prompt, protocol, layout, identity, reason := promptText(body, scope.Protocol)
 	a.Protocol, a.Layout = protocol, layout
 	if reason != "" {
 		a.SkipReason = reason
@@ -132,8 +169,11 @@ func (e *Engine) Begin(scope Scope, body []byte, encode Encode, now time.Time) *
 	// candidate: it answers whether upstream account switching explains a miss.
 	base, _ := json.Marshal([]any{scope.Tenant, scope.Platform, scope.Model, protocol, layout})
 	a.sharedNamespace = e.digest(base)
-	account, _ := json.Marshal([]any{hex.EncodeToString(a.sharedNamespace[:]), scope.AccountID, identity})
+	account, _ := json.Marshal([]any{hex.EncodeToString(a.sharedNamespace[:]), scope.AccountID, identity, scope.RoutingFingerprint})
 	a.accountNamespace = e.digest(account)
+	a.RoutingFingerprint = scope.RoutingFingerprint
+	warm, _ := json.Marshal([]any{scope.Platform, scope.AccountID, scope.Model})
+	a.warmNamespace = e.digest(warm)
 	h := hmac.New(sha256.New, e.secret[:])
 	var token [8]byte
 	for i, id := range ids {
@@ -166,7 +206,8 @@ func (e *Engine) Begin(scope Scope, body []byte, encode Encode, now time.Time) *
 	// Freeze immediately before submission, after tokenization. A concurrent
 	// successful request may have refreshed a prefix while we were encoding.
 	now = now.Add(time.Since(start))
-	_, seen := e.lookup(a.accountNamespace, now)
+	_, seen := e.warm.lookup(a.warmNamespace, now)
+	a.AccountEvictions, a.SharedEvictions, a.WarmStateEvictions = e.evictions, e.shared.evictions, e.warm.evictions
 	a.Decision = "cold"
 	if seen {
 		a.Decision = "miss"
@@ -184,7 +225,7 @@ func (e *Engine) Begin(scope Scope, body []byte, encode Encode, now time.Time) *
 		}
 	}
 	for i := len(a.points) - 1; i >= 0; i-- {
-		if _, ok := e.lookup(e.key(a.sharedNamespace, a.points[i].hash), now); ok {
+		if _, ok := e.shared.lookup(e.key(a.sharedNamespace, a.points[i].hash), now); ok {
 			a.SharedPrefixTokens = a.points[i].tokens
 			break
 		}
@@ -203,10 +244,12 @@ func (a *Attempt) Commit(now time.Time) (committed bool) {
 		e := a.engine
 		e.mu.Lock()
 		defer e.mu.Unlock()
-		e.put(a.accountNamespace, now)
+		// Warmth describes the observed account/model, not a particular user,
+		// session key or evictable prefix. Expiry/capacity misses stay in warm_only.
+		e.warm.put(a.warmNamespace, now, 0)
 		for _, p := range a.points {
 			e.put(e.key(a.accountNamespace, p.hash), now)
-			e.put(e.key(a.sharedNamespace, p.hash), now)
+			e.shared.put(e.key(a.sharedNamespace, p.hash), now, e.options.TTL)
 		}
 		committed = true
 	})
@@ -241,10 +284,10 @@ func (e *Engine) key(namespace, hash [32]byte) [32]byte {
 	copy(raw[32:], hash[:])
 	return e.digest(raw[:])
 }
-func (e *Engine) lookup(key [32]byte, now time.Time) (entry, bool) {
+func (e *prefixCache) lookup(key [32]byte, now time.Time) (entry, bool) {
 	if elem := e.entries[key]; elem != nil {
 		item := elem.Value.(entry)
-		if !item.written.After(now) && now.Before(item.expires) {
+		if !item.written.After(now) && (item.expires.IsZero() || now.Before(item.expires)) {
 			e.lru.MoveToFront(elem)
 			return item, true
 		}
@@ -252,16 +295,26 @@ func (e *Engine) lookup(key [32]byte, now time.Time) (entry, bool) {
 	return entry{}, false
 }
 func (e *Engine) put(key [32]byte, now time.Time) {
-	item := entry{key: key, expires: now.Add(e.options.TTL), written: now}
+	e.prefixCache.put(key, now, e.options.TTL)
+}
+func (e *prefixCache) put(key [32]byte, now time.Time, ttl time.Duration) {
+	if e.limit <= 0 {
+		return
+	}
+	item := entry{key: key, written: now}
+	if ttl > 0 {
+		item.expires = now.Add(ttl)
+	}
 	if elem := e.entries[key]; elem != nil {
 		elem.Value = item
 		e.lru.MoveToFront(elem)
 		return
 	}
-	for len(e.entries) >= e.options.MaxEntries {
+	for len(e.entries) >= e.limit {
 		last := e.lru.Back()
 		delete(e.entries, last.Value.(entry).key)
 		e.lru.Remove(last)
+		e.evictions++
 	}
 	e.entries[key] = e.lru.PushFront(item)
 }
@@ -270,7 +323,7 @@ func (e *Engine) put(key [32]byte, now time.Time) {
 // JSON object order/formatting is canonicalized, but content strings and array
 // order are preserved. Non-prompt controls (stream, request ids) do not pollute
 // the prefix. No timestamps, paths, tool results or system text are scrubbed.
-func promptText(body []byte) (text, protocol, layout, identity, reason string) {
+func promptText(body []byte, hint string) (text, protocol, layout, identity, reason string) {
 	var root map[string]json.RawMessage
 	if json.Unmarshal(body, &root) != nil {
 		reason = "invalid_json"
@@ -302,16 +355,16 @@ func promptText(body []byte) (text, protocol, layout, identity, reason string) {
 		}
 	}
 	appendField("tools")
-	if _, ok := root["messages"]; ok {
-		protocol = "chat_completions"
+	if _, ok := root["messages"]; ok && hint != ProtocolResponses {
+		protocol = ProtocolChatCompletions
 		layout = "tools_system_messages"
-		if _, ok := root["system"]; ok {
-			protocol = "messages"
+		if hint == ProtocolMessages || hint == "" && nonempty(root["system"]) {
+			protocol = ProtocolMessages
 			appendField("system")
 		}
 		appendField("messages")
 	} else if _, ok := root["input"]; ok {
-		protocol = "responses"
+		protocol = ProtocolResponses
 		layout = "instructions_before_input"
 		// This is an explicit candidate layout, not a claim about a private
 		// provider's chat template. Compare before adding model-specific rules.
@@ -319,6 +372,10 @@ func promptText(body []byte) (text, protocol, layout, identity, reason string) {
 		appendField("input")
 	} else {
 		reason = "unsupported_protocol"
+		return
+	}
+	if hint != "" && protocol != hint {
+		reason = "protocol_mismatch"
 		return
 	}
 	// Output schema and tool selection can affect provider prompt construction.

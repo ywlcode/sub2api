@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -123,12 +124,23 @@ func (s *OpenAIGatewayService) beginPromptCacheShadow(ctx context.Context, c *gi
 	if s == nil {
 		return ctx, nil
 	}
-	if prior, _ := ctx.Value(promptCacheShadowContextKey{}).(*promptCacheShadowAttempt); prior != nil {
-		return ctx, nil
-	}
+	prior, _ := ctx.Value(promptCacheShadowContextKey{}).(*promptCacheShadowAttempt)
 	e := s.promptCacheShadow.get(s.cfg, account)
 	if e == nil {
+		// A failover to an unobserved account must not capture through an old
+		// request context retained by metering or encrypted-history recovery.
+		if prior != nil {
+			ctx = context.WithValue(ctx, promptCacheShadowContextKey{}, (*promptCacheShadowAttempt)(nil))
+		}
 		return ctx, nil
+	}
+	if prior != nil {
+		prior.mu.Lock()
+		reuse := !prior.finished && prior.state == &s.promptCacheShadow && prior.scope.AccountID == account.ID
+		prior.mu.Unlock()
+		if reuse {
+			return ctx, nil
+		}
 	}
 	a := newPromptCacheShadowAttempt(&s.promptCacheShadow, e, c, account)
 	return context.WithValue(ctx, promptCacheShadowContextKey{}, a), a
@@ -151,20 +163,51 @@ func capturePromptCacheShadow(ctx context.Context, body []byte, transport string
 	a.capture(body, transport, "upstream_wire")
 }
 
-func capturePromptCacheShadowValue(ctx context.Context, value any) {
+func capturePromptCacheShadowValue(ctx context.Context, value any, routingHeaders ...http.Header) {
 	a, _ := ctx.Value(promptCacheShadowContextKey{}).(*promptCacheShadowAttempt)
 	if a == nil {
 		return
 	}
+	var headers http.Header
+	if len(routingHeaders) > 0 {
+		headers = routingHeaders[0]
+	}
 	if raw, ok := value.(openAIWSPreparedJSON); ok {
-		capturePromptCacheShadow(ctx, raw, "ws")
+		a.captureWire(raw, "ws", "upstream_wire", promptcache.ProtocolResponses, headers)
 		return
 	}
-	a.capturePrepared("ws", "upstream_wire", func() ([]byte, error) { return json.Marshal(value) })
+	a.capturePrepared("ws", "upstream_wire", func() ([]byte, error) {
+		a.setWireScope(promptcache.ProtocolResponses, headers)
+		return json.Marshal(value)
+	})
 }
 
 func (a *promptCacheShadowAttempt) capture(body []byte, transport, view string) {
-	a.capturePrepared(transport, view, func() ([]byte, error) { return body, nil })
+	a.captureWire(body, transport, view, "", nil)
+}
+
+func (a *promptCacheShadowAttempt) captureWire(body []byte, transport, view, protocol string, headers http.Header) {
+	a.capturePrepared(transport, view, func() ([]byte, error) { a.setWireScope(protocol, headers); return body, nil })
+}
+
+// Called only from the admitted loader while the attempt mutex is held.
+func (a *promptCacheShadowAttempt) setWireScope(protocol string, headers http.Header) {
+	a.scope.Protocol = protocol
+	a.scope.RoutingFingerprint = a.engine.RoutingFingerprint(headers.Get("session_id"), headers.Get("conversation_id"))
+}
+
+func promptCacheShadowWireProtocol(path string) string {
+	path = strings.TrimRight(path, "/")
+	switch {
+	case strings.HasSuffix(path, "/chat/completions"):
+		return promptcache.ProtocolChatCompletions
+	case strings.HasSuffix(path, "/messages"):
+		return promptcache.ProtocolMessages
+	case strings.HasSuffix(path, "/responses"), strings.HasSuffix(path, "/responses/compact"):
+		return promptcache.ProtocolResponses
+	default:
+		return ""
+	}
 }
 
 // Admission covers body copies and serialization as well as tokenization. A
@@ -179,6 +222,7 @@ func (a *promptCacheShadowAttempt) capturePrepared(transport, view string, load 
 		return
 	}
 	a.scope.Model, a.model = "", "unknown"
+	a.scope.Protocol, a.scope.RoutingFingerprint = "", ""
 	a.transport = transport
 	a.bodyView = view
 	a.captures++
@@ -241,6 +285,11 @@ func capturePromptCacheShadowHTTP(request *http.Request) {
 		return
 	}
 	a.capturePrepared("http", "upstream_wire", func() ([]byte, error) {
+		protocol := ""
+		if request.URL != nil {
+			protocol = promptCacheShadowWireProtocol(request.URL.Path)
+		}
+		a.setWireScope(protocol, request.Header)
 		reader, err := request.GetBody()
 		if err != nil {
 			return nil, err
@@ -263,6 +312,7 @@ func (a *promptCacheShadowAttempt) finish(result *OpenAIForwardResult, forwardEr
 	a.finished = true
 	defer a.attempt.Release()
 	settings := a.engine.Options()
+	accountCapacity, sharedCapacity, warmCapacity := a.engine.CacheCapacities()
 	fields := []zap.Field{
 		zap.String("component", "service.prompt_cache_shadow"),
 		zap.Bool(logger.OpsSystemLogSkipField, true),
@@ -283,6 +333,10 @@ func (a *promptCacheShadowAttempt) finish(result *OpenAIForwardResult, forwardEr
 		zap.Int("prefix_tokens_step", settings.PrefixTokensStep),
 		zap.Bool("output_prefix_indexed", false),
 		zap.String("tokenization_mode", "chunked_8192_bytes"),
+		zap.String("warm_scope", "account_model"),
+		zap.Int("account_prefix_capacity", accountCapacity),
+		zap.Int("shared_prefix_capacity", sharedCapacity),
+		zap.Int("warm_state_capacity", warmCapacity),
 	}
 	reason := ""
 	comparable := true
@@ -347,6 +401,10 @@ func (a *promptCacheShadowAttempt) finish(result *OpenAIForwardResult, forwardEr
 			zap.Int("matched_prefix_tokens", p.MatchedPrefixTokens),
 			zap.Int("shared_prefix_tokens", p.SharedPrefixTokens),
 			zap.String("prefix_fingerprint", p.PrefixFingerprint),
+			zap.String("routing_fingerprint", p.RoutingFingerprint),
+			zap.Uint64("account_cache_evictions", p.AccountEvictions),
+			zap.Uint64("shared_cache_evictions", p.SharedEvictions),
+			zap.Uint64("warm_state_evictions", p.WarmStateEvictions),
 			zap.String("tokenizer", string(openAIInputTokensEncodingForModel(a.model))),
 			zap.Int64("cache_age_ms", p.CacheAge.Milliseconds()),
 			zap.Bool("expired", p.Expired),
@@ -388,17 +446,24 @@ func (s *OpenAIGatewayService) wrapPromptCacheShadowHooks(c *gin.Context, accoun
 	var active *promptCacheShadowAttempt
 	activeTurn := 0
 	priorObserve, priorAfter := wrapped.ObserveUpstreamRequest, wrapped.AfterTurn
-	wrapped.ObserveUpstreamRequest = func(turn int, body []byte) {
+	wrapped.ObserveUpstreamRequest = func(turn int, body []byte, routingHeaders ...http.Header) {
 		if priorObserve != nil {
-			priorObserve(turn, body)
+			priorObserve(turn, body, routingHeaders...)
 		}
 		mu.Lock()
 		defer mu.Unlock()
 		if active == nil || turn != activeTurn {
+			// A new frame can replace a turn before its terminal callback arrives.
+			// Finish the old owner before losing its in-flight fingerprints.
+			active.finish(nil, context.Canceled)
 			active = newPromptCacheShadowAttempt(&s.promptCacheShadow, e, c, account)
 			activeTurn = turn
 		}
-		active.capture(body, "ws", "upstream_wire")
+		var headers http.Header
+		if len(routingHeaders) > 0 {
+			headers = routingHeaders[0]
+		}
+		active.captureWire(body, "ws", "upstream_wire", promptcache.ProtocolResponses, headers)
 	}
 	wrapped.AfterTurn = func(turn int, result *OpenAIForwardResult, err error) {
 		mu.Lock()
@@ -433,7 +498,7 @@ func capturePromptCacheShadowAnthropicUsage(ctx context.Context, payload string)
 	if !usage.IsObject() {
 		return
 	}
-	fields := []string{"cache_read_input_tokens", "cache_read_tokens", "cached_tokens", "prompt_cache_hit_tokens", "prompt_tokens_details.cached_tokens"}
+	fields := []string{"input_tokens_details.cached_tokens", "prompt_tokens_details.cached_tokens", "cache_read_input_tokens", "cache_read_tokens", "cached_tokens", "prompt_cache_hit_tokens"}
 	present := false
 	for _, path := range fields {
 		present = present || usage.Get(path).Exists()
@@ -443,8 +508,15 @@ func capturePromptCacheShadowAnthropicUsage(ctx context.Context, payload string)
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.nativeCacheKnown = openAICacheReadKnownFromUsage(usage)
-	a.nativeCacheTokens = openAICacheReadTokensFromUsage(usage)
+	if a.finished || !openAICacheReadKnownFromUsage(usage) {
+		return
+	}
+	tokens := openAICacheReadTokensFromUsage(usage)
+	// Match mergeAnthropicUsage's cumulative semantics: late empty/zero
+	// snapshots cannot erase a previously confirmed positive cache bucket.
+	if !a.nativeCacheKnown || tokens > 0 || a.nativeCacheTokens <= 0 {
+		a.nativeCacheKnown, a.nativeCacheTokens = true, tokens
+	}
 }
 
 func capturePromptCacheShadowResponseUsage(resp *http.Response, payload string) {

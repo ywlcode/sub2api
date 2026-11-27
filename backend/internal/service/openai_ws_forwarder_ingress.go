@@ -1942,7 +1942,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		latencyGenerationStartedTurn = turn
 		if hooks != nil && hooks.ObserveUpstreamRequest != nil {
-			hooks.ObserveUpstreamRequest(turn, payload)
+			hooks.ObserveUpstreamRequest(turn, payload, lease.conn.agentRecoveryHeaders)
 		}
 		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(

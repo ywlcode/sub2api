@@ -555,7 +555,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if err := s.priorityLatencyBeforeSend(ctx, account); err != nil {
 			return err
 		}
-		capturePromptCacheShadowValue(ctx, value)
+		capturePromptCacheShadowValue(ctx, value, lease.conn.agentRecoveryHeaders)
 		if err := lease.WriteJSONWithContextTimeout(ctx, value, s.openAIWSWriteTimeout()); err != nil {
 			lease.MarkBroken()
 			logOpenAIWSModeInfo(

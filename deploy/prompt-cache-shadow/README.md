@@ -16,7 +16,7 @@ python3 -B -m unittest discover -s deploy/prompt-cache-shadow -p 'test_*.py' -v
 
 只接受 `msg` 或 `message` 为 `prompt_cache.shadow`，且 `component=service.prompt_cache_shadow` 的事件；`schema_version` 必须为整数 `1`，`state_scope=process`，`instance_id`、`account_id`、`model`、`transport` 必须有效。支持常见 `log`、`logs`、`payload`、`jsonPayload`、`message`、`msg` 包装，其内容可为对象或编码后的 JSON 对象，最多展开 4 层、检查 32 个对象。不拆数组／多行载荷，不拼接分散在包装内外的字段，不从任意文本中猜测 JSON。
 
-按 `(account_id, model, transport)` 聚合，多个实例的已记录结果直接汇总，**不重放或合并进程缓存状态**。`platform`、`api_key_id`、`request_id` 和估算器参数不作为分组维度。
+按 `(account_id, model, transport, warm_scope)` 聚合，多个实例的已记录结果直接汇总，**不重放或合并进程缓存状态**。新版 `warm_scope=account_model`，旧日志缺省归为 `legacy_request_namespace`，两种冷启动口径分开统计。`platform`、`api_key_id`、`request_id` 和估算器参数不作为分组维度。
 
 | 输出 | 口径 |
 | --- | --- |
@@ -37,6 +37,7 @@ python3 -B -m unittest discover -s deploy/prompt-cache-shadow -p 'test_*.py' -v
 - `shared_prefix_tokens` 仅诊断同租户／模型、不区分账号与 `prompt_cache_key` 的前缀重合，不加入该账号模拟命中。
 - `prompt_layout`、`expired`、`captures` 为布局、过期和捕获诊断。通用 `instructions_before_input` 只是上游 wire 序列化的近似，不承诺特定模型的内部布局或精确分词。
 - `body_view=upstream_wire`、`output_prefix_indexed=false` 表达观察视图及不索引输出前缀的协议约定；分析器不据此重建正文。这些扩展值不保存到报告，也不影响账号筛选与读取诊断计数。
+- `account_cache_evictions`、`shared_cache_evictions`、`warm_state_evictions` 是查询时的进程累计 LRU 淘汰计数。每组报告的 `max_observed_process_eviction_counters` 取已观测最大值，不逐请求相加，也不是该账号或该时段的淘汰数；旧日志缺失时为 unknown。
 
 `--min-real-hit-rate` 接受 `[0,1]` 内的小数，按账号跨模型／传输的 **actual_known 缓存总量／输入总量** 筛选，达到阈值即保留该账号全部分组。上游未知样本不进入此分母；没有正输入分母的账号在开启筛选时不入选，即使阈值为 0。`account_actual_usage` 列出账号筛选依据；`counts` 是筛选前的读取诊断，`selected_events` 是最终保留事件数。
 
@@ -89,11 +90,11 @@ worker 每分钟及优雅关闭时写入 `prompt_cache.shadow_stats`，包含进
 
 ## 本地内存测量
 
-2026-11-27 Linux amd64／Go 1.27.4 的独立测量（不带 race，使用合成文本）中，10 万条索引 GC 后约 18.3 MiB；65536 个在途指纹约 2.5 MiB；装满 1024 条、每条 60 个标量字段的日志队列约 4.0 MiB；首次初始化共享 o200k 分词器约 6.7 MiB。上述上限是整个进程共用，不按账号或用户重复分配；实际队列事件的字符串长度仍会影响占用，待写字段单条限 16 KiB。
+2026-11-27 Linux amd64／Go 1.27.4 的独立测量（不带 race，使用合成文本）中，拆分后的共 10 万条前缀索引 GC 后约 19.8 MiB，另有 1 万条预热状态约 2.0 MiB；65536 个在途指纹约 2.5 MiB；装满 1024 条、每条 60 个标量字段的日志队列约 4.0 MiB；首次初始化共享 o200k 分词器约 6.7 MiB。上述上限是整个进程共用，不按账号或用户重复分配；实际队列事件的字符串长度仍会影响占用，待写字段单条限 16 KiB。
 
 默认前缀参数下，含 HTTP 正文副本读取的两笔并发、每笔约 1 MiB 文本的计算，采样到的额外活跃 Go 堆约 27.5 MiB；每笔约 2 MiB 时约 37.4 MiB。两笔 2 MiB 请求的累计分配约 391 MiB，这是 GC 周期内先后分配的总量，并非同时常驻量，仍会增加 GC 压力。测量没有覆盖所有 JSON 结构，也不是进程 RSS／cgroup 的硬内存上限；Go 堆保留、采样遗漏及其他网关任务均会影响实际峰值。分词器若已由其他功能初始化，其词表不重复加载。
 
-默认并发调整为 8 后，同机补测八笔并发、每笔约 1 MiB 文本的额外活跃 Go 堆峰值约 61.8 MiB；每笔约 2 MiB 时约 102.2 MiB，八笔均完成计算，没有 `observer_busy`／`observer_budget` 跳过。加上上述索引、典型日志队列和分词词表的约 32 MiB 常驻预算，这组大文本样本合计约 134 MiB 活跃 Go 堆。八笔 2 MiB 的累计分配约 1.51 GiB，仍需关注 GC；不能继续把两笔并发的测量当作默认 8 并发的内存预算。
+默认并发调整为 8 后，同机补测八笔并发、每笔约 1 MiB 文本的额外活跃 Go 堆峰值约 61.8 MiB；每笔约 2 MiB 时约 102.2 MiB，八笔均完成计算，没有 `observer_busy`／`observer_budget` 跳过。该并发实验早于索引拆分；结合现版索引、预热状态、典型日志队列和分词词表的约 35 MiB 预算，粗略合计约 137 MiB 活跃 Go 堆，不是同时装满后的联合实测峰值。八笔 2 MiB 的累计分配约 1.51 GiB，仍需关注 GC；不能继续把两笔并发的测量当作默认 8 并发的内存预算。
 
 复现实验（backend 目录）：
 
@@ -106,6 +107,10 @@ SUB2API_SHADOW_MEMORY_PROFILE=1 go test -tags=unit ./internal/service -run '^Tes
 
 模拟在发往上游之前查找最长连续 Token 前缀；工具、指令、历史内容及顺序发生变化会改变匹配，`stream` 和普通 metadata 不参与匹配。默认至少 1024 Token、之后每 128 Token 一个断点，仅为候选策略，可独立修改；使用仓库已有 `o200k_base`／`cl100k_base` 近似分词，不能声称复刻供应商内部模板。匹配在发送时冻结，请求成功且有有效总输入用量后才登记缓存；流中断、失败终态和客户端断开不登记。未知真实缓存字段不会被当成零，仍可以为以后请求预热。已结束但上游仍实际保留缓存的失败请求，在本候选中可能被低估。
 
+账号前缀按租户／平台／账号／模型／实际出站协议、正文 `prompt_cache_key` 和出站 `session_id`／`conversation_id` 的 HMAC 分区；原始会话头不保留、不落日志。HTTP 以出站端点识别协议，WS 明确为 Responses，Messages 没有或传空 `system` 均不改变协议。无可识别端点时保留正文推断。默认 `max_entries=100000` 共用总额，账号索引分配 75000、共享诊断索引分配 25000，独立 LRU，彼此不能挤占容量；共享索引不区分账号和上述会话标识，但仍隔离租户／平台／模型／协议。
+
+预热状态单独按 `(platform, account_id, model)` 记录成功完成，不含租户、会话键或前缀，也不与前缀共用 LRU 或 TTL；默认最多 10000 条（随较小 `max_entries` 缩减，最少 16 条）。同一账号／模型更换会话、前缀过期或被淘汰后计为 `miss`，仍进入 `warm_only`。进程重启、首次使用或独立预热状态被淘汰后才重新记 `cold`；需结合预热淘汰计数判断剩余选择偏差。
+
 密文／压缩项、`previous_response_id` 等服务端上下文引用、媒体输入和超过 `max_body_bytes` 的正文输出不可比原因，不尝试解密或从上游补取。仅有最终 usage 的部分结果亦不当作正常成功样本。每进程默认最多同时进行 8 笔观测计算，`compute_concurrency` 可配置为 1～64（0 使用默认 8），亦可通过 `GATEWAY_PROMPT_CACHE_SHADOW_COMPUTE_CONCURRENCY` 设置；准入门限覆盖 HTTP 正文副本读取和 WS 序列化，繁忙时在复制／序列化之前立即记 `observer_busy` 并跳过计算；每请求最多保留 16384 个断点，进程在途最多保留 65536 个断点，超限分别记 `fingerprint_limit`／`observer_budget`，失败、重试及连接关闭均释放预算。跳过时仍记录本次真实上游用量。分词按 8192 字节的 UTF-8 安全边界分块，`tokenization_mode=chunked_8192_bytes`；块边界也属于明确的估算误差来源。
 
 ## 对比与收敛
@@ -115,8 +120,8 @@ SUB2API_SHADOW_MEMORY_PROFILE=1 go test -tags=unit ./internal/service -run '^Tes
 逐笔诊断时使用日志的以下信息：
 
 - `estimated_input_tokens` 与真实 `input_tokens` 的差异提示分词／模板偏差；`scaled_simulated_cache_read_tokens` 只是使用总输入量换算的第二候选，**不读取真实缓存数进行拟合**。
-- `shared_prefix_tokens` 高而账号本地命中低，说明同租户／模型内容在更宽的分区中出现过，可能是其他账号，也可能是同账号的 `prompt_cache_key` 变化；它是账号／分区差异的线索，不证明供应商支持跨账号共享。
-- `decision=cold`、`expired`、`instance_id` 和 `cache_age_ms` 用于核对预热、进程重启和 TTL；容量 LRU 淘汰也会降低命中。
+- `shared_prefix_tokens` 高而账号本地命中低，说明同租户／模型内容在更宽的分区中出现过，可能是其他账号，也可能是同账号的正文缓存键或出站会话头变化；它是账号／分区差异的线索，不证明供应商支持跨账号共享。`routing_fingerprint` 只用于核对同一进程内会话路由是否改变。
+- `decision=cold`、`warm_scope`、`expired`、`instance_id`、`cache_age_ms` 和各分区淘汰计数用于区分预热、重启、TTL 与容量问题。预热状态被淘汰仍可能造成冷启动分类偏差，不能只看 `warm_only`。
 - `output_prefix_indexed=false`：首版只登记成功请求的输入前缀，不登记新生成的助手输出；下一轮重新发送该输出时，这一段可能仍算未命中，属于已知低估来源。
 - `captures>1` 表示一个逻辑请求发生了多次物理提交；日志比较最终提交正文，不能把中间失败尝试当成独立成功样本。
 

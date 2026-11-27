@@ -457,7 +457,8 @@ func TestPromptCacheShadowUnknownInputAndOversizedLateModel(t *testing.T) {
 	require.Nil(t, (*events)[0]["input_tokens"])
 	require.Equal(t, "body_limit", (*events)[0]["skip_reason"])
 	ctx, a = svc.beginPromptCacheShadow(ctx, c, account)
-	require.Nil(t, a, "nested observers must not duplicate a completed logical request")
+	require.NotNil(t, a, "a later attempt must replace the completed context")
+	a.finish(nil, context.Canceled)
 }
 
 func TestPromptCacheShadowNativeAnthropicPresenceIsDiagnosticOnly(t *testing.T) {

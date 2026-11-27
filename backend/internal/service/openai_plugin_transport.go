@@ -66,7 +66,6 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 		return nil, context.Cause(phaseGuard.ctx)
 	}
 	request, safetyInfo := s.applySafetyPromptToRequest(request, account)
-	capturePromptCacheShadowHTTP(request)
 	defer func() {
 		if result != nil {
 			result = s.wrapSafetyPromptResponse(result, safetyInfo)
@@ -88,6 +87,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 			return nil, err
 		}
 		observeAttempt := s.observePriorityAttempt(request, account)
+		capturePromptCacheShadowHTTP(request)
 		resp, err := s.httpUpstream.Do(request, proxyURL, account.ID, account.Concurrency)
 		observeAttempt(resp, err)
 		if err == nil && resp != nil && resp.StatusCode == http.StatusUnauthorized && s.excelOAuthReauth != nil {

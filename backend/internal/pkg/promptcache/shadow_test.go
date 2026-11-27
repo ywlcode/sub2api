@@ -309,3 +309,108 @@ func BenchmarkShadowLargePrompt(b *testing.B) {
 		a.Commit(time.Now())
 	}
 }
+
+func TestShadowReviewEvictionAndNewSessionStayWarm(t *testing.T) {
+	e, err := New(Options{MaxEntries: 64, MinPrefixTokens: 16, PrefixTokensStep: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	scope := testScope()
+	body := testBody(strings.Repeat("context ", 100))
+	first := e.Begin(scope, body, byteEncoder, now)
+	first.Commit(now)
+	var root map[string]any
+	_ = json.Unmarshal(body, &root)
+	root["prompt_cache_key"] = "new-session"
+	nextBody, _ := json.Marshal(root)
+	next := e.Begin(scope, nextBody, byteEncoder, now.Add(time.Second))
+	defer next.Release()
+	if next.Decision != "miss" {
+		t.Fatalf("new session on warmed account/model must remain a miss: %s", next.Decision)
+	}
+	next = e.Begin(scope, body, byteEncoder, now.Add(2*time.Second))
+	defer next.Release()
+	if next.Decision == "cold" {
+		t.Fatal("fingerprint LRU eviction must not erase warm account/model state")
+	}
+}
+
+func TestShadowReviewEmptySystemDoesNotChangeProtocol(t *testing.T) {
+	e := testEngine(t)
+	now := time.Now()
+	scope := testScope()
+	body := []byte(`{"messages":[{"role":"user","content":"` + strings.Repeat("context ", 80) + `"}]}`)
+	e.Begin(scope, body, byteEncoder, now).Commit(now)
+	var value map[string]any
+	_ = json.Unmarshal(body, &value)
+	value["system"] = ""
+	other, _ := json.Marshal(value)
+	next := e.Begin(scope, other, byteEncoder, now.Add(time.Second))
+	defer next.Release()
+	if next.MatchedPrefixTokens == 0 {
+		t.Fatalf("empty optional system changed protocol/layout: %s", next.Protocol)
+	}
+}
+
+func TestShadowReviewSeparateCachesAndWarmState(t *testing.T) {
+	e, err := New(Options{MaxEntries: 64, MinPrefixTokens: 16, PrefixTokensStep: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	scope := testScope()
+	body := testBody(strings.Repeat("context ", 100))
+	a := e.Begin(scope, body, byteEncoder, now)
+	last := a.points[len(a.points)-1]
+	key := e.key(a.accountNamespace, last.hash)
+	a.Commit(now)
+	for i := 0; i < 200; i++ {
+		var hash [32]byte
+		hash[0], hash[1] = byte(i), byte(i/256)
+		e.shared.put(hash, now, time.Minute)
+	}
+	if _, ok := e.lookup(key, now); !ok {
+		t.Fatal("shared diagnostics evicted an account prefix")
+	}
+	for i := 0; i < 200; i++ {
+		var hash [32]byte
+		hash[0], hash[1] = byte(i), byte(i/256)
+		e.put(hash, now)
+	}
+	next := e.Begin(scope, body, byteEncoder, now.Add(time.Second))
+	defer next.Release()
+	if next.Decision != "miss" || next.AccountEvictions == 0 || next.SharedEvictions == 0 {
+		t.Fatalf("LRU miss hidden as cold: %+v", next)
+	}
+	if len(e.entries)+len(e.shared.entries) > 64 || len(e.warm.entries) > e.warm.limit {
+		t.Fatal("separate cache budgets exceeded")
+	}
+}
+
+func TestShadowReviewOutboundRoutingAndProtocolIsolation(t *testing.T) {
+	e := testEngine(t)
+	now := time.Now()
+	scope := testScope()
+	scope.Protocol = ProtocolMessages
+	scope.RoutingFingerprint = e.RoutingFingerprint("actual-session-a", "conversation")
+	body := []byte(`{"model":"test","messages":[{"role":"user","content":"` + strings.Repeat("context ", 100) + `"}]}`)
+	a := e.Begin(scope, body, byteEncoder, now)
+	if a.Protocol != ProtocolMessages {
+		t.Fatalf("missing system misclassified Messages: %s", a.Protocol)
+	}
+	a.Commit(now)
+	scope.RoutingFingerprint = e.RoutingFingerprint("actual-session-b", "conversation")
+	next := e.Begin(scope, body, byteEncoder, now.Add(time.Second))
+	defer next.Release()
+	if next.MatchedPrefixTokens != 0 || next.SharedPrefixTokens == 0 || next.Decision != "miss" {
+		t.Fatal("header-only routing changes must be visible without erasing warmth")
+	}
+	scope.RoutingFingerprint = e.RoutingFingerprint("actual-session-a", "conversation")
+	scope.Protocol = ProtocolChatCompletions
+	chat := e.Begin(scope, body, byteEncoder, now.Add(time.Second))
+	defer chat.Release()
+	if chat.MatchedPrefixTokens != 0 || chat.Protocol != ProtocolChatCompletions {
+		t.Fatal("different wire protocols shared an account prefix")
+	}
+}

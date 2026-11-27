@@ -29,10 +29,30 @@ func BenchmarkShadowRetainedMemory(b *testing.B) {
 				b.Fatal(err)
 			}
 			now := time.Now()
-			for i := 0; i < 100000; i++ {
+			for i := 0; i < e.limit; i++ {
 				var key [32]byte
 				binary.LittleEndian.PutUint64(key[:8], uint64(i))
 				e.put(key, now)
+			}
+			for i := 0; i < e.shared.limit; i++ {
+				var key [32]byte
+				binary.LittleEndian.PutUint64(key[:8], uint64(i))
+				e.shared.put(key, now, e.options.TTL)
+			}
+			return e
+		})
+	})
+	b.Run("warm_state_10000", func(b *testing.B) {
+		measure(b, func() any {
+			e, err := New(Options{})
+			if err != nil {
+				b.Fatal(err)
+			}
+			now := time.Now()
+			for i := 0; i < e.warm.limit; i++ {
+				var key [32]byte
+				binary.LittleEndian.PutUint64(key[:8], uint64(i))
+				e.warm.put(key, now, 0)
 			}
 			return e
 		})

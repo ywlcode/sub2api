@@ -129,6 +129,8 @@ class Event:
     simulated: object
     upstream_known: bool
     declared_comparable: bool
+    warm_scope: str
+    eviction_counters: tuple
 
     @classmethod
     def parse(cls, obj):
@@ -152,12 +154,18 @@ class Event:
         input_tokens = token_value(obj, "input_tokens")
         real = token_value(obj, "upstream_cache_read_tokens")
         simulated = token_value(obj, "simulated_cache_read_tokens")
+        warm_scope = obj.get("warm_scope", "legacy_request_namespace")
+        if (not isinstance(warm_scope, str) or not warm_scope.strip()
+                or len(warm_scope) > MAX_LABEL_CHARS):
+            raise ValueError("invalid warm_scope")
+        evictions = tuple(token_value(obj, name) for name in (
+            "account_cache_evictions", "shared_cache_evictions", "warm_state_evictions"))
         if (obj["upstream_cache_known"] and real is not None
                 and input_tokens is not None and real > input_tokens):
             raise ValueError("upstream cache exceeds total upstream input")
         return cls(account_key(obj.get("account_id")), obj["model"], obj["transport"],
                    decision, reason or "", input_tokens, real, simulated,
-                   obj["upstream_cache_known"], obj["comparable"])
+                   obj["upstream_cache_known"], obj["comparable"], warm_scope, evictions)
 
     @property
     def real_known(self):
@@ -315,9 +323,14 @@ class Group:
         self.actual_known = ActualUsage()
         self.comparable = PairedUsage(quantile_samples)
         self.warm_only = PairedUsage(quantile_samples)
+        self.max_process_eviction_counters = [None, None, None]
 
     def add(self, event):
         self.events += 1
+        for index, value in enumerate(event.eviction_counters):
+            if value is not None:
+                previous = self.max_process_eviction_counters[index]
+                self.max_process_eviction_counters[index] = value if previous is None else max(previous, value)
         self.decision_counts[event.decision] += 1
         self.unknown_upstream_samples += not event.real_known
         self.unknown_input_samples += event.input_tokens is None
@@ -345,6 +358,8 @@ class Group:
             "actual_known": self.actual_known.report(),
             "comparable": self.comparable.report(),
             "warm_only": self.warm_only.report(),
+            "max_observed_process_eviction_counters": dict(zip(
+                ("account", "shared", "warm_state"), self.max_process_eviction_counters)),
         }
 
 
@@ -431,7 +446,7 @@ class Analyzer:
             if self.account_ids and event.account_id not in self.account_ids:
                 self.counts["account_filtered_events"] += 1
                 continue
-            key = (event.account_id, event.model, event.transport)
+            key = (event.account_id, event.model, event.transport, event.warm_scope)
             if key not in self.groups:
                 if len(self.groups) >= self.max_groups:
                     raise LimitError("max-groups exceeded; narrow --account-id or raise --max-groups")
@@ -501,7 +516,7 @@ class Analyzer:
                 selected.add(account_id)
             accounts.append({"account_id": account_id, **usage.report(), "selected": include})
         groups = [
-            {"account_id": key[0], "model": key[1], "transport": key[2], **group.report()}
+            {"account_id": key[0], "model": key[1], "transport": key[2], "warm_scope": key[3], **group.report()}
             for key, group in sorted(self.groups.items()) if key[0] in selected
         ]
         return {
@@ -605,7 +620,7 @@ def iter_text(report):
                f"actual/input={number(account['real_hit_rate'])} selected={account['selected']}")
     for group in report["groups"]:
         yield (f"account={json.dumps(group['account_id'])} model={json.dumps(group['model'])} "
-               f"transport={json.dumps(group['transport'])} events={group['events']} "
+               f"transport={json.dumps(group['transport'])} warm_scope={json.dumps(group['warm_scope'])} events={group['events']} "
                f"incomparable={group['incomparable_samples']} "
                f"upstream_unknown={group['unknown_upstream_samples']}")
         known = group["actual_known"]
@@ -615,6 +630,7 @@ def iter_text(report):
                f"real_hit_rate={number(known['real_hit_rate'])}")
         yield cohort("comparable", group["comparable"])
         yield cohort("warm_only (hit/miss)", group["warm_only"])
+        yield "  max_observed_process_eviction_counters=" + json.dumps(group["max_observed_process_eviction_counters"], sort_keys=True)
         for field in ("decision_counts", "skip_reason_counts", "incomparable_reason_counts"):
             yield f"  {field}=" + json.dumps(group[field], sort_keys=True)
 
