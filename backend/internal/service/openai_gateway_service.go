@@ -528,6 +528,7 @@ var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /r
 
 // OpenAIGatewayService handles OpenAI API gateway operations
 type OpenAIGatewayService struct {
+	promptCacheShadow       promptCacheShadowState
 	agentMessageRecovery    openAIAgentRecoveryState
 	groupAntiDistillation   *GroupAntiDistillationService
 	smartProtocolHistory    openAISmartProtocolHistory
@@ -755,6 +756,7 @@ func NewOpenAIGatewayService(
 		registrar.SetAstraTicketLifecycle(svc)
 	}
 	svc.logOpenAIWSModeBootstrap()
+	svc.promptCacheShadow.init(cfg)
 	svc.StartOpenAICodexTicketHarvester()
 	return svc
 }
@@ -890,6 +892,7 @@ func (s *OpenAIGatewayService) billingDeps() *billingDeps {
 // 应在应用优雅关闭时调用。
 func (s *OpenAIGatewayService) CloseOpenAIWSPool() {
 	if s != nil {
+		s.promptCacheShadow.close()
 		s.priorityAnalysis.close()
 		s.codexSnapshotMu.Lock()
 		s.codexSnapshotClosed = true

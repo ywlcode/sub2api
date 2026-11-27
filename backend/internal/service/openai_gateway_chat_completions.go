@@ -63,6 +63,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	ctx, shadow := s.beginPromptCacheShadow(ctx, c, account)
 
 	admittedCtx, admissionErr := s.beginPriorityLatencyTurn(ctx, c, account, gjson.GetBytes(body, "model").String())
 	if admissionErr != nil {
@@ -85,6 +86,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	errorScope.finish(result)
 	finalErr := regionalMeterFinishForward(meterCtx, result, err, finish)
 	s.attributeRegionalConnectionResult(meterCtx, c, account, result)
+	shadow.finish(result, finalErr)
 	return result, finalErr
 }
 

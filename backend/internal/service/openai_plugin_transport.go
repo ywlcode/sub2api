@@ -66,6 +66,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 		return nil, context.Cause(phaseGuard.ctx)
 	}
 	request, safetyInfo := s.applySafetyPromptToRequest(request, account)
+	capturePromptCacheShadowHTTP(request)
 	defer func() {
 		if result != nil {
 			result = s.wrapSafetyPromptResponse(result, safetyInfo)

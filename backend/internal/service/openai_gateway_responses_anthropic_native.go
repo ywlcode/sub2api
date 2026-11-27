@@ -238,6 +238,7 @@ func (s *OpenAIGatewayService) handleResponsesBufferedFromNativeAnthropic(
 		if writeNativeCyberPolicyError(c, APIProtocolResponses, []byte(payload), resp.StatusCode, &cyberUsage) {
 			return nil, errOpenAIErrorPassthroughForwarded
 		}
+		capturePromptCacheShadowResponseUsage(resp, payload)
 		observeAnthropicUpstreamResponseModel(c, []byte(payload))
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -498,6 +499,7 @@ func (s *OpenAIGatewayService) handleResponsesStreamingFromNativeAnthropic(
 		if writeNativeCyberPolicyError(c, APIProtocolResponses, []byte(payload), resp.StatusCode, &cyberUsage) {
 			return nil, errOpenAIErrorPassthroughForwarded
 		}
+		capturePromptCacheShadowResponseUsage(resp, payload)
 		observeAnthropicUpstreamResponseModel(c, []byte(payload))
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {

@@ -286,6 +286,9 @@ func (s *OpenAIGatewayService) handleNativeAnthropicBufferedResponse(
 	toolUsage.observe(body)
 	defer toolUsage.log(ctx, account, resp.Header.Get("x-request-id"))
 	usage := parseClaudeUsageFromResponseBody(body)
+	if ctx.Value(promptCacheShadowContextKey{}) != nil {
+		capturePromptCacheShadowAnthropicUsage(ctx, string(body))
+	}
 	cyberUsage := claudeUsageToOpenAIUsage(usage)
 	if writeNativeCyberPolicyError(c, APIProtocolAnthropic, body, resp.StatusCode, &cyberUsage) {
 		return nil, errOpenAIErrorPassthroughForwarded
@@ -544,6 +547,7 @@ func (s *OpenAIGatewayService) handleNativeAnthropicStreamingResponse(
 				continue
 			}
 			payload := strings.Join(pendingData, "\n")
+			capturePromptCacheShadowAnthropicUsage(ctx, payload)
 			if nativeArk && gjson.Valid(payload) {
 				// Parse complete events: usage snapshots and semantic completion
 				// must not depend on how JSON was split over data lines.

@@ -593,6 +593,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if account == nil {
 		return errors.New("account is nil")
 	}
+	hooks, finishShadow := s.wrapPromptCacheShadowHooks(c, account, hooks)
+	defer finishShadow()
 	agentRecovery := newOpenAIWSAgentRecovery(s, ctx, c)
 	ctx = context.WithValue(ctx, openAIWSAgentRecoveryKey{}, agentRecovery)
 	defer agentRecovery.abort()
@@ -1939,6 +1941,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return nil, openAIWSAgentRecoveryClose(err)
 		}
 		latencyGenerationStartedTurn = turn
+		if hooks != nil && hooks.ObserveUpstreamRequest != nil {
+			hooks.ObserveUpstreamRequest(turn, payload)
+		}
 		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
 				"write_upstream",

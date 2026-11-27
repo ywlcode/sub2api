@@ -1442,6 +1442,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		cancelFirstWrite()
 		return openAIWSUnsentAgentTurn(err, pendingAgentSource, gjson.GetBytes(firstClientMessage, "model").String(), 1)
 	}
+	if hooks != nil && hooks.ObserveUpstreamRequest != nil {
+		hooks.ObserveUpstreamRequest(1, firstClientMessage)
+	}
 	firstWriteErr := relayUpstreamFrameConn.WriteFrame(firstWriteCtx, coderws.MessageText, firstClientMessage)
 	cancelFirstWrite()
 	if firstWriteErr != nil {
@@ -1506,6 +1509,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}
 				if err := agentRecovery.beginSocket(latest, pendingAgentSource, payload, wsURL, headers, "passthrough"); err != nil {
 					return openAIWSUnsentAgentTurn(err, pendingAgentSource, usageMeta.requestModelForFrame(pendingAgentSource), max(2, int(completedTurns.Load())+1))
+				}
+				if hooks != nil && hooks.ObserveUpstreamRequest != nil {
+					hooks.ObserveUpstreamRequest(max(1, int(activeTurn.Load())), payload)
 				}
 				return nil
 			},

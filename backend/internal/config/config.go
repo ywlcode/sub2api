@@ -1174,6 +1174,9 @@ func (c CodexWSAnchorConfig) Validate() error {
 }
 
 type GatewayConfig struct {
+	// PromptCacheShadow is node-local diagnostics; it never changes billing or
+	// the synchronized primary/secondary request policy.
+	PromptCacheShadow PromptCacheShadowConfig `mapstructure:"prompt_cache_shadow"`
 	// DisableEncryptedAgentOwnerBinding permits completed opaque agent history
 	// on another normally eligible native Responses account. Delivery fences,
 	// response pointers, authorization and no-replay protections still apply.
@@ -2345,6 +2348,18 @@ func configureConfigSource(setConfigFile, addConfigPath func(string)) {
 
 func setDefaults() {
 	viper.SetDefault("gateway.disable_encrypted_agent_owner_binding", false)
+	viper.SetDefault("gateway.prompt_cache_shadow.enabled", false)
+	viper.SetDefault("gateway.prompt_cache_shadow.account_ids", []int64{})
+	viper.SetDefault("gateway.prompt_cache_shadow.compute_concurrency", 8)
+	viper.SetDefault("gateway.prompt_cache_shadow.ttl_seconds", 600)
+	viper.SetDefault("gateway.prompt_cache_shadow.min_prefix_tokens", 1024)
+	viper.SetDefault("gateway.prompt_cache_shadow.prefix_tokens_step", 128)
+	viper.SetDefault("gateway.prompt_cache_shadow.max_entries", 100000)
+	viper.SetDefault("gateway.prompt_cache_shadow.max_body_bytes", 2<<20)
+	viper.SetDefault("gateway.prompt_cache_shadow.log_dir", "")
+	viper.SetDefault("gateway.prompt_cache_shadow.log_retention_days", 7)
+	viper.SetDefault("gateway.prompt_cache_shadow.log_max_total_mb", 5120)
+	viper.SetDefault("gateway.prompt_cache_shadow.log_queue_size", 1024)
 	viper.SetDefault("gateway.upstream_routing.enabled", false)
 	viper.SetDefault("runtime.role", RuntimeRoleFull)
 	viper.SetDefault("site.mode", site.Standalone)
@@ -3103,6 +3118,9 @@ func setEnvReachableDefaults() {
 }
 
 func (c *Config) Validate() error {
+	if err := c.Gateway.PromptCacheShadow.Validate(); err != nil {
+		return err
+	}
 	if _, err := upstreamroute.New(c.Gateway.UpstreamRouting); err != nil {
 		return fmt.Errorf("gateway.upstream_routing: %w", err)
 	}

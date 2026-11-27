@@ -33,6 +33,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	ctx, shadow := s.beginPromptCacheShadow(ctx, c, account)
 
 	admittedCtx, admissionErr := s.beginPriorityLatencyTurn(ctx, c, account, gjson.GetBytes(body, "model").String())
 	if admissionErr != nil {
@@ -46,6 +47,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		result.AuthConnectionID = c.GetString("openai_auth_connection_id")
 	}
 	scope.finish(result)
+	shadow.finish(result, err)
 	return result, err
 }
 
