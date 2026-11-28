@@ -128,6 +128,20 @@ class WriterLogTests(unittest.TestCase):
 
 
 class PredictionUnitsTests(unittest.TestCase):
+    def test_local_anchors_keep_their_own_group_and_directional_errors(self):
+        records = [event(schema_version=3, prediction_basis="local_prefix_anchors_v3",
+                         warm_scope="user_model", simulated_cache_read_tokens=value,
+                         upstream_cache_read_tokens=500) for value in (300, 800)]
+        records.append(event(schema_version=2, prediction_basis="upstream_input_ratio_v2"))
+        report = aggregate(records)
+        self.assertEqual(report["counts"]["analyzed_events"], 3)
+        groups = {g["prediction_basis"]: g for g in report["groups"]}
+        local = groups["local_prefix_anchors_v3"]["comparable"]
+        self.assertEqual(local["underprediction_samples"], 1)
+        self.assertEqual(local["underprediction_tokens"], 200)
+        self.assertEqual(local["overprediction_samples"], 1)
+        self.assertEqual(local["overprediction_tokens"], 300)
+
     def test_legacy_and_normalized_predictions_are_not_merged(self):
         legacy = event(simulated_cache_read_tokens=1200)
         normalized = event(schema_version=2, prediction_basis="upstream_input_ratio_v2",
@@ -361,7 +375,7 @@ class ParsingAndBoundsTests(unittest.TestCase):
             {"message": json.dumps(event())}, {"msg": json.dumps(event())},
             {"msg": "unrelated", "component": analyze.COMPONENT},
             event(component="other"), [event()], None,
-            event(schema_version=3), event(state_scope="shared"),
+            event(schema_version=4), event(state_scope="shared"),
         ]
         analyzer = analyze.Analyzer()
         analyzer.consume(io.BytesIO(jsonl(records) + b'\nnot-json\n{"log":"{broken"}\n\xff\n'))

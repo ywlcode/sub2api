@@ -199,7 +199,7 @@ func TestPromptCacheShadowReviewActualOutboundHeaders(t *testing.T) {
 				a.finish(shadowTestResult(), nil)
 			}
 			require.Len(t, *events, 2)
-			require.Equal(t, "miss", (*events)[1]["decision"])
+			require.Equal(t, "hit", (*events)[1]["decision"])
 			require.Zero(t, (*events)[1]["matched_prefix_tokens"])
 			require.Positive(t, (*events)[1]["shared_prefix_tokens"])
 			require.NotEqual(t, (*events)[0]["routing_fingerprint"], (*events)[1]["routing_fingerprint"])

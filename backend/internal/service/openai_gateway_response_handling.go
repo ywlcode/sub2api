@@ -632,6 +632,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 		if data, ok := extractOpenAISSEDataLine(line); ok {
 			dataBytes := []byte(data)
 			eventType := effectiveOpenAISSEEventType(dataBytes, pendingSSEEventType)
+			if eventType == "response.completed" || eventType == "response.done" {
+				capturePromptCacheShadowOutput(ctx, data)
+			}
 			regionalMeterObserveUsage(ctx, dataBytes, eventType)
 			if keepaliveEventDirect || forwardsKeepaliveDirect(eventType) {
 				keepaliveEventDirect = true
@@ -2094,6 +2097,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponse(ctx context.Context, r
 	usageValue, usageOK := extractOpenAIUsageFromJSONBytes(body)
 	usageValue.NativeToolUsage = toolUsage.snapshot()
 	regionalMeterObserveUsage(ctx, body, "json")
+	capturePromptCacheShadowOutputBytes(ctx, body)
 	markOpenAICyberPolicyEvent(c, body, resp.StatusCode, &usageValue)
 	if clientBody, status, matched := rewriteOpenAIForbiddenErrorForClient(c, account, body, 0); matched {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
@@ -2190,6 +2194,9 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		forEachOpenAISSEFrame(bodyText, func(_ string, payload []byte) { toolUsage.observe(payload) })
 	}
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
+	if terminalOK && (terminalType == "response.completed" || terminalType == "response.done") && c.Request != nil {
+		capturePromptCacheShadowOutputBytes(c.Request.Context(), terminalPayload)
+	}
 	if c.Request != nil {
 		regionalMeterObserveUsage(c.Request.Context(), terminalPayload, terminalType)
 	}

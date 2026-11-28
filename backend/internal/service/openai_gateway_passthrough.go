@@ -2449,6 +2449,9 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithImage(
 				}
 			}
 			eventType := effectiveOpenAISSEEventType(dataBytes, rawEventType)
+			if eventType == "response.completed" || eventType == "response.done" {
+				capturePromptCacheShadowOutputBytes(ctx, dataBytes)
+			}
 			createdAtTracker.Observe(dataBytes, eventType)
 			if codexFailureTerminal && sawBareError && !sawResponseFailed && eventType != "response.failed" {
 				suppressCurrentEvent = true
@@ -2848,6 +2851,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		}
 		return nil, err
 	}
+	if c.Request != nil {
+		capturePromptCacheShadowOutputBytes(c.Request.Context(), body)
+	}
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -2926,6 +2932,9 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel string, mappedModel string) (*openaiNonStreamingResultPassthrough, error) {
 	bodyText := string(body)
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
+	if terminalOK && (terminalType == "response.completed" || terminalType == "response.done") && c.Request != nil {
+		capturePromptCacheShadowOutputBytes(c.Request.Context(), terminalPayload)
+	}
 	if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
 		usage := s.parseSSEUsageFromBody(bodyText)
 		markOpenAICyberPolicyEvent(c, terminalPayload, resp.StatusCode, usage)

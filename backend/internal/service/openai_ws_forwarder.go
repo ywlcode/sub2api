@@ -255,7 +255,8 @@ func (e *OpenAIWSClientCloseError) Reason() string {
 type OpenAIWSIngressHooks struct {
 	// ObserveUpstreamRequest is diagnostic only and runs at the final wire send
 	// boundary, including the first turn and retry payload rewrites.
-	ObserveUpstreamRequest func(turn int, payload []byte, routingHeaders ...http.Header)
+	ObserveUpstreamRequest  func(turn int, payload []byte, routingHeaders ...http.Header)
+	ObserveUpstreamResponse func(turn int, payload []byte)
 	// ClientLifecycleContext is the request context before an ingress lease
 	// adds its independent cancellation signal. Downstream writes bind to it
 	// so shutdown and disconnect cancellation remain direct during lease loss.

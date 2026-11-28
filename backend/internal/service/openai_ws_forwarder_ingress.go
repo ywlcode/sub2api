@@ -2028,6 +2028,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
 			responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
+			if hooks != nil && hooks.ObserveUpstreamResponse != nil && (eventType == "response.completed" || eventType == "response.done") {
+				hooks.ObserveUpstreamResponse(turn, upstreamMessage)
+			}
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID
 			}

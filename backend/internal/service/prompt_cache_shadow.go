@@ -26,9 +26,12 @@ type promptCacheShadowState struct {
 	once   sync.Once
 	engine *promptcache.Engine
 	// Diagnostic work must not accumulate behind concurrent model requests.
-	workers chan struct{}
-	log     *promptcache.ObserverLog
-	closed  atomic.Bool
+	workers              chan struct{}
+	log                  *promptcache.ObserverLog
+	closed               atomic.Bool
+	stopState, stateDone chan struct{}
+	stateRestored        bool
+	closeOnce            sync.Once
 	// Emit is replaceable by tests; production uses the independent file worker.
 	emit func([]zap.Field)
 }
@@ -92,16 +95,76 @@ func (s *promptCacheShadowState) init(cfg *config.Config) {
 		if err != nil {
 			s.engine = nil
 			logger.L().Warn("prompt_cache.shadow_disabled", zap.String("reason", "log_initialization_failed"), zap.Error(err), zap.Bool(logger.OpsSystemLogSkipField, true))
+			return
 		}
+		s.startState(dir)
 	})
 }
 
 func (s *promptCacheShadowState) close() {
-	s.closed.Store(true)
-	s.once.Do(func() {})
-	if s.log != nil {
-		s.log.Close()
+	s.closeOnce.Do(func() {
+		s.closed.Store(true)
+		s.once.Do(func() {})
+		if s.stopState != nil {
+			close(s.stopState)
+			<-s.stateDone
+		}
+		if s.log != nil {
+			s.log.Close()
+		}
+	})
+}
+
+func (s *promptCacheShadowState) startState(logDir string) {
+	dir := filepath.Join(logDir, "state")
+	warn := func(err error) {
+		logger.L().Warn("prompt_cache.shadow_state_error", zap.Error(err), zap.Bool(logger.OpsSystemLogSkipField, true))
 	}
+	root, err := os.OpenRoot(logDir)
+	if err != nil {
+		warn(err)
+		return
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.Mkdir("state", 0700); err != nil && !os.IsExist(err) {
+		warn(err)
+		return
+	}
+	info, err := root.Lstat("state")
+	if err != nil {
+		warn(err)
+		return
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0077 != 0 {
+		warn(fmt.Errorf("cache state directory is not private"))
+		return
+	}
+	path := filepath.Join(dir, "cache.bin")
+	err = s.engine.Load(path, time.Now())
+	if err == nil {
+		s.stateRestored = true
+	} else if !os.IsNotExist(err) {
+		warn(err)
+	}
+	s.stopState, s.stateDone = make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(s.stateDone)
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.stopState:
+				if err := s.engine.Save(path, time.Now()); err != nil {
+					warn(err)
+				}
+				return
+			case <-ticker.C:
+				if err := s.engine.Save(path, time.Now()); err != nil {
+					warn(err)
+				}
+			}
+		}
+	}()
 }
 
 type promptCacheShadowContextKey struct{}
@@ -149,6 +212,11 @@ func (s *OpenAIGatewayService) beginPromptCacheShadow(ctx context.Context, c *gi
 func newPromptCacheShadowAttempt(state *promptCacheShadowState, e *promptcache.Engine, c *gin.Context, account *Account) *promptCacheShadowAttempt {
 	a := &promptCacheShadowAttempt{state: state, engine: e, apiKeyID: getAPIKeyIDFromContext(c), groupID: getOpenAIGroupIDFromContext(c), platform: account.Platform, model: "unknown", transport: "unknown", bodyView: "unavailable"}
 	a.scope = promptcache.Scope{Tenant: fmt.Sprintf("key:%d/group:%d", a.apiKeyID, a.groupID), Platform: account.Platform, AccountID: account.ID}
+	if c != nil {
+		if key := getAPIKeyFromContext(c); key != nil && key.UserID > 0 {
+			a.scope.Tenant = fmt.Sprintf("user:%d", key.UserID)
+		}
+	}
 	return a
 }
 
@@ -316,11 +384,13 @@ func (a *promptCacheShadowAttempt) finish(result *OpenAIForwardResult, forwardEr
 	fields := []zap.Field{
 		zap.String("component", "service.prompt_cache_shadow"),
 		zap.Bool(logger.OpsSystemLogSkipField, true),
-		zap.Int("schema_version", 2),
-		zap.String("prediction_basis", "upstream_input_ratio_v2"),
+		zap.Int("schema_version", 3),
+		zap.String("prediction_basis", "local_prefix_anchors_v3"),
 		zap.String("mode", "observe_only"),
 		zap.String("instance_id", a.engine.InstanceID()),
 		zap.String("state_scope", "process"),
+		zap.Bool("state_persistent", a.state.stopState != nil),
+		zap.Bool("state_restored", a.state.stateRestored),
 		zap.Int64("account_id", a.scope.AccountID),
 		zap.Int64("api_key_id", a.apiKeyID),
 		zap.Int64("group_id", a.groupID),
@@ -332,9 +402,8 @@ func (a *promptCacheShadowAttempt) finish(result *OpenAIForwardResult, forwardEr
 		zap.Int("ttl_seconds", int(settings.TTL/time.Second)),
 		zap.Int("min_prefix_tokens", settings.MinPrefixTokens),
 		zap.Int("prefix_tokens_step", settings.PrefixTokensStep),
-		zap.Bool("output_prefix_indexed", false),
 		zap.String("tokenization_mode", "chunked_8192_bytes"),
-		zap.String("warm_scope", "account_model"),
+		zap.String("warm_scope", "user_model"),
 		zap.Int("account_prefix_capacity", accountCapacity),
 		zap.Int("shared_prefix_capacity", sharedCapacity),
 		zap.Int("warm_state_capacity", warmCapacity),
@@ -395,6 +464,12 @@ func (a *promptCacheShadowAttempt) finish(result *OpenAIForwardResult, forwardEr
 	if a.attempt != nil {
 		p := a.attempt
 		fields = append(fields,
+			zap.Bool("output_prefix_indexed", p.OutputIndexed),
+			zap.Int("opaque_blocks", p.OpaqueBlocks),
+			zap.Int("measured_prefix_input_tokens", p.MatchedInputTokens),
+			zap.String("logical_scope", "user_platform_model_protocol"),
+			zap.Uint64("account_live_evictions", p.AccountLiveEvictions),
+			zap.Uint64("account_expired_reclaims", p.AccountExpiredReclaims),
 			zap.String("decision", p.Decision),
 			zap.String("prompt_layout", p.Layout),
 			zap.String("protocol", p.Protocol),
@@ -426,7 +501,7 @@ func (a *promptCacheShadowAttempt) finish(result *OpenAIForwardResult, forwardEr
 			fields = append(fields, zap.Any("simulated_cache_read_tokens", nil))
 		}
 		if complete && !result.UsageUnavailable && input > 0 && cached >= 0 && cached <= input {
-			committed = p.Commit(time.Now())
+			committed = p.CommitUsage(input, max(0, result.Usage.OutputTokens), time.Now())
 		}
 	} else {
 		fields = append(fields, zap.String("decision", "skipped"), zap.Any("simulated_cache_read_tokens", nil))
@@ -452,6 +527,19 @@ func (s *OpenAIGatewayService) wrapPromptCacheShadowHooks(c *gin.Context, accoun
 	var active *promptCacheShadowAttempt
 	activeTurn := 0
 	priorObserve, priorAfter := wrapped.ObserveUpstreamRequest, wrapped.AfterTurn
+	priorOutput := wrapped.ObserveUpstreamResponse
+	wrapped.ObserveUpstreamResponse = func(turn int, payload []byte) {
+		if priorOutput != nil {
+			priorOutput(turn, payload)
+		}
+		mu.Lock()
+		a := active
+		current := activeTurn
+		mu.Unlock()
+		if a != nil && turn == current {
+			a.captureOutput(string(payload))
+		}
+	}
 	wrapped.ObserveUpstreamRequest = func(turn int, body []byte, routingHeaders ...http.Header) {
 		if priorObserve != nil {
 			priorObserve(turn, body, routingHeaders...)
@@ -528,5 +616,46 @@ func capturePromptCacheShadowAnthropicUsage(ctx context.Context, payload string)
 func capturePromptCacheShadowResponseUsage(resp *http.Response, payload string) {
 	if resp != nil && resp.Request != nil {
 		capturePromptCacheShadowAnthropicUsage(resp.Request.Context(), payload)
+		capturePromptCacheShadowOutput(resp.Request.Context(), payload)
+	}
+}
+
+func capturePromptCacheShadowOutput(ctx context.Context, payload string) {
+	a, _ := ctx.Value(promptCacheShadowContextKey{}).(*promptCacheShadowAttempt)
+	if a == nil {
+		return
+	}
+	a.captureOutput(payload)
+}
+
+func capturePromptCacheShadowOutputBytes(ctx context.Context, payload []byte) {
+	a, _ := ctx.Value(promptCacheShadowContextKey{}).(*promptCacheShadowAttempt)
+	if a != nil {
+		a.captureOutput(string(payload))
+	}
+}
+
+func (a *promptCacheShadowAttempt) captureOutput(payload string) {
+	if len(payload) > a.engine.MaxBodyBytes() {
+		return
+	}
+	root := gjson.Parse(payload)
+	output := root.Get("output")
+	if root.Get("type").String() == "response.completed" || root.Get("type").String() == "response.done" || root.Get("response.status").String() == "completed" {
+		output = root.Get("response.output")
+	}
+	if !output.IsArray() || len(output.Raw) > a.engine.MaxBodyBytes() {
+		return
+	}
+	select {
+	case a.state.workers <- struct{}{}:
+		defer func() { <-a.state.workers }()
+	default:
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if !a.finished && a.attempt != nil {
+		a.attempt.ObserveOutput([]byte(output.Raw))
 	}
 }

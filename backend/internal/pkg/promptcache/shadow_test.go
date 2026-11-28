@@ -148,8 +148,6 @@ func TestShadowCanonicalContentAndRequestControls(t *testing.T) {
 func TestShadowOpaqueAndUnsupportedNeverWarm(t *testing.T) {
 	for _, body := range []string{
 		`{"model":"x","previous_response_id":"resp_x","input":"hello"}`,
-		`{"input":[{"type":"reasoning","encrypted_content":"secret"}]}`,
-		`{"input":[{"type":"compaction","encrypted_content":"secret"}]}`,
 		`{"input":[{"type":"item_reference","id":"item_x"}]}`,
 		`{"input":[{"type":"input_image","image_url":"data:secret"}]}`,
 		`{"prompt":{"id":"saved"},"input":"hello"}`,
@@ -222,9 +220,13 @@ func TestShadowDoesNotSeeWritesAfterObservationStarted(t *testing.T) {
 	scope := testScope()
 	body := testBody(strings.Repeat("context ", 100))
 	started, release := make(chan struct{}), make(chan struct{})
+	var barrier sync.Once
 	done := make(chan *Attempt, 1)
 	go func() {
-		done <- e.Begin(scope, body, func(s string) ([]uint, error) { close(started); <-release; return byteEncoder(s) }, now)
+		done <- e.Begin(scope, body, func(s string) ([]uint, error) {
+			barrier.Do(func() { close(started); <-release })
+			return byteEncoder(s)
+		}, now)
 	}()
 	<-started
 	e.Begin(scope, body, byteEncoder, now.Add(time.Second)).Commit(now.Add(time.Second))
@@ -255,9 +257,13 @@ func TestShadowConcurrentRefreshDoesNotHideWarmPrefix(t *testing.T) {
 	now := time.Now()
 	e.Begin(scope, body, byteEncoder, now).Commit(now)
 	started, release := make(chan struct{}), make(chan struct{})
+	var barrier sync.Once
 	done := make(chan *Attempt, 1)
 	go func() {
-		done <- e.Begin(scope, body, func(s string) ([]uint, error) { close(started); <-release; return byteEncoder(s) }, time.Now())
+		done <- e.Begin(scope, body, func(s string) ([]uint, error) {
+			barrier.Do(func() { close(started); <-release })
+			return byteEncoder(s)
+		}, time.Now())
 	}()
 	<-started
 	e.Begin(scope, body, byteEncoder, time.Now()).Commit(time.Now())
@@ -329,8 +335,8 @@ func TestShadowReviewEvictionAndNewSessionStayWarm(t *testing.T) {
 	nextBody, _ := json.Marshal(root)
 	next := e.Begin(scope, nextBody, byteEncoder, now.Add(time.Second))
 	defer next.Release()
-	if next.Decision != "miss" {
-		t.Fatalf("new session on warmed account/model must remain a miss: %s", next.Decision)
+	if next.Decision != "hit" {
+		t.Fatalf("new upstream session must retain the logical cache: %s", next.Decision)
 	}
 	next = e.Begin(scope, body, byteEncoder, now.Add(2*time.Second))
 	defer next.Release()
@@ -406,7 +412,7 @@ func TestShadowReviewOutboundRoutingAndProtocolIsolation(t *testing.T) {
 	scope.RoutingFingerprint = e.RoutingFingerprint("actual-session-b", "conversation")
 	next := e.Begin(scope, body, byteEncoder, now.Add(time.Second))
 	defer next.Release()
-	if next.MatchedPrefixTokens != 0 || next.SharedPrefixTokens == 0 || next.Decision != "miss" {
+	if next.MatchedPrefixTokens != 0 || next.SharedPrefixTokens == 0 || next.Decision != "hit" {
 		t.Fatal("header-only routing changes must be visible without erasing warmth")
 	}
 	scope.RoutingFingerprint = e.RoutingFingerprint("actual-session-a", "conversation")

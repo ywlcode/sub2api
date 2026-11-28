@@ -881,6 +881,9 @@ readLoop:
 			continue
 		}
 		responseModelObserver.ObserveOpenAI(message, eventType)
+		if eventType == "response.completed" || eventType == "response.done" {
+			capturePromptCacheShadowOutputBytes(ctx, message)
+		}
 		eventCount++
 		if int64(eventCount) > nextSequenceNumber {
 			nextSequenceNumber = int64(eventCount)

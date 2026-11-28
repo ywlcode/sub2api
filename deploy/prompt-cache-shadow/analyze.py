@@ -156,9 +156,9 @@ class Event:
         real = token_value(obj, "upstream_cache_read_tokens")
         simulated = token_value(obj, "simulated_cache_read_tokens")
         prediction_basis = "estimated_tokens_v1"
-        if obj.get("schema_version") == 2:
+        if obj.get("schema_version") in (2, 3):
             prediction_basis = obj.get("prediction_basis")
-            if prediction_basis != "upstream_input_ratio_v2":
+            if prediction_basis != {2: "upstream_input_ratio_v2", 3: "local_prefix_anchors_v3"}[obj["schema_version"]]:
                 raise ValueError("unsupported normalized prediction basis")
             if simulated is not None and (input_tokens is None or simulated > input_tokens):
                 raise ValueError("normalized prediction exceeds or lacks upstream input")
@@ -244,6 +244,10 @@ class PairedUsage:
         self.simulated = 0
         self.absolute_error = 0
         self.signed_error = 0
+        self.underprediction_samples = 0
+        self.underprediction_tokens = 0
+        self.overprediction_samples = 0
+        self.overprediction_tokens = 0
         self.relative_error_sum = 0.0
         self.relative_error_samples = 0
         self.relative_absolute_error = 0
@@ -262,6 +266,12 @@ class PairedUsage:
         absolute = abs(error)
         self.absolute_error += absolute
         self.signed_error += error
+        if error < 0:
+            self.underprediction_samples += 1
+            self.underprediction_tokens -= error
+        elif error > 0:
+            self.overprediction_samples += 1
+            self.overprediction_tokens += error
         if event.input_tokens:
             relative = absolute / event.input_tokens
             self.relative_error_sum += relative
@@ -298,6 +308,10 @@ class PairedUsage:
 
         return {
             "samples": self.samples,
+            "underprediction_samples": self.underprediction_samples,
+            "underprediction_tokens": self.underprediction_tokens,
+            "overprediction_samples": self.overprediction_samples,
+            "overprediction_tokens": self.overprediction_tokens,
             "input_tokens": self.input_tokens if self.samples else None,
             "real_cache_read_tokens": self.real if self.samples else None,
             "simulated_cache_read_tokens": self.simulated if self.samples else None,
@@ -437,7 +451,7 @@ class Analyzer:
                     self.counts["invalid_writer_stats_events"] += 1
                 continue
             self.counts["shadow_events"] += 1
-            if type(obj.get("schema_version")) is not int or obj["schema_version"] not in (1, 2):
+            if type(obj.get("schema_version")) is not int or obj["schema_version"] not in (1, 2, 3):
                 self.counts["unsupported_schema_lines"] += 1
                 continue
             try:
@@ -532,8 +546,8 @@ class Analyzer:
         ]
         return {
             "report_schema_version": 1,
-            "event_schema_version": 2,
-            "supported_event_schema_versions": [1, 2],
+            "event_schema_version": 3,
+            "supported_event_schema_versions": [1, 2, 3],
             "state_scope": "process",
             "filters": {"account_ids": sorted(self.account_ids),
                         "min_real_hit_rate": str(min_real_hit_rate)

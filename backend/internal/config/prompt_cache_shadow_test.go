@@ -28,7 +28,7 @@ func TestPromptCacheShadowConfiguration(t *testing.T) {
 			cfg, err := Load()
 			require.NoError(t, err)
 			require.Equal(t, tc.enabled, cfg.Gateway.PromptCacheShadow.Enabled)
-			require.Equal(t, 600, cfg.Gateway.PromptCacheShadow.TTLSeconds)
+			require.Equal(t, 3600, cfg.Gateway.PromptCacheShadow.TTLSeconds)
 			require.Equal(t, 8, cfg.Gateway.PromptCacheShadow.ComputeConcurrency)
 			require.Equal(t, 7, cfg.Gateway.PromptCacheShadow.LogRetentionDays)
 			require.Equal(t, 5120, cfg.Gateway.PromptCacheShadow.LogMaxTotalMB)
