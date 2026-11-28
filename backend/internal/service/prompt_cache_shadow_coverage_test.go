@@ -101,3 +101,25 @@ func TestPromptCacheShadowOutputWithoutRegionalMeterContext(t *testing.T) {
 		a.finish(shadowTestResult(), nil)
 	}
 }
+
+func TestPromptCacheShadowLogsProtectedAnchorAndOpaqueHistory(t *testing.T) {
+	svc, account, c, events := shadowTestService(t)
+	body := []byte(`{"model":"gpt-6.2-sol","input":[{"type":"compaction","encrypted_content":"PRIVATE-ANCHOR-CIPHER"}]}`)
+	for range 2 {
+		ctx, a := svc.beginPromptCacheShadow(context.Background(), c, account)
+		capturePromptCacheShadow(ctx, body, "http")
+		a.finish(shadowTestResult(), nil)
+	}
+	require.Len(t, *events, 2)
+	first, second := (*events)[0], (*events)[1]
+	require.EqualValues(t, 100000, first["measured_anchor_capacity"])
+	require.EqualValues(t, 10000, first["opaque_history_capacity"])
+	require.EqualValues(t, 1, first["opaque_unseen_blocks"])
+	require.Equal(t, "not_found", first["measured_anchor_status"])
+	require.EqualValues(t, 1, second["opaque_known_blocks"])
+	require.EqualValues(t, 0, second["opaque_unseen_blocks"])
+	require.Equal(t, "hit", second["measured_anchor_status"])
+	raw, err := json.Marshal(*events)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "PRIVATE-ANCHOR-CIPHER")
+}

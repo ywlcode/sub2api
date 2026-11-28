@@ -2354,7 +2354,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.prompt_cache_shadow.ttl_seconds", 3600)
 	viper.SetDefault("gateway.prompt_cache_shadow.min_prefix_tokens", 1024)
 	viper.SetDefault("gateway.prompt_cache_shadow.prefix_tokens_step", 128)
-	viper.SetDefault("gateway.prompt_cache_shadow.max_entries", 100000)
+	viper.SetDefault("gateway.prompt_cache_shadow.max_entries", 1000000)
 	viper.SetDefault("gateway.prompt_cache_shadow.max_body_bytes", 8<<20)
 	viper.SetDefault("gateway.prompt_cache_shadow.log_dir", "")
 	viper.SetDefault("gateway.prompt_cache_shadow.log_retention_days", 7)

@@ -381,6 +381,7 @@ func (a *promptCacheShadowAttempt) finish(result *OpenAIForwardResult, forwardEr
 	defer a.attempt.Release()
 	settings := a.engine.Options()
 	accountCapacity, sharedCapacity, warmCapacity := a.engine.CacheCapacities()
+	anchorCapacity, opaqueCapacity := a.engine.AnchorCapacities()
 	fields := []zap.Field{
 		zap.String("component", "service.prompt_cache_shadow"),
 		zap.Bool(logger.OpsSystemLogSkipField, true),
@@ -407,6 +408,8 @@ func (a *promptCacheShadowAttempt) finish(result *OpenAIForwardResult, forwardEr
 		zap.Int("account_prefix_capacity", accountCapacity),
 		zap.Int("shared_prefix_capacity", sharedCapacity),
 		zap.Int("warm_state_capacity", warmCapacity),
+		zap.Int("measured_anchor_capacity", anchorCapacity),
+		zap.Int("opaque_history_capacity", opaqueCapacity),
 	}
 	reason := ""
 	comparable := true
@@ -466,6 +469,15 @@ func (a *promptCacheShadowAttempt) finish(result *OpenAIForwardResult, forwardEr
 		fields = append(fields,
 			zap.Bool("output_prefix_indexed", p.OutputIndexed),
 			zap.Int("opaque_blocks", p.OpaqueBlocks),
+			zap.Int("opaque_known_blocks", p.OpaqueKnownBlocks),
+			zap.Int("opaque_output_known_blocks", p.OpaqueOutputKnownBlocks),
+			zap.Int("opaque_unseen_blocks", p.OpaqueBlocks-p.OpaqueKnownBlocks),
+			zap.String("measured_anchor_status", p.AnchorStatus),
+			zap.Int64("measured_anchor_age_ms", p.MeasuredAnchorAge.Milliseconds()),
+			zap.Uint64("opaque_history_evictions", p.OpaqueHistoryEvictions),
+			zap.Uint64("measured_anchor_evictions", p.AnchorEvictions),
+			zap.Uint64("measured_anchor_live_evictions", p.AnchorLiveEvictions),
+			zap.Uint64("measured_anchor_expired_reclaims", p.AnchorExpiredReclaims),
 			zap.Int("measured_prefix_input_tokens", p.MatchedInputTokens),
 			zap.String("logical_scope", "user_platform_model_protocol"),
 			zap.Uint64("account_live_evictions", p.AccountLiveEvictions),

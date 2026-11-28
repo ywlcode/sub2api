@@ -24,7 +24,7 @@ func BenchmarkShadowRetainedMemory(b *testing.B) {
 	}
 	b.Run("index_100000", func(b *testing.B) {
 		measure(b, func() any {
-			e, err := New(Options{})
+			e, err := New(Options{MaxEntries: 100000})
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -38,6 +38,11 @@ func BenchmarkShadowRetainedMemory(b *testing.B) {
 				var key [32]byte
 				binary.LittleEndian.PutUint64(key[:8], uint64(i))
 				e.shared.put(key, now, e.options.TTL)
+			}
+			for i := 0; i < e.anchors.limit; i++ {
+				var key [32]byte
+				binary.LittleEndian.PutUint64(key[:8], uint64(i))
+				e.anchors.putMeasured(key, now, e.options.TTL, 1000)
 			}
 			return e
 		})

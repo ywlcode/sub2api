@@ -8,7 +8,7 @@ import (
 
 // Each canonical record is tokenized independently. Appending a new turn cannot
 // move an earlier record's BPE boundary or invalidate its measured usage anchor.
-func (e *Engine) promptParts(body []byte, hint string) (parts []string, protocol, layout, identity string, opaque int, reason string) {
+func (e *Engine) promptParts(body []byte, hint string) (parts []string, protocol, layout, identity string, opaque int, opaqueHashes [][32]byte, reason string) {
 	var root map[string]json.RawMessage
 	if json.Unmarshal(body, &root) != nil {
 		reason = "invalid_json"
@@ -60,7 +60,7 @@ func (e *Engine) promptParts(body []byte, hint string) (parts []string, protocol
 		}
 		if sanitize {
 			var err error
-			value, err = e.normalizeContent(value, &opaque, 0)
+			value, err = e.normalizeContent(value, &opaque, 0, &opaqueHashes)
 			if err != nil {
 				reason = err.Error()
 				return false
@@ -120,14 +120,14 @@ func (e *Engine) promptParts(body []byte, hint string) (parts []string, protocol
 	return
 }
 
-func (e *Engine) normalizeContent(value any, opaque *int, depth int) (any, error) {
+func (e *Engine) normalizeContent(value any, opaque *int, depth int, hashes *[][32]byte) (any, error) {
 	if depth > 64 {
 		return nil, errors.New("prompt_depth_limit")
 	}
 	switch node := value.(type) {
 	case []any:
 		for i, child := range node {
-			v, err := e.normalizeContent(child, opaque, depth+1)
+			v, err := e.normalizeContent(child, opaque, depth+1, hashes)
 			if err != nil {
 				return nil, err
 			}
@@ -164,11 +164,15 @@ func (e *Engine) normalizeContent(value any, opaque *int, depth int) (any, error
 					return nil, errors.New("invalid_opaque_block")
 				}
 				h := e.digest([]byte(text))
+				if len(*hashes) >= maxAttemptPoints {
+					return nil, errors.New("fingerprint_limit")
+				}
+				*hashes = append(*hashes, h)
 				node[key] = map[string]string{"shadow_opaque_hmac": hex.EncodeToString(h[:])}
 				*opaque++
 				continue
 			}
-			v, err := e.normalizeContent(child, opaque, depth+1)
+			v, err := e.normalizeContent(child, opaque, depth+1, hashes)
 			if err != nil {
 				return nil, err
 			}
@@ -197,7 +201,8 @@ func (a *Attempt) ObserveOutput(raw []byte) bool {
 	if decodeExactJSON(raw, &items) != nil || len(items) == 0 {
 		return false
 	}
-	value, err := a.engine.normalizeContent(items, new(int), 0)
+	var hashes [][32]byte
+	value, err := a.engine.normalizeContent(items, new(int), 0, &hashes)
 	if err != nil {
 		return false
 	}
@@ -213,6 +218,21 @@ func (a *Attempt) ObserveOutput(raw []byte) bool {
 		}
 		hash = a.engine.recordDigest(hash, append(data, '\n'))
 	}
+	a.engine.mu.Lock()
+	defer a.engine.mu.Unlock()
+	// Output identities share the existing bounded in-flight reservation. Only
+	// the first complete output is installed; duplicate terminal events are inert.
+	if a.OutputIndexed {
+		return true
+	}
+	if a.reserved+len(hashes) > maxAttemptPoints || a.engine.retainedPoints+len(hashes) > maxRetainedPoints {
+		return false
+	}
+	for _, digest := range hashes {
+		a.outputOpaqueKeys = append(a.outputOpaqueKeys, a.engine.opaqueKey(a.sharedNamespace, digest))
+	}
+	a.reserved += len(hashes)
+	a.engine.retainedPoints += len(hashes)
 	a.outputHash, a.OutputIndexed = hash, true
 	return true
 }

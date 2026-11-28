@@ -33,7 +33,7 @@ func (o Options) Defaults() Options {
 		o.PrefixTokensStep = 128
 	}
 	if o.MaxEntries <= 0 {
-		o.MaxEntries = 100000
+		o.MaxEntries = 1000000
 	}
 	if o.MaxBodyBytes <= 0 {
 		o.MaxBodyBytes = 8 << 20
@@ -69,12 +69,13 @@ type entry struct {
 
 type Engine struct {
 	prefixCache
-	shared, warm   prefixCache
-	mu             sync.Mutex
-	options        Options
-	secret         [32]byte
-	instanceID     string
-	retainedPoints int
+	shared, warm        prefixCache
+	anchors, opaqueSeen prefixCache
+	mu                  sync.Mutex
+	options             Options
+	secret              [32]byte
+	instanceID          string
+	retainedPoints      int
 }
 
 type prefixCache struct {
@@ -95,7 +96,8 @@ const maxRetainedPoints = 65536
 func New(options Options) (*Engine, error) {
 	opts := options.Defaults()
 	accountLimit := max(1, opts.MaxEntries/4)
-	e := &Engine{options: opts, prefixCache: newPrefixCache(accountLimit), shared: newPrefixCache(opts.MaxEntries - accountLimit), warm: newPrefixCache(min(10000, max(16, opts.MaxEntries)))}
+	anchorLimit := min(100000, opts.MaxEntries/10)
+	e := &Engine{options: opts, prefixCache: newPrefixCache(accountLimit), shared: newPrefixCache(opts.MaxEntries - accountLimit - anchorLimit), warm: newPrefixCache(min(10000, max(16, opts.MaxEntries))), anchors: newPrefixCache(anchorLimit), opaqueSeen: newPrefixCache(min(10000, opts.MaxEntries))}
 	if _, err := rand.Read(e.secret[:]); err != nil {
 		return nil, err
 	}
@@ -125,28 +127,34 @@ func (e *Engine) RoutingFingerprint(session, conversation string) string {
 // Attempt contains fingerprints only and freezes the lookup before submission.
 // Concurrent requests cannot claim their own future cache writes as hits.
 type Attempt struct {
-	engine                                                *Engine
-	points                                                []point
-	accountNamespace, sharedNamespace, warmNamespace      [32]byte
-	EstimatedInputTokens                                  int
-	CacheableInputTokens                                  int
-	MatchedPrefixTokens                                   int
-	SharedPrefixTokens                                    int
-	MatchedInputTokens                                    int
-	OpaqueBlocks                                          int
-	OutputIndexed                                         bool
-	recordHash, outputHash                                [32]byte
-	CacheAge                                              time.Duration
-	Decision, SkipReason, Protocol, Layout                string
-	PrefixFingerprint                                     string
-	RoutingFingerprint                                    string
-	AccountEvictions, SharedEvictions, WarmStateEvictions uint64
-	Expired                                               bool
-	AccountLiveEvictions, AccountExpiredReclaims          uint64
-	ComputedIn                                            time.Duration
-	once                                                  sync.Once
-	releaseOnce                                           sync.Once
-	reserved                                              int
+	engine                                                      *Engine
+	points                                                      []point
+	accountNamespace, sharedNamespace, warmNamespace            [32]byte
+	EstimatedInputTokens                                        int
+	CacheableInputTokens                                        int
+	MatchedPrefixTokens                                         int
+	SharedPrefixTokens                                          int
+	MatchedInputTokens                                          int
+	OpaqueBlocks                                                int
+	OutputIndexed                                               bool
+	recordHash, outputHash                                      [32]byte
+	CacheAge                                                    time.Duration
+	Decision, SkipReason, Protocol, Layout                      string
+	PrefixFingerprint                                           string
+	RoutingFingerprint                                          string
+	AccountEvictions, SharedEvictions, WarmStateEvictions       uint64
+	Expired                                                     bool
+	AccountLiveEvictions, AccountExpiredReclaims                uint64
+	AnchorStatus                                                string
+	AnchorEvictions, AnchorLiveEvictions, AnchorExpiredReclaims uint64
+	OpaqueHistoryEvictions                                      uint64
+	MeasuredAnchorAge                                           time.Duration
+	OpaqueKnownBlocks, OpaqueOutputKnownBlocks                  int
+	opaqueKeys, outputOpaqueKeys                                [][32]byte
+	ComputedIn                                                  time.Duration
+	once                                                        sync.Once
+	releaseOnce                                                 sync.Once
+	reserved                                                    int
 }
 
 func (e *Engine) Begin(scope Scope, body []byte, encode Encode, now time.Time) *Attempt {
@@ -157,7 +165,7 @@ func (e *Engine) Begin(scope Scope, body []byte, encode Encode, now time.Time) *
 		a.SkipReason = "body_limit"
 		return a
 	}
-	parts, protocol, layout, identity, opaque, reason := e.promptParts(body, scope.Protocol)
+	parts, protocol, layout, identity, opaque, opaqueHashes, reason := e.promptParts(body, scope.Protocol)
 	a.Protocol, a.Layout = protocol, layout
 	a.OpaqueBlocks = opaque
 	if reason != "" {
@@ -168,6 +176,9 @@ func (e *Engine) Begin(scope Scope, body []byte, encode Encode, now time.Time) *
 	// candidate: it answers whether upstream account switching explains a miss.
 	base, _ := json.Marshal([]any{scope.Tenant, scope.Platform, scope.Model, protocol, layout})
 	a.sharedNamespace = e.digest(base)
+	for _, hash := range opaqueHashes {
+		a.opaqueKeys = append(a.opaqueKeys, e.opaqueKey(a.sharedNamespace, hash))
+	}
 	account, _ := json.Marshal([]any{hex.EncodeToString(a.sharedNamespace[:]), scope.AccountID, identity, scope.RoutingFingerprint})
 	a.accountNamespace = e.digest(account)
 	a.RoutingFingerprint = scope.RoutingFingerprint
@@ -218,12 +229,18 @@ func (e *Engine) Begin(scope Scope, body []byte, encode Encode, now time.Time) *
 	a.PrefixFingerprint = hex.EncodeToString(full[:8])
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if e.retainedPoints+len(a.points) > maxRetainedPoints {
+	if len(a.points)+len(a.opaqueKeys) > maxAttemptPoints {
+		a.points, a.opaqueKeys = nil, nil
+		a.SkipReason = "fingerprint_limit"
+		return a
+	}
+	if e.retainedPoints+len(a.points)+len(a.opaqueKeys) > maxRetainedPoints {
 		a.points = nil
+		a.opaqueKeys = nil
 		a.SkipReason = "observer_budget"
 		return a
 	}
-	a.reserved = len(a.points)
+	a.reserved = len(a.points) + len(a.opaqueKeys)
 	e.retainedPoints += a.reserved
 	// Freeze immediately before submission, after tokenization. A concurrent
 	// successful request may have refreshed a prefix while we were encoding.
@@ -231,6 +248,17 @@ func (e *Engine) Begin(scope Scope, body []byte, encode Encode, now time.Time) *
 	_, seen := e.warm.lookup(a.warmNamespace, now)
 	a.AccountEvictions, a.SharedEvictions, a.WarmStateEvictions = e.evictions, e.shared.evictions, e.warm.evictions
 	a.AccountLiveEvictions, a.AccountExpiredReclaims = e.liveEvictions, e.expiredReclaims
+	a.AnchorEvictions, a.AnchorLiveEvictions, a.AnchorExpiredReclaims = e.anchors.evictions, e.anchors.liveEvictions, e.anchors.expiredReclaims
+	a.OpaqueHistoryEvictions = e.opaqueSeen.evictions
+	a.AnchorStatus = "not_found"
+	for _, key := range a.opaqueKeys {
+		if item, ok := e.opaqueSeen.lookup(key, now); ok {
+			a.OpaqueKnownBlocks++
+			if item.inputTokens == 2 {
+				a.OpaqueOutputKnownBlocks++
+			}
+		}
+	}
 	a.Decision = "cold"
 	if seen {
 		a.Decision = "miss"
@@ -268,14 +296,31 @@ func (e *Engine) Begin(scope Scope, body []byte, encode Encode, now time.Time) *
 		if !p.anchor {
 			continue
 		}
+		key := e.key(a.sharedNamespace, p.hash)
+		if item, ok := e.anchors.lookup(key, now); ok && item.inputTokens >= e.options.MinPrefixTokens {
+			if item.inputTokens > a.MatchedInputTokens {
+				a.MatchedInputTokens, a.MeasuredAnchorAge = item.inputTokens, now.Sub(item.written)
+			}
+		} else if elem := e.anchors.entries[key]; elem != nil {
+			item, _ := elem.Value.(entry)
+			if !now.Before(item.expires) {
+				a.AnchorStatus = "expired"
+			}
+		}
 		for _, candidate := range []struct {
 			cache *prefixCache
 			ns    [32]byte
 		}{{&e.prefixCache, a.accountNamespace}, {&e.shared, a.sharedNamespace}} {
 			if item, ok := candidate.cache.lookup(e.key(candidate.ns, p.hash), now); ok && item.inputTokens >= e.options.MinPrefixTokens {
-				a.MatchedInputTokens = max(a.MatchedInputTokens, item.inputTokens)
+				if item.inputTokens > a.MatchedInputTokens {
+					a.MatchedInputTokens, a.MeasuredAnchorAge = item.inputTokens, now.Sub(item.written)
+				}
 			}
 		}
+	}
+	if a.MatchedInputTokens > 0 {
+		a.AnchorStatus = "hit"
+		a.Decision = "hit"
 	}
 	if a.SharedPrefixTokens > 0 {
 		a.Decision = "hit"
@@ -308,6 +353,18 @@ func (a *Attempt) CommitUsage(inputTokens, outputTokens int, now time.Time) (com
 			if p.anchor && p.hash == a.recordHash {
 				measured = max(0, inputTokens)
 			}
+			if p.anchor {
+				key := e.key(a.sharedNamespace, p.hash)
+				anchorMeasured := measured
+				if item, ok := e.anchors.lookup(key, now); ok {
+					anchorMeasured = max(anchorMeasured, item.inputTokens)
+				}
+				// Successful continued use renews the measured prefix, matching
+				// the ordinary index TTL. Failed requests cannot renew it.
+				if anchorMeasured > 0 {
+					e.anchors.putMeasured(key, now, e.options.TTL, anchorMeasured)
+				}
+			}
 			e.putMeasured(e.key(a.accountNamespace, p.hash), now, e.options.TTL, measured)
 			e.shared.putMeasured(e.key(a.sharedNamespace, p.hash), now, e.options.TTL, measured)
 		}
@@ -318,6 +375,13 @@ func (a *Attempt) CommitUsage(inputTokens, outputTokens int, now time.Time) (com
 			}{{&e.prefixCache, a.accountNamespace}, {&e.shared, a.sharedNamespace}} {
 				candidate.cache.putMeasured(e.key(candidate.ns, a.outputHash), now, e.options.TTL, inputTokens+outputTokens)
 			}
+			e.anchors.putMeasured(e.key(a.sharedNamespace, a.outputHash), now, e.options.TTL, inputTokens+outputTokens)
+		}
+		for _, key := range a.opaqueKeys {
+			e.opaqueSeen.putMeasured(key, now, e.options.TTL, 1)
+		}
+		for _, key := range a.outputOpaqueKeys {
+			e.opaqueSeen.putMeasured(key, now, e.options.TTL, 2)
 		}
 		committed = true
 	})
@@ -337,8 +401,21 @@ func (a *Attempt) Release() {
 		e.retainedPoints -= a.reserved
 		a.reserved = 0
 		a.points = nil
+		a.opaqueKeys, a.outputOpaqueKeys = nil, nil
 	})
 }
+
+// Opaque identities are diagnostic only, scoped to the same logical user and
+// model as the measured anchors. They never infer the length of ciphertext.
+func (e *Engine) opaqueKey(namespace, hash [32]byte) [32]byte {
+	var raw [65]byte
+	raw[0] = 4
+	copy(raw[1:33], namespace[:])
+	copy(raw[33:], hash[:])
+	return e.digest(raw[:])
+}
+
+func (e *Engine) AnchorCapacities() (anchors, opaque int) { return e.anchors.limit, e.opaqueSeen.limit }
 
 func (e *Engine) digest(data []byte) (out [32]byte) {
 	h := hmac.New(sha256.New, e.secret[:])
