@@ -11,6 +11,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"math/bits"
 	"strings"
 	"sync"
 	"time"
@@ -471,20 +472,23 @@ func unsupported(raw json.RawMessage) bool {
 	return walk(value)
 }
 
-// Compare keeps the independent estimate unclipped so tokenizer drift remains
-// visible even when it exceeds the upstream input total. The separate scaled
-// candidate uses only total input, never actual upstream cached tokens.
-func (a *Attempt) Compare(inputTokens int) (predicted, scaled int) {
-	if a == nil || a.SkipReason != "" || inputTokens <= 0 {
+// Compare expresses the frozen prefix match in upstream input-token units.
+// The prefix fraction is independent of upstream cached-token counts. Keep the
+// unscaled tokenizer count separately so serialization/tokenizer drift remains
+// visible instead of confusing estimated tokens with upstream billing tokens.
+func (a *Attempt) Compare(inputTokens int) (predicted, raw int) {
+	if a == nil || a.SkipReason != "" || inputTokens <= 0 || a.EstimatedInputTokens <= 0 || a.MatchedPrefixTokens < 0 {
 		return 0, 0
 	}
-	predicted = a.MatchedPrefixTokens
-	if a.EstimatedInputTokens > 0 {
-		if a.MatchedPrefixTokens >= a.EstimatedInputTokens {
-			scaled = inputTokens
-		} else {
-			scaled = int(float64(inputTokens) * (float64(a.MatchedPrefixTokens) / float64(a.EstimatedInputTokens)))
-		}
+	raw = a.MatchedPrefixTokens
+	if raw >= a.EstimatedInputTokens {
+		return inputTokens, raw
 	}
+	// Exact floor(input * matched / estimated), without float rounding or int
+	// overflow. Since matched < estimated, the quotient is bounded by input and
+	// Div64's high-word precondition is satisfied for every positive int input.
+	hi, lo := bits.Mul64(uint64(inputTokens), uint64(raw))
+	quotient, _ := bits.Div64(hi, lo, uint64(a.EstimatedInputTokens))
+	predicted = int(quotient)
 	return
 }

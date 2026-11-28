@@ -316,7 +316,8 @@ func (a *promptCacheShadowAttempt) finish(result *OpenAIForwardResult, forwardEr
 	fields := []zap.Field{
 		zap.String("component", "service.prompt_cache_shadow"),
 		zap.Bool(logger.OpsSystemLogSkipField, true),
-		zap.Int("schema_version", 1),
+		zap.Int("schema_version", 2),
+		zap.String("prediction_basis", "upstream_input_ratio_v2"),
 		zap.String("mode", "observe_only"),
 		zap.String("instance_id", a.engine.InstanceID()),
 		zap.String("state_scope", "process"),
@@ -411,8 +412,13 @@ func (a *promptCacheShadowAttempt) finish(result *OpenAIForwardResult, forwardEr
 			zap.Int64("duration_us", p.ComputedIn.Microseconds()),
 		)
 		if p.SkipReason == "" && input > 0 {
-			predicted, scaled := p.Compare(input)
-			fields = append(fields, zap.Int("simulated_cache_read_tokens", predicted), zap.Int("scaled_simulated_cache_read_tokens", scaled))
+			predicted, raw := p.Compare(input)
+			fields = append(fields,
+				zap.Int("simulated_cache_read_tokens", predicted),
+				zap.Int("raw_simulated_cache_read_tokens", raw),
+				// Retain the old normalized-diagnostic field as an explicit alias.
+				zap.Int("scaled_simulated_cache_read_tokens", predicted),
+			)
 			if known {
 				fields = append(fields, zap.Int("cache_read_error_tokens", predicted-cached), zap.Float64("upstream_cache_hit_rate", float64(cached)/float64(input)), zap.Float64("simulated_cache_hit_rate", float64(predicted)/float64(input)))
 			}

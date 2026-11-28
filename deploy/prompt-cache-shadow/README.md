@@ -1,6 +1,6 @@
 # Prompt-prefix cache 影子日志离线分析
 
-`analyze.py` 只读取本地 JSONL、gzip 压缩的 JSONL／标准输入，使用 Python 3.9+ 标准库；不连接服务、不发模型请求、不保存提示词、请求 ID 或 API Key ID。这里的测试全部使用合成日志，尚无线上观测结论。
+`analyze.py` 只读取本地 JSONL、gzip 压缩的 JSONL／标准输入，使用 Python 3.9+ 标准库；不连接服务、不发模型请求、不保存提示词、请求 ID 或 API Key ID。回归测试使用合成日志；线上准确度须按同一版本、同一统计集合的自然请求单独验证。
 
 ```bash
 python3 deploy/prompt-cache-shadow/analyze.py shadow-1.jsonl shadow-2.jsonl
@@ -14,9 +14,9 @@ python3 -B -m unittest discover -s deploy/prompt-cache-shadow -p 'test_*.py' -v
 
 ## 日志与统计口径
 
-只接受 `msg` 或 `message` 为 `prompt_cache.shadow`，且 `component=service.prompt_cache_shadow` 的事件；`schema_version` 必须为整数 `1`，`state_scope=process`，`instance_id`、`account_id`、`model`、`transport` 必须有效。支持常见 `log`、`logs`、`payload`、`jsonPayload`、`message`、`msg` 包装，其内容可为对象或编码后的 JSON 对象，最多展开 4 层、检查 32 个对象。不拆数组／多行载荷，不拼接分散在包装内外的字段，不从任意文本中猜测 JSON。
+只接受 `msg` 或 `message` 为 `prompt_cache.shadow`，且 `component=service.prompt_cache_shadow` 的事件；`schema_version` 必须为整数 `1` 或 `2`，`state_scope=process`，`instance_id`、`account_id`、`model`、`transport` 必须有效。支持常见 `log`、`logs`、`payload`、`jsonPayload`、`message`、`msg` 包装，其内容可为对象或编码后的 JSON 对象，最多展开 4 层、检查 32 个对象。不拆数组／多行载荷，不拼接分散在包装内外的字段，不从任意文本中猜测 JSON。
 
-按 `(account_id, model, transport, warm_scope)` 聚合，多个实例的已记录结果直接汇总，**不重放或合并进程缓存状态**。新版 `warm_scope=account_model`，旧日志缺省归为 `legacy_request_namespace`，两种冷启动口径分开统计。`platform`、`api_key_id`、`request_id` 和估算器参数不作为分组维度。
+按 `(account_id, model, transport, warm_scope, prediction_basis)` 聚合，多个实例的已记录结果直接汇总，**不重放或合并进程缓存状态**。新版 `warm_scope=account_model`，旧日志缺省归为 `legacy_request_namespace`，两种冷启动口径分开统计。schema 1 的预测按 `estimated_tokens_v1` 分组；schema 2 要求 `prediction_basis=upstream_input_ratio_v2`。两种 Token 单位不合并，因此同一目录跨升级读取也不会混算。`platform`、`api_key_id`、`request_id` 和估算器参数不作为分组维度。
 
 | 输出 | 口径 |
 | --- | --- |
@@ -29,11 +29,13 @@ python3 -B -m unittest discover -s deploy/prompt-cache-shadow -p 'test_*.py' -v
 | 绝对误差 p50／p95 | `p50_absolute_error_tokens`／`p95_absolute_error_tokens`，nearest-rank；精确／近似标记见 `quantiles.approximate` |
 | 相对误差 p50／p95 | `p50_absolute_relative_error`／`p95_absolute_relative_error`，对逐请求 `abs(sim-real)/input` 独立有界采样；标记见 `relative_quantiles.approximate` |
 
-`input_tokens` 是**包含真实已缓存 token 的上游总输入**，不能使用未缓存部分或 `estimated_input_tokens` 替代。不用真实命中校准模拟值，也不按真实输入裁剪模拟值；估算偏差可能使模拟命中率超过 1。`matched_prefix_tokens`、`tokenizer`、步长、TTL、`cache_age_ms`、`committed`、`duration_us` 等诊断字段不参与重算。`committed=false` 不自动取消本次有效比较。
+`input_tokens` 是**包含真实已缓存 token 的上游总输入**，不能使用未缓存部分或 `estimated_input_tokens` 替代。schema 2 的主预测为 `floor(input_tokens × matched_prefix_tokens / estimated_input_tokens)`，上限为总输入；使用整数运算，不读取真实缓存数、不设最低命中比例。匹配在提交前冻结，完成时仅把前缀比例换算到上游 Token 单位。JSON 序列化与近似分词的原始 Token 数单独保留，不能直接拿它与上游缓存 Token 比较。
+
+分析器直接统计已记录的主预测，不按诊断字段重算。schema 1 继续保留旧值及其可能超过 1 的模拟命中率，不把历史数据静默转换为新版结果。`committed=false` 不自动取消本次有效比较。
 
 可选扩展字段兼容缺省／`null`，不改变上述统计：
 
-- `simulated_cache_read_tokens` 是独立本地预测，协议约定为 `matched_prefix_tokens`；可选 `scaled_simulated_cache_read_tokens` 是按真实 `input_tokens/estimated_input_tokens` 缩放的诊断值，不替代独立预测，也不使用真实缓存命中校准。
+- schema 2 的 `simulated_cache_read_tokens` 使用上游输入 Token 单位；`raw_simulated_cache_read_tokens` 保留未换算的 `matched_prefix_tokens`，用于诊断分词偏差。`scaled_simulated_cache_read_tokens` 保留为新版主预测的兼容别名。schema 1 中主预测仍是原始前缀数，`scaled_simulated_cache_read_tokens` 仅为当时的折算候选。两版均不使用真实缓存数量校准。
 - `shared_prefix_tokens` 仅诊断同租户／模型、不区分账号与 `prompt_cache_key` 的前缀重合，不加入该账号模拟命中。
 - `prompt_layout`、`expired`、`captures` 为布局、过期和捕获诊断。通用 `instructions_before_input` 只是上游 wire 序列化的近似，不承诺特定模型的内部布局或精确分词。
 - `body_view=upstream_wire`、`output_prefix_indexed=false` 表达观察视图及不索引输出前缀的协议约定；分析器不据此重建正文。这些扩展值不保存到报告，也不影响账号筛选与读取诊断计数。
@@ -119,10 +121,12 @@ SUB2API_SHADOW_MEMORY_PROFILE=1 go test -tags=unit ./internal/service -run '^Tes
 
 逐笔诊断时使用日志的以下信息：
 
-- `estimated_input_tokens` 与真实 `input_tokens` 的差异提示分词／模板偏差；`scaled_simulated_cache_read_tokens` 只是使用总输入量换算的第二候选，**不读取真实缓存数进行拟合**。
+- `estimated_input_tokens` 与真实 `input_tokens` 的差异提示分词／模板偏差；schema 2 已将主预测换算为上游输入单位，原始前缀数留在 `raw_simulated_cache_read_tokens`。**不读取真实缓存数进行拟合**。
 - `shared_prefix_tokens` 高而账号本地命中低，说明同租户／模型内容在更宽的分区中出现过，可能是其他账号，也可能是同账号的正文缓存键或出站会话头变化；它是账号／分区差异的线索，不证明供应商支持跨账号共享。`routing_fingerprint` 只用于核对同一进程内会话路由是否改变。
 - `decision=cold`、`warm_scope`、`expired`、`instance_id`、`cache_age_ms` 和各分区淘汰计数用于区分预热、重启、TTL 与容量问题。预热状态被淘汰仍可能造成冷启动分类偏差，不能只看 `warm_only`。
 - `output_prefix_indexed=false`：首版只登记成功请求的输入前缀，不登记新生成的助手输出；下一轮重新发送该输出时，这一段可能仍算未命中，属于已知低估来源。
 - `captures>1` 表示一个逻辑请求发生了多次物理提交；日志比较最终提交正文，不能把中间失败尝试当成独立成功样本。
 
-调整规则前保存基线，使用新的后续样本验证，不能在同一批真实命中数上调参后宣称已经收敛。目前实现与回归使用合成请求／本地假上游；线上误差需要新版上线并收集自然流量后才能测量。本目录不执行配置修改、付费调用或生产发布。
+先用高命中账号检验前缀模拟本身；低命中上游与模拟值的差异还可能包含供应商路由、缓存落点或保留策略，不能直接据此调低预测，也不能只看聚合均值接近就推断逐请求准确。继续检查 warm_only 的 P95、不可比覆盖率和异常账号／模型。
+
+调整规则前保存基线，使用新的后续样本验证，不能在同一批真实命中数上调参后宣称已经收敛。离线换算旧日志只能验证计量公式，不等于新版在线效果。回归使用合成请求／本地假上游；线上误差需要新版上线并收集自然流量后才能测量。本目录不执行配置修改、付费调用或生产发布。

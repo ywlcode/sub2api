@@ -127,6 +127,40 @@ class WriterLogTests(unittest.TestCase):
             self.assertEqual(proc.stdout, b"")
 
 
+class PredictionUnitsTests(unittest.TestCase):
+    def test_legacy_and_normalized_predictions_are_not_merged(self):
+        legacy = event(simulated_cache_read_tokens=1200)
+        normalized = event(schema_version=2, prediction_basis="upstream_input_ratio_v2",
+                           raw_simulated_cache_read_tokens=1200,
+                           simulated_cache_read_tokens=800)
+        report = aggregate([legacy, normalized])
+        self.assertEqual(report["counts"]["analyzed_events"], 2)
+        self.assertEqual(len(report["groups"]), 2)
+        groups = {g["prediction_basis"]: g for g in report["groups"]}
+        self.assertEqual(groups["estimated_tokens_v1"]["comparable"]["simulated_hit_rate"], 1.2)
+        self.assertEqual(groups["upstream_input_ratio_v2"]["comparable"]["simulated_hit_rate"], 0.8)
+        self.assertIn('prediction_basis="upstream_input_ratio_v2"', analyze.render_text(report))
+
+    def test_normalized_prediction_must_use_known_units_and_valid_bound(self):
+        base = event(schema_version=2, prediction_basis="upstream_input_ratio_v2")
+        records = [base | changes for changes in (
+            {"prediction_basis": None}, {"prediction_basis": "estimated_tokens_v1"},
+            {"simulated_cache_read_tokens": 1001},
+        )]
+        report = aggregate(records + [base])
+        self.assertEqual(report["counts"]["invalid_event_lines"], 3)
+        self.assertEqual(report["counts"]["analyzed_events"], 1)
+
+    def test_normalized_unknown_usage_is_still_unknown(self):
+        report = aggregate([event(schema_version=2, prediction_basis="upstream_input_ratio_v2",
+                                  input_tokens=None, upstream_cache_read_tokens=None,
+                                  upstream_cache_known=False, simulated_cache_read_tokens=None,
+                                  comparable=False, decision="skipped",
+                                  skip_reason="upstream_usage_unavailable")])
+        self.assertEqual(report["counts"]["analyzed_events"], 1)
+        self.assertIsNone(report["groups"][0]["comparable"]["simulated_hit_rate"])
+
+
 class MetricsTests(unittest.TestCase):
     def test_new_and_legacy_warmth_are_not_merged(self):
         report = aggregate([event(), event(warm_scope="account_model", decision="miss",
@@ -327,7 +361,7 @@ class ParsingAndBoundsTests(unittest.TestCase):
             {"message": json.dumps(event())}, {"msg": json.dumps(event())},
             {"msg": "unrelated", "component": analyze.COMPONENT},
             event(component="other"), [event()], None,
-            event(schema_version=2), event(state_scope="shared"),
+            event(schema_version=3), event(state_scope="shared"),
         ]
         analyzer = analyze.Analyzer()
         analyzer.consume(io.BytesIO(jsonl(records) + b'\nnot-json\n{"log":"{broken"}\n\xff\n'))

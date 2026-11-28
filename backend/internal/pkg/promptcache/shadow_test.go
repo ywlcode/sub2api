@@ -179,9 +179,9 @@ func TestShadowInstructionsAndAccountingBound(t *testing.T) {
 	if b.MatchedPrefixTokens >= a.EstimatedInputTokens {
 		t.Fatal("instruction change ignored")
 	}
-	predicted, scaled := b.Compare(50)
-	if predicted != b.MatchedPrefixTokens || scaled > 50 || scaled < 0 {
-		t.Fatal("independent estimate clipped or scaled estimate out of bounds")
+	predicted, raw := b.Compare(50)
+	if raw != b.MatchedPrefixTokens || predicted > 50 || predicted < 0 {
+		t.Fatal("raw diagnostic changed or upstream-unit prediction out of bounds")
 	}
 	scope.Model = "gpt-6.1-sol"
 	e.Begin(scope, body("old instructions"), byteEncoder, now).Commit(now)

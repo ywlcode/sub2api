@@ -120,6 +120,38 @@ func TestPromptCacheShadowUnknownNotZeroAndFailedDoesNotWarm(t *testing.T) {
 	}
 }
 
+func TestPromptCacheShadowNormalizesPredictionWithoutUsingRealCache(t *testing.T) {
+	svc, account, c, events := shadowTestService(t)
+	body := shadowTestBody()
+	_, warmup := svc.beginPromptCacheShadow(context.Background(), c, account)
+	warmup.capture(body, "http", "upstream_wire")
+	warmup.finish(shadowTestResult(), nil)
+	var previous int64 = -1
+	for _, cached := range []int{0, 1536, 2048} {
+		_, attempt := svc.beginPromptCacheShadow(context.Background(), c, account)
+		attempt.capture(body, "http", "upstream_wire")
+		result := shadowTestResult()
+		result.Usage.CacheReadInputTokens = cached
+		before := *result
+		attempt.finish(result, nil)
+		row := (*events)[len(*events)-1]
+		predicted, ok := row["simulated_cache_read_tokens"].(int64)
+		require.True(t, ok)
+		require.LessOrEqual(t, predicted, int64(result.Usage.InputTokens))
+		require.Positive(t, predicted)
+		require.Equal(t, "upstream_input_ratio_v2", row["prediction_basis"])
+		require.Equal(t, int64(2), row["schema_version"])
+		require.Equal(t, row["matched_prefix_tokens"], row["raw_simulated_cache_read_tokens"])
+		require.Equal(t, predicted, row["scaled_simulated_cache_read_tokens"])
+		require.Equal(t, predicted-int64(cached), row["cache_read_error_tokens"])
+		if previous >= 0 {
+			require.Equal(t, previous, predicted, "actual upstream cached tokens must not influence prediction")
+		}
+		previous = predicted
+		require.Equal(t, before, *result, "shadow prediction must not change billing usage")
+	}
+}
+
 func TestPromptCacheShadowHTTPUsesReplayReader(t *testing.T) {
 	svc, account, c, events := shadowTestService(t)
 	ctx, a := svc.beginPromptCacheShadow(context.Background(), c, account)

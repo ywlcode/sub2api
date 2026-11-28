@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bounded, offline analysis of schema-v1 prompt-cache shadow JSONL logs."""
+"""Bounded, offline analysis of versioned prompt-cache shadow JSONL logs."""
 
 import argparse
 from collections import deque
@@ -130,6 +130,7 @@ class Event:
     upstream_known: bool
     declared_comparable: bool
     warm_scope: str
+    prediction_basis: str
     eviction_counters: tuple
 
     @classmethod
@@ -154,6 +155,13 @@ class Event:
         input_tokens = token_value(obj, "input_tokens")
         real = token_value(obj, "upstream_cache_read_tokens")
         simulated = token_value(obj, "simulated_cache_read_tokens")
+        prediction_basis = "estimated_tokens_v1"
+        if obj.get("schema_version") == 2:
+            prediction_basis = obj.get("prediction_basis")
+            if prediction_basis != "upstream_input_ratio_v2":
+                raise ValueError("unsupported normalized prediction basis")
+            if simulated is not None and (input_tokens is None or simulated > input_tokens):
+                raise ValueError("normalized prediction exceeds or lacks upstream input")
         warm_scope = obj.get("warm_scope", "legacy_request_namespace")
         if (not isinstance(warm_scope, str) or not warm_scope.strip()
                 or len(warm_scope) > MAX_LABEL_CHARS):
@@ -165,7 +173,8 @@ class Event:
             raise ValueError("upstream cache exceeds total upstream input")
         return cls(account_key(obj.get("account_id")), obj["model"], obj["transport"],
                    decision, reason or "", input_tokens, real, simulated,
-                   obj["upstream_cache_known"], obj["comparable"], warm_scope, evictions)
+                   obj["upstream_cache_known"], obj["comparable"], warm_scope,
+                   prediction_basis, evictions)
 
     @property
     def real_known(self):
@@ -428,7 +437,7 @@ class Analyzer:
                     self.counts["invalid_writer_stats_events"] += 1
                 continue
             self.counts["shadow_events"] += 1
-            if type(obj.get("schema_version")) is not int or obj["schema_version"] != 1:
+            if type(obj.get("schema_version")) is not int or obj["schema_version"] not in (1, 2):
                 self.counts["unsupported_schema_lines"] += 1
                 continue
             try:
@@ -446,7 +455,8 @@ class Analyzer:
             if self.account_ids and event.account_id not in self.account_ids:
                 self.counts["account_filtered_events"] += 1
                 continue
-            key = (event.account_id, event.model, event.transport, event.warm_scope)
+            key = (event.account_id, event.model, event.transport, event.warm_scope,
+                   event.prediction_basis)
             if key not in self.groups:
                 if len(self.groups) >= self.max_groups:
                     raise LimitError("max-groups exceeded; narrow --account-id or raise --max-groups")
@@ -516,12 +526,14 @@ class Analyzer:
                 selected.add(account_id)
             accounts.append({"account_id": account_id, **usage.report(), "selected": include})
         groups = [
-            {"account_id": key[0], "model": key[1], "transport": key[2], "warm_scope": key[3], **group.report()}
+            {"account_id": key[0], "model": key[1], "transport": key[2], "warm_scope": key[3],
+             "prediction_basis": key[4], **group.report()}
             for key, group in sorted(self.groups.items()) if key[0] in selected
         ]
         return {
             "report_schema_version": 1,
-            "event_schema_version": 1,
+            "event_schema_version": 2,
+            "supported_event_schema_versions": [1, 2],
             "state_scope": "process",
             "filters": {"account_ids": sorted(self.account_ids),
                         "min_real_hit_rate": str(min_real_hit_rate)
@@ -603,7 +615,7 @@ def iter_text(report):
             f"relative_quantiles_approximate={stats['relative_quantiles']['approximate']}"
         )
 
-    yield "Offline prompt-cache shadow analysis (schema=1, process state; no calibration)"
+    yield "Offline prompt-cache shadow analysis (schema=1/2, process state; no calibration)"
     yield "counts=" + json.dumps(report["counts"], sort_keys=True)
     logging = report["logging"]
     yield (f"logging: known={logging['known']} lost_events={number(logging['lost_events'])} "
@@ -620,7 +632,8 @@ def iter_text(report):
                f"actual/input={number(account['real_hit_rate'])} selected={account['selected']}")
     for group in report["groups"]:
         yield (f"account={json.dumps(group['account_id'])} model={json.dumps(group['model'])} "
-               f"transport={json.dumps(group['transport'])} warm_scope={json.dumps(group['warm_scope'])} events={group['events']} "
+               f"transport={json.dumps(group['transport'])} warm_scope={json.dumps(group['warm_scope'])} "
+               f"prediction_basis={json.dumps(group['prediction_basis'])} events={group['events']} "
                f"incomparable={group['incomparable_samples']} "
                f"upstream_unknown={group['unknown_upstream_samples']}")
         known = group["actual_known"]
