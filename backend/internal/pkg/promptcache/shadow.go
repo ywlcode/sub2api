@@ -423,6 +423,14 @@ func (a *Attempt) Compare(inputTokens int) (predicted, raw int) {
 	if raw >= a.EstimatedInputTokens {
 		return inputTokens, raw
 	}
+	// An opaque HMAC is an identity marker, not a token-length estimate. Scaling
+	// a short matched plaintext prefix by a total that includes unseen encrypted
+	// context would silently count that context as cached. Only measured record
+	// anchors can quantify a partial opaque prompt; an exact full-input match
+	// above still represents complete local reuse.
+	if a.OpaqueBlocks > 0 {
+		return min(inputTokens, max(0, a.MatchedInputTokens)), raw
+	}
 	// Exact floor(input * matched / estimated), without float rounding or int
 	// overflow. Since matched < estimated, the quotient is bounded by input and
 	// Div64's high-word precondition is satisfied for every positive int input.

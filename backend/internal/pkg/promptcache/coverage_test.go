@@ -48,6 +48,25 @@ func TestShadowOpaqueReuseAndMeasuredInputAnchor(t *testing.T) {
 	if c.MatchedInputTokens != 0 {
 		t.Fatal("changed opaque bytes reused a measured anchor")
 	}
+	if got, _ := c.Compare(90020); got != 0 {
+		t.Fatalf("unmeasured changed opaque block inflated prediction: %d", got)
+	}
+}
+
+func TestShadowOpaqueLengthCannotInflateMatchedPlaintext(t *testing.T) {
+	e := testEngine(t)
+	now := time.Now()
+	prefix := `{"instructions":"` + strings.Repeat("known instructions ", 100) + `","input":[{"type":"compaction","encrypted_content":"`
+	first := []byte(prefix + `cipher-A"}]}`)
+	e.Begin(testScope(), first, byteEncoder, now).CommitUsage(100000, 0, now)
+	b := e.Begin(testScope(), []byte(prefix+`cipher-B"}]}`), byteEncoder, now.Add(time.Second))
+	defer b.Release()
+	if b.SharedPrefixTokens == 0 {
+		t.Fatal("test must match the shared plaintext prefix")
+	}
+	if got, _ := b.Compare(100000); got != 0 {
+		t.Fatalf("short opaque placeholder inflated plaintext hit into %d tokens", got)
+	}
 }
 
 func TestShadowToolSchemaPropertyNamesAreNotOpaqueContent(t *testing.T) {
