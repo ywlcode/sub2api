@@ -167,9 +167,10 @@ type ChannelService struct {
 	pricingService       *PricingService // 用于「可用渠道」展示时回落到全局定价；可为 nil（测试场景）
 	cachePubSub          ChannelCachePubSub
 
-	cache       atomic.Value // *channelCache
-	cacheSF     singleflight.Group
-	siteReplica atomic.Bool // only the synchronous replica installer publishes this cache
+	cache                   atomic.Value // *channelCache
+	cacheSF                 singleflight.Group
+	siteReplica             atomic.Bool // only the synchronous replica installer publishes this cache
+	promptCacheShadowPolicy upstreamPromptCacheShadowPolicy
 }
 
 // NewChannelService 创建渠道服务实例。
@@ -417,6 +418,7 @@ func (s *ChannelService) invalidateCache() {
 // invalidateCache prevents notifications received from Redis from being
 // published again in a loop.
 func (s *ChannelService) clearCache() {
+	s.promptCacheShadowPolicy.invalidate()
 	if s.siteReplica.Load() {
 		return
 	}

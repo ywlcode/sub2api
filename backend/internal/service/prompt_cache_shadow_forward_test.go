@@ -35,6 +35,7 @@ func TestPromptCacheShadowForwardHTTPAndSSE(t *testing.T) {
 					account.GroupIDs = []int64{2}
 					upstream := &httpUpstreamRecorder{}
 					svc := &OpenAIGatewayService{cfg: cfg, httpUpstream: upstream}
+					svc.channelService = NewChannelService(&shadowChannelPolicyTestRepository{accounts: []UpstreamChannelPromptCacheShadowAccount{{AccountID: account.ID, ChannelID: 11}}}, nil, nil, nil, nil)
 					var events []map[string]any
 					svc.promptCacheShadow.emit = func(fields []zap.Field) {
 						enc := zapcore.NewMapObjectEncoder()
@@ -148,6 +149,7 @@ func TestPromptCacheShadowNativeWebSocketWire(t *testing.T) {
 			account.Extra["openai_apikey_responses_websockets_v2_mode"] = mode
 			account.Credentials["base_url"] = upstream.URL + "/v1"
 			svc := &OpenAIGatewayService{cfg: cfg, cache: &stubGatewayCache{}, openaiWSResolver: NewOpenAIWSProtocolResolver(cfg), toolCorrector: NewCodexToolCorrector()}
+			svc.channelService = NewChannelService(&shadowChannelPolicyTestRepository{accounts: []UpstreamChannelPromptCacheShadowAccount{{AccountID: account.ID, ChannelID: 11}}}, nil, nil, nil, nil)
 			pool := newOpenAIWSConnPool(cfg)
 			defer pool.Close()
 			svc.openaiWSPool = pool

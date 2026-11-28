@@ -4,16 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"sort"
 	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/service"
 )
 
-const upstreamChannelColumns = `c.id,c.code,c.name,c.remark,c.revision,(SELECT count(*) FROM upstream_channel_bindings b WHERE b.channel_id=c.id)`
+const upstreamChannelColumns = `c.id,c.code,c.name,c.remark,c.revision,(SELECT count(*) FROM upstream_channel_bindings b WHERE b.channel_id=c.id),c.prompt_cache_shadow_enabled`
 
 func scanUpstreamChannel(row interface{ Scan(...any) error }) (*service.UpstreamChannel, error) {
 	c := &service.UpstreamChannel{}
-	e := row.Scan(&c.ID, &c.Code, &c.Name, &c.Remark, &c.Revision, &c.Members)
+	e := row.Scan(&c.ID, &c.Code, &c.Name, &c.Remark, &c.Revision, &c.Members, &c.PromptCacheShadowEnabled)
 	if e == sql.ErrNoRows {
 		return nil, service.ErrUpstreamChannelNotFound
 	}
@@ -62,7 +63,8 @@ func (r *channelRepository) CreateUpstreamChannel(ctx context.Context, m service
 		return nil, e
 	}
 	var id int64
-	e := r.db.QueryRowContext(ctx, `INSERT INTO upstream_channels(code,name,remark) VALUES($1,$2,$3) RETURNING id`, m.Code, m.Name, m.Remark).Scan(&id)
+	enabled := m.PromptCacheShadowEnabled != nil && *m.PromptCacheShadowEnabled
+	e := r.db.QueryRowContext(ctx, `INSERT INTO upstream_channels(code,name,remark,prompt_cache_shadow_enabled) VALUES($1,$2,$3,$4) RETURNING id`, m.Code, m.Name, m.Remark, enabled).Scan(&id)
 	if isUniqueViolation(e) {
 		return nil, service.ErrUpstreamChannelConflict
 	}
@@ -79,7 +81,7 @@ func (r *channelRepository) UpdateUpstreamChannel(ctx context.Context, id int64,
 		return nil, e
 	}
 	var saved int64
-	e := r.db.QueryRowContext(ctx, `UPDATE upstream_channels SET name=$2,remark=$3,revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND revision=$4 AND ($5='' OR code=$5) RETURNING id`, id, m.Name, m.Remark, *m.Revision, m.Code).Scan(&saved)
+	e := r.db.QueryRowContext(ctx, `UPDATE upstream_channels SET name=$2,remark=$3,prompt_cache_shadow_enabled=COALESCE($6,prompt_cache_shadow_enabled),revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=$1 AND revision=$4 AND ($5='' OR code=$5) RETURNING id`, id, m.Name, m.Remark, *m.Revision, m.Code, m.PromptCacheShadowEnabled).Scan(&saved)
 	if e == sql.ErrNoRows || isUniqueViolation(e) {
 		return nil, service.ErrUpstreamChannelConflict
 	}
@@ -132,7 +134,7 @@ func (r *channelRepository) ReadUpstreamChannelBindings(ctx context.Context, ids
 	if e != nil {
 		return nil, e
 	}
-	rows, e := r.db.QueryContext(ctx, `SELECT a.id,a.name,a.deleted_at IS NOT NULL,COALESCE(b.channel_id,0),COALESCE(b.revision,0),COALESCE(c.code,''),COALESCE(c.name,''),COALESCE(c.remark,''),COALESCE(c.revision,0) FROM accounts a LEFT JOIN upstream_channel_bindings b ON b.account_id=a.id LEFT JOIN upstream_channels c ON c.id=b.channel_id WHERE a.id IN (SELECT jsonb_array_elements_text($1::jsonb)::bigint) ORDER BY a.id`, string(raw))
+	rows, e := r.db.QueryContext(ctx, `SELECT a.id,a.name,a.deleted_at IS NOT NULL,COALESCE(b.channel_id,0),COALESCE(b.revision,0),COALESCE(c.code,''),COALESCE(c.name,''),COALESCE(c.remark,''),COALESCE(c.revision,0),COALESCE(c.prompt_cache_shadow_enabled,false) FROM accounts a LEFT JOIN upstream_channel_bindings b ON b.account_id=a.id LEFT JOIN upstream_channels c ON c.id=b.channel_id WHERE a.id IN (SELECT jsonb_array_elements_text($1::jsonb)::bigint) ORDER BY a.id`, string(raw))
 	if e != nil {
 		return nil, e
 	}
@@ -141,7 +143,7 @@ func (r *channelRepository) ReadUpstreamChannelBindings(ctx context.Context, ids
 	for rows.Next() {
 		var b service.UpstreamChannelBinding
 		var c service.UpstreamChannel
-		if e = rows.Scan(&b.AccountID, &b.AccountName, &b.Deleted, &b.ChannelID, &b.Revision, &c.Code, &c.Name, &c.Remark, &c.Revision); e != nil {
+		if e = rows.Scan(&b.AccountID, &b.AccountName, &b.Deleted, &b.ChannelID, &b.Revision, &c.Code, &c.Name, &c.Remark, &c.Revision, &c.PromptCacheShadowEnabled); e != nil {
 			return nil, e
 		}
 		if b.ChannelID > 0 {
@@ -246,4 +248,27 @@ func (r *channelRepository) UpstreamChannelMembers(ctx context.Context, id int64
 	return out, rows.Err()
 }
 
+// ListPromptCacheShadowAccounts loads explicit observation ownership in one query
+// for the service policy snapshot. It does not change routing or billing state.
+func (r *channelRepository) ListPromptCacheShadowAccounts(ctx context.Context) ([]service.UpstreamChannelPromptCacheShadowAccount, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT b.account_id,b.channel_id FROM upstream_channel_bindings b JOIN upstream_channels c ON c.id=b.channel_id JOIN accounts a ON a.id=b.account_id WHERE c.prompt_cache_shadow_enabled AND a.deleted_at IS NULL AND a.platform=$1 ORDER BY b.account_id`, service.PlatformOpenAI)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := []service.UpstreamChannelPromptCacheShadowAccount{}
+	for rows.Next() {
+		var account service.UpstreamChannelPromptCacheShadowAccount
+		if err := rows.Scan(&account.AccountID, &account.ChannelID); err != nil {
+			return nil, err
+		}
+		out = append(out, account)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 var _ service.UpstreamChannelRepository = (*channelRepository)(nil)
+var _ service.UpstreamChannelPromptCacheShadowRepository = (*channelRepository)(nil)

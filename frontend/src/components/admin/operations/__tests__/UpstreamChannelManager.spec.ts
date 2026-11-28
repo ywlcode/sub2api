@@ -4,7 +4,7 @@ import UpstreamChannelManager from '../UpstreamChannelManager.vue'
 import { listUpstreamChannels, getUpstreamChannel, saveUpstreamChannel, deleteUpstreamChannel } from '@/api/admin/upstreamChannels'
 vi.mock('vue-i18n', () => ({ useI18n: () => ({ t: (key: string) => key }) }))
 vi.mock('@/api/admin/upstreamChannels', () => ({ listUpstreamChannels: vi.fn(), getUpstreamChannel: vi.fn(), saveUpstreamChannel: vi.fn(), deleteUpstreamChannel: vi.fn(), getChannelMembers: vi.fn() }))
-const entity = { id: 7, code: 'supplier-a', name: '渠道A', remark: '旧备注', revision: 3, members: 2 }
+const entity = { id: 7, code: 'supplier-a', name: '渠道A', remark: '旧备注', revision: 3, members: 2, prompt_cache_shadow_enabled: true }
 beforeEach(() => { vi.resetAllMocks(); vi.mocked(listUpstreamChannels).mockResolvedValue({ items: [entity], total: 1 }); vi.mocked(getUpstreamChannel).mockImplementation(async () => ({ ...entity })); vi.mocked(saveUpstreamChannel).mockResolvedValue({ ...entity, remark: '新备注', revision: 4 }) })
 it('confirms multi-account impact, keeps immutable ID/code, saves then GETs and cancels without writes', async () => {
  const w = mount(UpstreamChannelManager, { props: { expanded: true } }); await flushPromises(); await w.get('[data-testid="edit-upstream-channel"]').trigger('click'); await flushPromises()
@@ -45,4 +45,196 @@ it('retains an edited draft on GET verification failure and requires reread plus
  await w.findAll('button').find(b=>b.text()==='upstreamEntities.readLatest')!.trigger('click');await flushPromises()
  expect(w.text()).toContain('别人保存的备注');expect((w.get('[data-testid="channel-remark"]').element as HTMLTextAreaElement).value).toBe('新备注');expect(w.get('[data-testid="save-upstream-channel"]').attributes('disabled')).toBeDefined()
  await w.get('[data-testid="confirm-channel-edit"]').setValue(true);expect(w.get('[data-testid="save-upstream-channel"]').attributes('disabled')).toBeUndefined();w.unmount()
+})
+
+it('loads an enabled simulated cache into the status column and labelled checkbox', async () => {
+ const w = mount(UpstreamChannelManager, { props: { expanded: true } })
+ await flushPromises()
+ expect(w.get('[data-testid="channel-shadow-status"]').text()).toBe('upstreamEntities.promptCacheShadowEnabled')
+ await w.get('[data-testid="edit-upstream-channel"]').trigger('click')
+ await flushPromises()
+ const checkbox = w.get<HTMLInputElement>('[data-testid="channel-shadow-enabled"]')
+ expect(checkbox.element.checked).toBe(true)
+ expect(checkbox.element.disabled).toBe(false)
+ expect(checkbox.element.closest('label')?.textContent).toContain('upstreamEntities.promptCacheShadow')
+ expect(w.get('[data-testid="channel-shadow-latest"]').text()).toContain('upstreamEntities.promptCacheShadowEnabled')
+ expect(w.text()).toContain('upstreamEntities.promptCacheShadowHint')
+ w.unmount()
+})
+
+it('explicitly saves false and confirms it by readback before reporting success', async () => {
+ const w = mount(UpstreamChannelManager, { props: { expanded: true } })
+ await flushPromises()
+ await w.get('[data-testid="edit-upstream-channel"]').trigger('click')
+ await flushPromises()
+ await w.get('[data-testid="channel-shadow-enabled"]').setValue(false)
+ await w.get('[data-testid="confirm-channel-edit"]').setValue(true)
+ const disabled = { ...entity, prompt_cache_shadow_enabled: false, revision: 4 }
+ vi.mocked(saveUpstreamChannel).mockResolvedValue(disabled)
+ let finishReadback!: (value: typeof entity) => void
+ vi.mocked(getUpstreamChannel).mockReturnValueOnce(new Promise(resolve => { finishReadback = resolve }))
+ vi.mocked(listUpstreamChannels).mockResolvedValue({ items: [disabled], total: 1 })
+ await w.get('[data-testid="save-upstream-channel"]').trigger('click')
+ await flushPromises()
+ expect(saveUpstreamChannel).toHaveBeenCalledWith(7, {
+  code: entity.code, name: entity.name, remark: entity.remark, revision: 3, confirm: true,
+  prompt_cache_shadow_enabled: false
+ })
+ expect(getUpstreamChannel).toHaveBeenLastCalledWith(7)
+ expect(w.emitted('changed')).toBeUndefined()
+ expect(w.find('[role="status"]').exists()).toBe(false)
+ expect(w.get<HTMLInputElement>('[data-testid="channel-shadow-enabled"]').element.disabled).toBe(true)
+ finishReadback(disabled)
+ await flushPromises()
+ expect(w.emitted('changed')).toHaveLength(1)
+ expect(w.get('[role="status"]').text()).toBe('upstreamEntities.saved')
+ expect(w.find('[data-testid="channel-entity-draft"]').exists()).toBe(false)
+ expect(w.get('[data-testid="channel-shadow-status"]').text()).toBe('upstreamEntities.promptCacheShadowDisabled')
+ w.unmount()
+})
+
+it('does not retry a conflict, preserves the draft on reread, and shows the latest switch before reconfirmation', async () => {
+ const w = mount(UpstreamChannelManager, { props: { expanded: true } })
+ await flushPromises()
+ await w.get('[data-testid="edit-upstream-channel"]').trigger('click')
+ await flushPromises()
+ await w.get('[data-testid="channel-name"]').setValue('草稿名称')
+ await w.get('[data-testid="channel-remark"]').setValue('草稿备注')
+ await w.get('[data-testid="channel-shadow-enabled"]').setValue(false)
+ await w.get('[data-testid="confirm-channel-edit"]').setValue(true)
+ vi.mocked(saveUpstreamChannel).mockRejectedValueOnce({ response: { status: 409 } })
+ await w.get('[data-testid="save-upstream-channel"]').trigger('click')
+ await flushPromises()
+ expect(w.get('[data-testid="channel-entity-error"]').text()).toBe('upstreamEntities.conflict')
+ expect(getUpstreamChannel).toHaveBeenCalledTimes(1)
+ expect(w.get<HTMLButtonElement>('[data-testid="save-upstream-channel"]').element.disabled).toBe(true)
+ await w.get('[data-testid="save-upstream-channel"]').trigger('click')
+ expect(saveUpstreamChannel).toHaveBeenCalledTimes(1)
+ expect(w.emitted('changed')).toBeUndefined()
+ expect(w.find('[role="status"]').exists()).toBe(false)
+
+ vi.mocked(getUpstreamChannel).mockResolvedValueOnce({ ...entity, name: '别人名称', remark: '别人备注', members: 5, revision: 8 })
+ await w.findAll('button').find(b => b.text() === 'upstreamEntities.readLatest')!.trigger('click')
+ await flushPromises()
+ expect(w.get<HTMLInputElement>('[data-testid="channel-name"]').element.value).toBe('草稿名称')
+ expect(w.get<HTMLTextAreaElement>('[data-testid="channel-remark"]').element.value).toBe('草稿备注')
+ expect(w.get<HTMLInputElement>('[data-testid="channel-shadow-enabled"]').element.checked).toBe(false)
+ expect(w.text()).toContain('别人名称 · 别人备注')
+ expect(w.text()).toContain('upstreamEntities.impact 5 upstreamEntities.accountsUnit')
+ expect(w.get('[data-testid="channel-shadow-latest"]').text()).toContain('upstreamEntities.promptCacheShadowEnabled')
+ expect(w.get<HTMLInputElement>('[data-testid="confirm-channel-edit"]').element.checked).toBe(false)
+ expect(w.get<HTMLButtonElement>('[data-testid="save-upstream-channel"]').element.disabled).toBe(true)
+ expect(saveUpstreamChannel).toHaveBeenCalledTimes(1)
+
+ await w.get('[data-testid="confirm-channel-edit"]').setValue(true)
+ const written = { ...entity, name: '草稿名称', remark: '草稿备注', members: 5, revision: 9, prompt_cache_shadow_enabled: false }
+ vi.mocked(saveUpstreamChannel).mockResolvedValueOnce(written)
+ vi.mocked(getUpstreamChannel).mockResolvedValueOnce(written)
+ await w.get('[data-testid="save-upstream-channel"]').trigger('click')
+ await flushPromises()
+ expect(saveUpstreamChannel).toHaveBeenLastCalledWith(7, expect.objectContaining({ revision: 8, confirm: true, prompt_cache_shadow_enabled: false }))
+ expect(w.emitted('changed')).toHaveLength(1)
+ w.unmount()
+})
+
+it.each([
+ { requested: false, actual: true },
+ { requested: true, actual: false },
+ { requested: false, actual: undefined }
+])('rejects simulated cache readback $actual after requesting $requested', async ({ requested, actual }) => {
+ const w = mount(UpstreamChannelManager, { props: { expanded: true } })
+ await flushPromises()
+ await w.get('[data-testid="edit-upstream-channel"]').trigger('click')
+ await flushPromises()
+ await w.get('[data-testid="channel-shadow-enabled"]').setValue(requested)
+ await w.get('[data-testid="confirm-channel-edit"]').setValue(true)
+ const written = { ...entity, revision: 4, prompt_cache_shadow_enabled: requested }
+ const fresh = { ...written, prompt_cache_shadow_enabled: actual ?? false }
+ if (actual === undefined) Reflect.deleteProperty(fresh, 'prompt_cache_shadow_enabled')
+ vi.mocked(saveUpstreamChannel).mockResolvedValueOnce(written)
+ vi.mocked(getUpstreamChannel).mockResolvedValueOnce(fresh)
+ await w.get('[data-testid="save-upstream-channel"]').trigger('click')
+ await flushPromises()
+ expect(w.emitted('changed')).toBeUndefined()
+ expect(w.find('[role="status"]').exists()).toBe(false)
+ expect(w.get('[data-testid="channel-entity-error"]').text()).toBe('upstreamEntities.readbackFailed')
+ expect(w.get<HTMLInputElement>('[data-testid="channel-shadow-enabled"]').element.checked).toBe(requested)
+ expect(w.get<HTMLButtonElement>('[data-testid="save-upstream-channel"]').element.disabled).toBe(true)
+ expect(saveUpstreamChannel).toHaveBeenCalledTimes(1)
+ w.unmount()
+})
+
+it.each([false, true])('defaults a new channel to false and explicitly saves %s when list capability is known', async enabled => {
+ // A false field still proves backend support; do not infer support from truthiness.
+ vi.mocked(listUpstreamChannels).mockResolvedValue({ items: [{ ...entity, prompt_cache_shadow_enabled: false }], total: 1 })
+ const w = mount(UpstreamChannelManager, { props: { expanded: true } })
+ await flushPromises()
+ await w.get('[data-testid="new-upstream-channel"]').trigger('click')
+ const checkbox = w.get<HTMLInputElement>('[data-testid="channel-shadow-enabled"]')
+ expect(checkbox.element.checked).toBe(false)
+ expect(checkbox.element.disabled).toBe(false)
+ await checkbox.setValue(enabled)
+ await w.get('[data-testid="channel-code"]').setValue('supplier-new')
+ await w.get('[data-testid="channel-name"]').setValue('新渠道')
+ await w.get('[data-testid="confirm-channel-edit"]').setValue(true)
+ const created = { ...entity, id: 9, code: 'supplier-new', name: '新渠道', remark: '', revision: 1, members: 0, prompt_cache_shadow_enabled: enabled }
+ vi.mocked(saveUpstreamChannel).mockResolvedValueOnce(created)
+ vi.mocked(getUpstreamChannel).mockResolvedValueOnce(created)
+ await w.get('[data-testid="save-upstream-channel"]').trigger('click')
+ await flushPromises()
+ expect(saveUpstreamChannel).toHaveBeenCalledWith(0, { code: 'supplier-new', name: '新渠道', remark: '', revision: 0, confirm: true, prompt_cache_shadow_enabled: enabled })
+ expect(getUpstreamChannel).toHaveBeenCalledWith(9)
+ expect(w.emitted('changed')).toHaveLength(1)
+ w.unmount()
+})
+
+it('disables unavailable legacy switches while allowing other fields to save without sending the field', async () => {
+ const legacy = { ...entity }
+ Reflect.deleteProperty(legacy, 'prompt_cache_shadow_enabled')
+ vi.mocked(listUpstreamChannels).mockResolvedValue({ items: [legacy], total: 1 })
+ vi.mocked(getUpstreamChannel).mockResolvedValue(legacy)
+ const w = mount(UpstreamChannelManager, { props: { expanded: true } })
+ await flushPromises()
+ expect(w.get('[data-testid="channel-shadow-status"]').text()).toBe('upstreamEntities.promptCacheShadowNotAvailable')
+ await w.get('[data-testid="edit-upstream-channel"]').trigger('click')
+ await flushPromises()
+ expect(w.get<HTMLInputElement>('[data-testid="channel-shadow-enabled"]').element.disabled).toBe(true)
+ expect(w.get<HTMLInputElement>('[data-testid="channel-shadow-enabled"]').element.checked).toBe(false)
+ expect(w.get('[data-testid="channel-shadow-unavailable"]').text()).toBe('upstreamEntities.promptCacheShadowUnavailable')
+ expect(w.get('[data-testid="channel-shadow-latest"]').text()).toContain('upstreamEntities.promptCacheShadowNotAvailable')
+ expect(w.get<HTMLInputElement>('[data-testid="channel-name"]').element.disabled).toBe(false)
+ await w.get('[data-testid="channel-remark"]').setValue('兼容旧接口')
+ await w.get('[data-testid="confirm-channel-edit"]').setValue(true)
+ const updated = { ...legacy, remark: '兼容旧接口', revision: 4 }
+ vi.mocked(saveUpstreamChannel).mockResolvedValueOnce(updated)
+ vi.mocked(getUpstreamChannel).mockResolvedValueOnce(updated)
+ await w.get('[data-testid="save-upstream-channel"]').trigger('click')
+ await flushPromises()
+ expect(saveUpstreamChannel).toHaveBeenCalledWith(7, { code: entity.code, name: entity.name, remark: '兼容旧接口', revision: 3, confirm: true })
+ expect(w.emitted('changed')).toHaveLength(1)
+ w.unmount()
+})
+
+it.each(['empty', 'legacy'])('keeps new channels off and omits the field when the list is %s', async capability => {
+ const legacy = { ...entity }
+ Reflect.deleteProperty(legacy, 'prompt_cache_shadow_enabled')
+ const items = capability === 'empty' ? [] : [legacy]
+ vi.mocked(listUpstreamChannels).mockResolvedValue({ items, total: items.length })
+ const w = mount(UpstreamChannelManager, { props: { expanded: true } })
+ await flushPromises()
+ await w.get('[data-testid="new-upstream-channel"]').trigger('click')
+ expect(w.get<HTMLInputElement>('[data-testid="channel-shadow-enabled"]').element.disabled).toBe(true)
+ expect(w.get<HTMLInputElement>('[data-testid="channel-shadow-enabled"]').element.checked).toBe(false)
+ expect(w.find('[data-testid="channel-shadow-unavailable"]').exists()).toBe(true)
+ await w.get('[data-testid="channel-code"]').setValue('supplier-new')
+ await w.get('[data-testid="channel-name"]').setValue('新渠道')
+ await w.get('[data-testid="confirm-channel-edit"]').setValue(true)
+ const created = { ...legacy, id: 9, code: 'supplier-new', name: '新渠道', remark: '', revision: 1, members: 0 }
+ vi.mocked(saveUpstreamChannel).mockResolvedValueOnce(created)
+ vi.mocked(getUpstreamChannel).mockResolvedValueOnce(created)
+ await w.get('[data-testid="save-upstream-channel"]').trigger('click')
+ await flushPromises()
+ expect(saveUpstreamChannel).toHaveBeenCalledWith(0, { code: 'supplier-new', name: '新渠道', remark: '', revision: 0, confirm: true })
+ expect(w.emitted('changed')).toHaveLength(1)
+ w.unmount()
 })

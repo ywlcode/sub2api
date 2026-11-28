@@ -1,7 +1,7 @@
 import { apiClient } from '../client'
-export interface UpstreamChannel { id: number; code: string; name: string; remark: string; revision: number; members: number }
+export interface UpstreamChannel { id: number; code: string; name: string; remark: string; revision: number; members: number; prompt_cache_shadow_enabled: boolean }
 export interface ChannelBinding { account_id: number; account_name: string; deleted: boolean; channel_id: number; revision: number; channel?: UpstreamChannel }
-export interface ChannelDraft { code?: string; name: string; remark: string; revision?: number; confirm?: boolean }
+export interface ChannelDraft { code?: string; name: string; remark: string; revision?: number; confirm?: boolean; prompt_cache_shadow_enabled?: boolean }
 export async function listUpstreamChannels(search = '', page = 1) { return (await apiClient.get<{ items: UpstreamChannel[]; total: number }>('/admin/upstream-channels', { params: { search, page, page_size: 20 } })).data }
 export async function getUpstreamChannel(id: number) { return (await apiClient.get<UpstreamChannel>(`/admin/upstream-channels/${id}`)).data }
 export async function saveUpstreamChannel(id: number, body: ChannelDraft) { return id ? (await apiClient.put<UpstreamChannel>(`/admin/upstream-channels/${id}`, body)).data : (await apiClient.post<UpstreamChannel>('/admin/upstream-channels', body)).data }

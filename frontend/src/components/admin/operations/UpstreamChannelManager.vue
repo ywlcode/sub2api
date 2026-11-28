@@ -5,13 +5,17 @@
     <template v-if="opened">
       <slot />
       <div class="flex flex-wrap gap-2"><input v-model="search" class="input" :placeholder="t('upstreamEntities.search')" /><button type="button" class="btn btn-secondary" @click="load(1)">{{ t('upstreamEntities.load') }}</button><button type="button" class="btn btn-primary" data-testid="new-upstream-channel" :disabled="busy" @click="begin()">{{ t('upstreamEntities.create') }}</button></div>
-      <div class="overflow-x-auto"><table class="w-full min-w-[650px] text-left text-sm"><thead><tr><th>ID / {{ t('upstreamEntities.code') }}</th><th>{{ t('upstreamEntities.name') }}</th><th>{{ t('upstreamEntities.remark') }}</th><th>{{ t('upstreamEntities.members') }}</th><th>{{ t('upstreamEntities.actions') }}</th></tr></thead><tbody><tr v-for="c in items" :key="c.id" class="border-t"><td class="p-2">#{{ c.id }} · {{ c.code }}</td><td>{{ c.name }}</td><td class="max-w-80 whitespace-pre-wrap break-words">{{ c.remark || t('upstreamEntities.noRemark') }}</td><td>{{ c.members }}</td><td><button type="button" class="btn btn-secondary" data-testid="edit-upstream-channel" :disabled="busy" @click="begin(c.id)">{{ t('upstreamEntities.edit') }}</button><button type="button" class="btn btn-secondary" :disabled="busy" @click="showMembers(c)">{{ t('upstreamEntities.members') }}</button></td></tr></tbody></table></div>
+      <div class="overflow-x-auto"><table class="w-full min-w-[750px] text-left text-sm"><thead><tr><th>ID / {{ t('upstreamEntities.code') }}</th><th>{{ t('upstreamEntities.name') }}</th><th>{{ t('upstreamEntities.remark') }}</th><th>{{ t('upstreamEntities.promptCacheShadow') }}</th><th>{{ t('upstreamEntities.members') }}</th><th>{{ t('upstreamEntities.actions') }}</th></tr></thead><tbody><tr v-for="c in items" :key="c.id" class="border-t"><td class="p-2">#{{ c.id }} · {{ c.code }}</td><td>{{ c.name }}</td><td class="max-w-80 whitespace-pre-wrap break-words">{{ c.remark || t('upstreamEntities.noRemark') }}</td><td data-testid="channel-shadow-status">{{ shadowStatus(c.prompt_cache_shadow_enabled) }}</td><td>{{ c.members }}</td><td><button type="button" class="btn btn-secondary" data-testid="edit-upstream-channel" :disabled="busy" @click="begin(c.id)">{{ t('upstreamEntities.edit') }}</button><button type="button" class="btn btn-secondary" :disabled="busy" @click="showMembers(c)">{{ t('upstreamEntities.members') }}</button></td></tr></tbody></table></div>
       <div class="flex gap-3"><button type="button" :disabled="busy || page <= 1" @click="load(page - 1)">{{ t('profitOps.previous') }}</button><span>{{ page }} · {{ total }}</span><button type="button" :disabled="busy || page * 20 >= total" @click="load(page + 1)">{{ t('profitOps.next') }}</button></div>
       <div v-if="draft" class="space-y-3 rounded-lg border p-3" data-testid="channel-entity-draft">
         <label class="block">{{ t('upstreamEntities.code') }}<input v-model="draft.code" class="input w-full" :disabled="draft.id > 0 || busy" maxlength="64" data-testid="channel-code" /></label>
         <label class="block">{{ t('upstreamEntities.name') }}<input v-model="draft.name" class="input w-full" :disabled="busy" data-testid="channel-name" /></label>
         <label class="block">{{ t('upstreamEntities.remark') }}<textarea v-model="draft.remark" class="input w-full" :disabled="busy" data-testid="channel-remark" /></label>
+        <label class="flex items-center gap-2"><input v-model="draft.prompt_cache_shadow_enabled" type="checkbox" :disabled="busy || !shadowSupported" data-testid="channel-shadow-enabled" />{{ t('upstreamEntities.promptCacheShadow') }}</label>
+        <p class="text-sm text-gray-500">{{ t('upstreamEntities.promptCacheShadowHint') }}</p>
+        <p v-if="!shadowSupported" class="text-sm text-gray-500" data-testid="channel-shadow-unavailable">{{ t('upstreamEntities.promptCacheShadowUnavailable') }}</p>
         <p v-if="latestSaved" class="whitespace-pre-wrap text-sm">{{ t('upstreamEntities.currentRemark') }}：{{ latestSaved }}</p>
+        <p v-if="latestChannel" class="text-sm" data-testid="channel-shadow-latest">{{ t('upstreamEntities.promptCacheShadowCurrent') }}：{{ shadowStatus(latestChannel.prompt_cache_shadow_enabled) }}</p>
         <p>{{ t('upstreamEntities.impact') }} {{ draft.members }} {{ t('upstreamEntities.accountsUnit') }}</p>
         <label class="flex gap-2"><input v-model="confirmed" type="checkbox" data-testid="confirm-channel-edit" />{{ t(draft.id ? 'upstreamEntities.confirmEdit' : 'upstreamEntities.confirmNewChannel') }}</label>
         <p v-if="invalid" class="text-red-600">{{ t('upstreamEntities.validation') }}</p>
@@ -33,20 +37,35 @@ const emit = defineEmits<{ changed: [] }>()
 const { t } = useI18n()
 const items = ref<UpstreamChannel[]>([]), total = ref(0), page = ref(1), search = ref(''), opened = ref(false), busy = ref(false), error = ref(''), saved = ref(false), confirmed = ref(false), needsRead = ref(false)
 const latestSaved = ref('')
+const shadowSupported = ref(false), latestChannel = ref<UpstreamChannel | null>(null)
 const draft = ref<UpstreamChannel | null>(null), memberChannel = ref<UpstreamChannel | null>(null), members = ref<ChannelBinding[]>([]), membersTotal = ref(0), memberPage = ref(1), selectedIds = ref<number[]>([])
 const invalid = computed(() => !draft.value || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(draft.value.code) || !draft.value.name.trim() || Array.from(draft.value.name.trim()).length > 100 || Array.from(draft.value.remark.trim()).length > 500)
+function shadowStatus(value: unknown) { return t(typeof value !== 'boolean' ? 'upstreamEntities.promptCacheShadowNotAvailable' : value ? 'upstreamEntities.promptCacheShadowEnabled' : 'upstreamEntities.promptCacheShadowDisabled') }
 async function load(next = page.value) { busy.value = true; error.value = ''; try { const result = await listUpstreamChannels(search.value, next); items.value = result.items; total.value = result.total; page.value = next } catch { error.value = t('upstreamEntities.failed') } finally { busy.value = false } }
 function open() { opened.value = true; void load(1) }
-async function begin(id = 0) { latestSaved.value = ''; error.value = ''; saved.value = false; confirmed.value = false; needsRead.value = false; if (!id) { draft.value = { id: 0, code: '', name: '', remark: '', revision: 0, members: 0 }; return } busy.value = true; try { draft.value = await getUpstreamChannel(id) } catch { error.value = t('upstreamEntities.failed') } finally { busy.value = false } }
-async function readLatest() { if (!draft.value?.id) return; busy.value = true; try { const fresh = await getUpstreamChannel(draft.value.id); latestSaved.value = `${fresh.name} · ${fresh.remark}`; draft.value.revision = fresh.revision; draft.value.members = fresh.members; confirmed.value = false; needsRead.value = false; error.value = ''; } catch { error.value = t('upstreamEntities.failed') } finally { busy.value = false } }
+async function begin(id = 0) {
+ latestSaved.value = ''; latestChannel.value = null; error.value = ''; saved.value = false; confirmed.value = false; needsRead.value = false
+ if (!id) {
+  shadowSupported.value = items.value.length > 0 && items.value.every(c => typeof c.prompt_cache_shadow_enabled === 'boolean')
+  draft.value = { id: 0, code: '', name: '', remark: '', revision: 0, members: 0, prompt_cache_shadow_enabled: false }; return
+ }
+ busy.value = true
+ try {
+  const fresh = await getUpstreamChannel(id)
+  shadowSupported.value = typeof fresh.prompt_cache_shadow_enabled === 'boolean'; latestChannel.value = fresh
+  draft.value = { ...fresh, prompt_cache_shadow_enabled: fresh.prompt_cache_shadow_enabled === true }
+ } catch { error.value = t('upstreamEntities.failed') } finally { busy.value = false }
+}
+async function readLatest() { if (!draft.value?.id) return; busy.value = true; try { const fresh = await getUpstreamChannel(draft.value.id); latestSaved.value = `${fresh.name} · ${fresh.remark}`; latestChannel.value = fresh; shadowSupported.value = typeof fresh.prompt_cache_shadow_enabled === 'boolean'; draft.value.revision = fresh.revision; draft.value.members = fresh.members; confirmed.value = false; needsRead.value = false; error.value = ''; } catch { error.value = t('upstreamEntities.failed') } finally { busy.value = false } }
 async function save() {
  if (!draft.value || invalid.value || busy.value || needsRead.value || !confirmed.value) return
  busy.value = true; error.value = ''; saved.value = false
  try {
-  const written = await saveUpstreamChannel(draft.value.id, { code: draft.value.code, name: draft.value.name.trim(), remark: draft.value.remark.trim(), revision: draft.value.revision, confirm: confirmed.value })
+  const shadow = shadowSupported.value ? { prompt_cache_shadow_enabled: draft.value.prompt_cache_shadow_enabled } : {}
+  const written = await saveUpstreamChannel(draft.value.id, { code: draft.value.code, name: draft.value.name.trim(), remark: draft.value.remark.trim(), revision: draft.value.revision, confirm: confirmed.value, ...shadow })
   draft.value.id = written.id; draft.value.code = written.code; draft.value.revision = written.revision; needsRead.value = true
   const fresh = await getUpstreamChannel(written.id)
-  if (fresh.name !== draft.value.name.trim() || fresh.remark !== draft.value.remark.trim() || fresh.revision !== written.revision) throw new Error('readback')
+  if (fresh.name !== draft.value.name.trim() || fresh.remark !== draft.value.remark.trim() || fresh.revision !== written.revision || (shadow.prompt_cache_shadow_enabled !== undefined && fresh.prompt_cache_shadow_enabled !== shadow.prompt_cache_shadow_enabled)) throw new Error('readback')
   draft.value = null; needsRead.value = false; saved.value = true; await load(); emit('changed')
  } catch (cause) { const e = cause as { status?: number; response?: { status?: number } }; needsRead.value = (draft.value?.id ?? 0) > 0; error.value = t((e.status ?? e.response?.status) === 409 ? 'upstreamEntities.conflict' : 'upstreamEntities.readbackFailed') }
  finally { busy.value = false }

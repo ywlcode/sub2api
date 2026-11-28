@@ -34,6 +34,7 @@ func shadowTestService(t *testing.T) (*OpenAIGatewayService, *Account, *gin.Cont
 	c.Set("api_key", &APIKey{ID: 7, GroupID: &groupID})
 	var events []map[string]any
 	svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{PromptCacheShadow: config.PromptCacheShadowConfig{Enabled: true, MinPrefixTokens: 32, PrefixTokensStep: 16}}}}
+	svc.channelService = NewChannelService(&shadowChannelPolicyTestRepository{accounts: []UpstreamChannelPromptCacheShadowAccount{{AccountID: 3, ChannelID: 11}, {AccountID: 4, ChannelID: 11}, {AccountID: 702, ChannelID: 12}}}, nil, nil, nil, nil)
 	svc.promptCacheShadow.emit = func(fields []zap.Field) {
 		enc := zapcore.NewMapObjectEncoder()
 		for _, f := range fields {

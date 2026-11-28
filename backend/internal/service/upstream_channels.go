@@ -17,12 +17,13 @@ var ErrUpstreamChannelNotFound = infraerrors.NotFound("UPSTREAM_CHANNEL_NOT_FOUN
 var upstreamChannelCode = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 
 type UpstreamChannel struct {
-	ID       int64  `json:"id"`
-	Code     string `json:"code"`
-	Name     string `json:"name"`
-	Remark   string `json:"remark"`
-	Revision int64  `json:"revision"`
-	Members  int64  `json:"members"`
+	ID                       int64  `json:"id"`
+	Code                     string `json:"code"`
+	Name                     string `json:"name"`
+	Remark                   string `json:"remark"`
+	Revision                 int64  `json:"revision"`
+	Members                  int64  `json:"members"`
+	PromptCacheShadowEnabled bool   `json:"prompt_cache_shadow_enabled"`
 }
 type UpstreamChannelMutation struct {
 	Code     string `json:"code"`
@@ -30,6 +31,8 @@ type UpstreamChannelMutation struct {
 	Remark   string `json:"remark"`
 	Revision *int64 `json:"revision"`
 	Confirm  bool   `json:"confirm"`
+	// Omission preserves an existing channel's switch for older admin clients.
+	PromptCacheShadowEnabled *bool `json:"prompt_cache_shadow_enabled,omitempty"`
 }
 type UpstreamChannelPage struct {
 	Items    []UpstreamChannel `json:"items"`
@@ -63,6 +66,16 @@ type UpstreamChannelRepository interface {
 	ReadUpstreamChannelBindings(context.Context, []int64) ([]UpstreamChannelBinding, error)
 	BindUpstreamChannelAccounts(context.Context, UpstreamChannelBindingsMutation) ([]UpstreamChannelBinding, error)
 	UpstreamChannelMembers(context.Context, int64, int, int) (*UpstreamChannelMembers, error)
+}
+
+// Separate from pricing channels: observation follows explicit account ownership.
+type UpstreamChannelPromptCacheShadowAccount struct {
+	AccountID int64
+	ChannelID int64
+}
+
+type UpstreamChannelPromptCacheShadowRepository interface {
+	ListPromptCacheShadowAccounts(context.Context) ([]UpstreamChannelPromptCacheShadowAccount, error)
 }
 
 func (s *ChannelService) UpstreamChannelRepository() (UpstreamChannelRepository, error) {

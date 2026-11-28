@@ -174,6 +174,7 @@ type promptCacheShadowAttempt struct {
 	engine              *promptcache.Engine
 	scope               promptcache.Scope
 	apiKeyID, groupID   int64
+	upstreamChannelID   int64
 	model, platform     string
 	transport, bodyView string
 	attempt             *promptcache.Attempt
@@ -189,7 +190,11 @@ func (s *OpenAIGatewayService) beginPromptCacheShadow(ctx context.Context, c *gi
 	}
 	prior, _ := ctx.Value(promptCacheShadowContextKey{}).(*promptCacheShadowAttempt)
 	e := s.promptCacheShadow.get(s.cfg, account)
-	if e == nil {
+	var upstreamChannelID int64
+	if e != nil {
+		upstreamChannelID = s.channelService.PromptCacheShadowChannelForAccount(ctx, account.ID)
+	}
+	if e == nil || upstreamChannelID == 0 {
 		// A failover to an unobserved account must not capture through an old
 		// request context retained by metering or encrypted-history recovery.
 		if prior != nil {
@@ -199,13 +204,14 @@ func (s *OpenAIGatewayService) beginPromptCacheShadow(ctx context.Context, c *gi
 	}
 	if prior != nil {
 		prior.mu.Lock()
-		reuse := !prior.finished && prior.state == &s.promptCacheShadow && prior.scope.AccountID == account.ID
+		reuse := !prior.finished && prior.state == &s.promptCacheShadow && prior.scope.AccountID == account.ID && prior.upstreamChannelID == upstreamChannelID
 		prior.mu.Unlock()
 		if reuse {
 			return ctx, nil
 		}
 	}
 	a := newPromptCacheShadowAttempt(&s.promptCacheShadow, e, c, account)
+	a.upstreamChannelID = upstreamChannelID
 	return context.WithValue(ctx, promptCacheShadowContextKey{}, a), a
 }
 
@@ -393,6 +399,7 @@ func (a *promptCacheShadowAttempt) finish(result *OpenAIForwardResult, forwardEr
 		zap.Bool("state_persistent", a.state.stopState != nil),
 		zap.Bool("state_restored", a.state.stateRestored),
 		zap.Int64("account_id", a.scope.AccountID),
+		zap.Int64("upstream_channel_id", a.upstreamChannelID),
 		zap.Int64("api_key_id", a.apiKeyID),
 		zap.Int64("group_id", a.groupID),
 		zap.String("platform", a.platform),
@@ -537,7 +544,7 @@ func (s *OpenAIGatewayService) wrapPromptCacheShadowHooks(c *gin.Context, accoun
 	}
 	var mu sync.Mutex
 	var active *promptCacheShadowAttempt
-	activeTurn := 0
+	activeTurn := -1
 	priorObserve, priorAfter := wrapped.ObserveUpstreamRequest, wrapped.AfterTurn
 	priorOutput := wrapped.ObserveUpstreamResponse
 	wrapped.ObserveUpstreamResponse = func(turn int, payload []byte) {
@@ -558,12 +565,23 @@ func (s *OpenAIGatewayService) wrapPromptCacheShadowHooks(c *gin.Context, accoun
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		if active == nil || turn != activeTurn {
+		if turn != activeTurn {
 			// A new frame can replace a turn before its terminal callback arrives.
 			// Finish the old owner before losing its in-flight fingerprints.
 			active.finish(nil, context.Canceled)
-			active = newPromptCacheShadowAttempt(&s.promptCacheShadow, e, c, account)
+			active = nil
 			activeTurn = turn
+			ctx := context.Background()
+			if c != nil && c.Request != nil {
+				ctx = c.Request.Context()
+			}
+			if channelID := s.channelService.PromptCacheShadowChannelForAccount(ctx, account.ID); channelID > 0 {
+				active = newPromptCacheShadowAttempt(&s.promptCacheShadow, e, c, account)
+				active.upstreamChannelID = channelID
+			}
+		}
+		if active == nil {
+			return
 		}
 		var headers http.Header
 		if len(routingHeaders) > 0 {

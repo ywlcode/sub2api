@@ -133,6 +133,7 @@ func TestPromptCacheShadowReviewCompatibilityPanicFinishes(t *testing.T) {
 			cfg.Gateway.PromptCacheShadow = svc.cfg.Gateway.PromptCacheShadow
 			svc.cfg, svc.httpUpstream = cfg, &shadowPanickingUpstream{}
 			account := forceChatResponsesFallbackAccount()
+			svc.channelService = NewChannelService(&shadowChannelPolicyTestRepository{accounts: []UpstreamChannelPromptCacheShadowAccount{{AccountID: account.ID, ChannelID: 11}}}, nil, nil, nil, nil)
 			account.GroupIDs = []int64{2}
 			body := []byte(`{"model":"gpt-6.2-sol","max_tokens":32,"messages":[{"role":"user","content":"` + strings.Repeat("context ", 200) + `"}]}`)
 			panicked := false
@@ -236,6 +237,7 @@ func TestPromptCacheShadowReviewBoundTicketCapturesRewrittenSession(t *testing.T
 	svc.cfg.Gateway.PromptCacheShadow = observer.cfg.Gateway.PromptCacheShadow
 	svc.promptCacheShadow.emit = observer.promptCacheShadow.emit
 	account := ticketTestAccount(41)
+	svc.channelService = NewChannelService(&shadowChannelPolicyTestRepository{accounts: []UpstreamChannelPromptCacheShadowAccount{{AccountID: account.ID, ChannelID: 11}}}, nil, nil, nil, nil)
 	state := fakeCodexTicketState(292)
 	svc.storeOpenAICodexTicket(context.Background(), account, &openAICodexTicket{
 		Model: "gpt-6-astra", State: state, Length: 292, HarvestSessionID: "PRIVATE-ticket-session",
