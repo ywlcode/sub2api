@@ -3,8 +3,11 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -75,4 +78,26 @@ func TestPromptCacheShadowCoverageUsesWireHTTPOutput(t *testing.T) {
 	capturePromptCacheShadowResponseUsage(resp, `{"type":"response.completed","response":{"output":[{"role":"assistant","content":"answer"}]}}`)
 	require.True(t, a.attempt.OutputIndexed)
 	a.finish(shadowTestResult(), nil)
+}
+
+func TestPromptCacheShadowOutputWithoutRegionalMeterContext(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		svc, account, c, _ := shadowTestService(t)
+		ctx, a := svc.beginPromptCacheShadow(context.Background(), c, account)
+		capturePromptCacheShadow(ctx, shadowTestBody(), "http")
+		// The incoming request keeps its original context when regional metering
+		// is disabled. The outgoing wire request carries the observer context.
+		require.Nil(t, c.Request.Context().Value(promptCacheShadowContextKey{}))
+		body := `{"id":"resp_test","output":[{"role":"assistant","content":"answer"}],"usage":{"input_tokens":2048,"output_tokens":25,"input_tokens_details":{"cached_tokens":1536}}}`
+		contentType := "application/json"
+		if stream {
+			body = "data: {\"type\":\"response.completed\",\"response\":" + body + "}\n\n"
+			contentType = "text/event-stream"
+		}
+		resp := &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {contentType}}, Body: io.NopCloser(strings.NewReader(body)), Request: httptest.NewRequest("POST", "/v1/responses", nil).WithContext(ctx)}
+		_, err := svc.handleNonStreamingResponsePassthrough(ctx, resp, c, account, "gpt-6.2-astra", "gpt-6.2-astra")
+		require.NoError(t, err)
+		require.True(t, a.attempt.OutputIndexed, "wire output must not depend on regional metering")
+		a.finish(shadowTestResult(), nil)
+	}
 }

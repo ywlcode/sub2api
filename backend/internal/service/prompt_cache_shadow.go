@@ -635,6 +635,12 @@ func capturePromptCacheShadowOutputBytes(ctx context.Context, payload []byte) {
 	}
 }
 
+func capturePromptCacheShadowHTTPOutput(resp *http.Response, payload []byte) {
+	if resp != nil && resp.Request != nil {
+		capturePromptCacheShadowOutputBytes(resp.Request.Context(), payload)
+	}
+}
+
 func (a *promptCacheShadowAttempt) captureOutput(payload string) {
 	if len(payload) > a.engine.MaxBodyBytes() {
 		return

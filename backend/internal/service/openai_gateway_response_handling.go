@@ -2194,8 +2194,8 @@ func (s *OpenAIGatewayService) handleSSEToJSON(resp *http.Response, c *gin.Conte
 		forEachOpenAISSEFrame(bodyText, func(_ string, payload []byte) { toolUsage.observe(payload) })
 	}
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
-	if terminalOK && (terminalType == "response.completed" || terminalType == "response.done") && c.Request != nil {
-		capturePromptCacheShadowOutputBytes(c.Request.Context(), terminalPayload)
+	if terminalOK && (terminalType == "response.completed" || terminalType == "response.done") {
+		capturePromptCacheShadowHTTPOutput(resp, terminalPayload)
 	}
 	if c.Request != nil {
 		regionalMeterObserveUsage(c.Request.Context(), terminalPayload, terminalType)

@@ -2851,9 +2851,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		}
 		return nil, err
 	}
-	if c.Request != nil {
-		capturePromptCacheShadowOutputBytes(c.Request.Context(), body)
-	}
+	capturePromptCacheShadowOutputBytes(ctx, body)
 	observer := upstreamResponseModelObserverFromContext(c)
 	if observer == nil {
 		observer = beginUpstreamResponseModelObservation(c)
@@ -2932,8 +2930,8 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c *gin.Context, account *Account, body []byte, originalModel string, mappedModel string) (*openaiNonStreamingResultPassthrough, error) {
 	bodyText := string(body)
 	terminalType, terminalPayload, terminalOK := extractOpenAISSETerminalEvent(bodyText)
-	if terminalOK && (terminalType == "response.completed" || terminalType == "response.done") && c.Request != nil {
-		capturePromptCacheShadowOutputBytes(c.Request.Context(), terminalPayload)
+	if terminalOK && (terminalType == "response.completed" || terminalType == "response.done") {
+		capturePromptCacheShadowHTTPOutput(resp, terminalPayload)
 	}
 	if terminalOK && (terminalType == "response.failed" || terminalType == "error") {
 		usage := s.parseSSEUsageFromBody(bodyText)
