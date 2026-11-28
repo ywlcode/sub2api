@@ -38,25 +38,26 @@ const { t } = useI18n()
 const items = ref<UpstreamChannel[]>([]), total = ref(0), page = ref(1), search = ref(''), opened = ref(false), busy = ref(false), error = ref(''), saved = ref(false), confirmed = ref(false), needsRead = ref(false)
 const latestSaved = ref('')
 const shadowSupported = ref(false), latestChannel = ref<UpstreamChannel | null>(null)
+const observedShadowSupport = ref(false)
 const draft = ref<UpstreamChannel | null>(null), memberChannel = ref<UpstreamChannel | null>(null), members = ref<ChannelBinding[]>([]), membersTotal = ref(0), memberPage = ref(1), selectedIds = ref<number[]>([])
 const invalid = computed(() => !draft.value || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(draft.value.code) || !draft.value.name.trim() || Array.from(draft.value.name.trim()).length > 100 || Array.from(draft.value.remark.trim()).length > 500)
 function shadowStatus(value: unknown) { return t(typeof value !== 'boolean' ? 'upstreamEntities.promptCacheShadowNotAvailable' : value ? 'upstreamEntities.promptCacheShadowEnabled' : 'upstreamEntities.promptCacheShadowDisabled') }
-async function load(next = page.value) { busy.value = true; error.value = ''; try { const result = await listUpstreamChannels(search.value, next); items.value = result.items; total.value = result.total; page.value = next } catch { error.value = t('upstreamEntities.failed') } finally { busy.value = false } }
+async function load(next = page.value) { busy.value = true; error.value = ''; try { const result = await listUpstreamChannels(search.value, next); items.value = result.items; total.value = result.total; page.value = next; if (result.items.length > 0) observedShadowSupport.value = result.items.every(c => typeof c.prompt_cache_shadow_enabled === 'boolean') } catch { error.value = t('upstreamEntities.failed') } finally { busy.value = false } }
 function open() { opened.value = true; void load(1) }
 async function begin(id = 0) {
  latestSaved.value = ''; latestChannel.value = null; error.value = ''; saved.value = false; confirmed.value = false; needsRead.value = false
  if (!id) {
-  shadowSupported.value = items.value.length > 0 && items.value.every(c => typeof c.prompt_cache_shadow_enabled === 'boolean')
+  shadowSupported.value = observedShadowSupport.value
   draft.value = { id: 0, code: '', name: '', remark: '', revision: 0, members: 0, prompt_cache_shadow_enabled: false }; return
  }
  busy.value = true
  try {
   const fresh = await getUpstreamChannel(id)
-  shadowSupported.value = typeof fresh.prompt_cache_shadow_enabled === 'boolean'; latestChannel.value = fresh
+  shadowSupported.value = observedShadowSupport.value = typeof fresh.prompt_cache_shadow_enabled === 'boolean'; latestChannel.value = fresh
   draft.value = { ...fresh, prompt_cache_shadow_enabled: fresh.prompt_cache_shadow_enabled === true }
  } catch { error.value = t('upstreamEntities.failed') } finally { busy.value = false }
 }
-async function readLatest() { if (!draft.value?.id) return; busy.value = true; try { const fresh = await getUpstreamChannel(draft.value.id); latestSaved.value = `${fresh.name} · ${fresh.remark}`; latestChannel.value = fresh; shadowSupported.value = typeof fresh.prompt_cache_shadow_enabled === 'boolean'; draft.value.revision = fresh.revision; draft.value.members = fresh.members; confirmed.value = false; needsRead.value = false; error.value = ''; } catch { error.value = t('upstreamEntities.failed') } finally { busy.value = false } }
+async function readLatest() { if (!draft.value?.id) return; busy.value = true; try { const fresh = await getUpstreamChannel(draft.value.id); latestSaved.value = `${fresh.name} · ${fresh.remark}`; latestChannel.value = fresh; shadowSupported.value = observedShadowSupport.value = typeof fresh.prompt_cache_shadow_enabled === 'boolean'; draft.value.revision = fresh.revision; draft.value.members = fresh.members; confirmed.value = false; needsRead.value = false; error.value = ''; } catch { error.value = t('upstreamEntities.failed') } finally { busy.value = false } }
 async function save() {
  if (!draft.value || invalid.value || busy.value || needsRead.value || !confirmed.value) return
  busy.value = true; error.value = ''; saved.value = false

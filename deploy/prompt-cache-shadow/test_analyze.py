@@ -141,6 +141,10 @@ class PredictionUnitsTests(unittest.TestCase):
         self.assertEqual(local["underprediction_tokens"], 200)
         self.assertEqual(local["overprediction_samples"], 1)
         self.assertEqual(local["overprediction_tokens"], 300)
+        text = analyze.render_text(report)
+        self.assertIn("schema=1/2/3", text)
+        self.assertIn("underprediction_samples=1 underprediction_tokens=200", text)
+        self.assertIn("overprediction_samples=1 overprediction_tokens=300", text)
 
     def test_legacy_and_normalized_predictions_are_not_merged(self):
         legacy = event(simulated_cache_read_tokens=1200)

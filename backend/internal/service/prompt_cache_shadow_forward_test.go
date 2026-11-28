@@ -134,7 +134,7 @@ func TestPromptCacheShadowNativeWebSocketWire(t *testing.T) {
 					if _, _, err = ws.Read(ctx); err != nil {
 						return
 					}
-					event := fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp_shadow_%d","status":"completed","output":[],"usage":{"input_tokens":2048,"output_tokens":1,"input_tokens_details":{"cached_tokens":1920}}}}`, turn)
+					event := fmt.Sprintf(`{"type":"response.completed","response":{"id":"resp_shadow_%d","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer"}]}],"usage":{"input_tokens":2048,"output_tokens":1,"input_tokens_details":{"cached_tokens":1920}}}}`, turn)
 					if ws.Write(ctx, coderws.MessageText, []byte(event)) != nil {
 						return
 					}
@@ -178,6 +178,7 @@ func TestPromptCacheShadowNativeWebSocketWire(t *testing.T) {
 					require.Equal(t, true, row["comparable"])
 					require.Equal(t, "ws", row["transport"])
 					require.Equal(t, int64(1920), row["upstream_cache_read_tokens"])
+					require.Equal(t, true, row["output_prefix_indexed"], "terminal output must be indexed before finishing the turn")
 					if turn == 0 {
 						require.Equal(t, "cold", row["decision"])
 					} else {

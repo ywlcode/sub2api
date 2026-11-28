@@ -76,6 +76,7 @@ type Engine struct {
 	secret              [32]byte
 	instanceID          string
 	retainedPoints      int
+	stateRevision       uint64
 }
 
 type prefixCache struct {
@@ -325,6 +326,13 @@ func (e *Engine) Begin(scope Scope, body []byte, encode Encode, now time.Time) *
 	if a.SharedPrefixTokens > 0 {
 		a.Decision = "hit"
 	}
+	if a.OpaqueBlocks > 0 && max(a.MatchedPrefixTokens, a.SharedPrefixTokens) < a.EstimatedInputTokens && a.MatchedInputTokens == 0 {
+		// A matching plaintext fragment cannot quantify an opaque continuation.
+		a.Decision = "cold"
+		if seen {
+			a.Decision = "miss"
+		}
+	}
 	return a
 }
 
@@ -345,6 +353,7 @@ func (a *Attempt) CommitUsage(inputTokens, outputTokens int, now time.Time) (com
 		e := a.engine
 		e.mu.Lock()
 		defer e.mu.Unlock()
+		e.stateRevision++
 		// Warmth describes the user's logical model cache, independent of an
 		// upstream account, routing key or evictable prefix.
 		e.warm.put(a.warmNamespace, now, 0)
@@ -361,7 +370,7 @@ func (a *Attempt) CommitUsage(inputTokens, outputTokens int, now time.Time) (com
 				}
 				// Successful continued use renews the measured prefix, matching
 				// the ordinary index TTL. Failed requests cannot renew it.
-				if anchorMeasured > 0 {
+				if anchorMeasured >= e.options.MinPrefixTokens {
 					e.anchors.putMeasured(key, now, e.options.TTL, anchorMeasured)
 				}
 			}
@@ -375,7 +384,9 @@ func (a *Attempt) CommitUsage(inputTokens, outputTokens int, now time.Time) (com
 			}{{&e.prefixCache, a.accountNamespace}, {&e.shared, a.sharedNamespace}} {
 				candidate.cache.putMeasured(e.key(candidate.ns, a.outputHash), now, e.options.TTL, inputTokens+outputTokens)
 			}
-			e.anchors.putMeasured(e.key(a.sharedNamespace, a.outputHash), now, e.options.TTL, inputTokens+outputTokens)
+			if inputTokens+outputTokens >= e.options.MinPrefixTokens {
+				e.anchors.putMeasured(e.key(a.sharedNamespace, a.outputHash), now, e.options.TTL, inputTokens+outputTokens)
+			}
 		}
 		for _, key := range a.opaqueKeys {
 			e.opaqueSeen.putMeasured(key, now, e.options.TTL, 1)
@@ -497,6 +508,9 @@ func (a *Attempt) Compare(inputTokens int) (predicted, raw int) {
 		return 0, 0
 	}
 	raw = max(a.MatchedPrefixTokens, a.SharedPrefixTokens)
+	if a.engine != nil && inputTokens < a.engine.options.MinPrefixTokens {
+		return 0, raw
+	}
 	if raw >= a.EstimatedInputTokens {
 		return inputTokens, raw
 	}

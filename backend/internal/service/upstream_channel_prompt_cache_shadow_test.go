@@ -129,6 +129,26 @@ func TestPromptCacheShadowChannelSnapshotSingleflightAndExpiry(t *testing.T) {
 	require.Equal(t, 2, repo.calls, "missed notifications and automatic binding changes converge by TTL")
 }
 
+func TestPromptCacheShadowChannelCanceledLeaderDoesNotPoisonSnapshot(t *testing.T) {
+	type policyContextKey struct{}
+	repo := &shadowChannelPolicyTestRepository{load: func(ctx context.Context, _ int) ([]UpstreamChannelPromptCacheShadowAccount, error) {
+		require.Equal(t, "preserved", ctx.Value(policyContextKey{}))
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok, "shared refresh still requires a bounded query")
+		require.LessOrEqual(t, time.Until(deadline), 250*time.Millisecond)
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return []UpstreamChannelPromptCacheShadowAccount{{AccountID: 3, ChannelID: 11}}, nil
+	}}
+	svc := NewChannelService(repo, nil, nil, nil, nil)
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), policyContextKey{}, "preserved"))
+	cancel()
+	require.Equal(t, int64(11), svc.PromptCacheShadowChannelForAccount(ctx, 3))
+	require.Equal(t, int64(11), svc.PromptCacheShadowChannelForAccount(context.Background(), 3))
+	require.Equal(t, 1, repo.calls, "canceled leader must not cache an empty global policy")
+}
+
 func TestPromptCacheShadowChannelPolicyFailureDoesNotObserveOrFlood(t *testing.T) {
 	svc, account, c, events := shadowTestService(t)
 	repo, ok := svc.channelService.repo.(*shadowChannelPolicyTestRepository)

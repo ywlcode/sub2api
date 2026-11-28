@@ -32,6 +32,8 @@ type promptCacheShadowState struct {
 	stopState, stateDone chan struct{}
 	stateRestored        bool
 	closeOnce            sync.Once
+	savedStateRevision   uint64
+	stateSaved           bool
 	// Emit is replaceable by tests; production uses the independent file worker.
 	emit func([]zap.Field)
 }
@@ -154,17 +156,31 @@ func (s *promptCacheShadowState) startState(logDir string) {
 		for {
 			select {
 			case <-s.stopState:
-				if err := s.engine.Save(path, time.Now()); err != nil {
+				if err := s.saveState(path); err != nil {
 					warn(err)
 				}
 				return
 			case <-ticker.C:
-				if err := s.engine.Save(path, time.Now()); err != nil {
+				if err := s.saveState(path); err != nil {
 					warn(err)
 				}
 			}
 		}
 	}()
+}
+
+// Only the state worker calls this, including its final shutdown save. Reads
+// and disabled channels do not force full snapshot copies and fsyncs.
+func (s *promptCacheShadowState) saveState(path string) error {
+	revision := s.engine.StateRevision()
+	if s.stateSaved && revision == s.savedStateRevision {
+		return nil
+	}
+	if err := s.engine.Save(path, time.Now()); err != nil {
+		return err
+	}
+	s.savedStateRevision, s.stateSaved = revision, true
+	return nil
 }
 
 type promptCacheShadowContextKey struct{}
@@ -646,7 +662,6 @@ func capturePromptCacheShadowAnthropicUsage(ctx context.Context, payload string)
 func capturePromptCacheShadowResponseUsage(resp *http.Response, payload string) {
 	if resp != nil && resp.Request != nil {
 		capturePromptCacheShadowAnthropicUsage(resp.Request.Context(), payload)
-		capturePromptCacheShadowOutput(resp.Request.Context(), payload)
 	}
 }
 

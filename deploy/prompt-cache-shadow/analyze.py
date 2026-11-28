@@ -619,6 +619,10 @@ def iter_text(report):
             f"    real_hit_rate={number(stats['real_hit_rate'])} "
             f"sim_hit_rate={number(stats['simulated_hit_rate'])} "
             f"MAE={number(stats['mae_tokens'])} signed_error(sim-real)={number(stats['signed_error_tokens'])}\n"
+            f"    underprediction_samples={stats['underprediction_samples']} "
+            f"underprediction_tokens={number(stats['underprediction_tokens'])} "
+            f"overprediction_samples={stats['overprediction_samples']} "
+            f"overprediction_tokens={number(stats['overprediction_tokens'])}\n"
             f"    abs_error_p50={number(stats['p50_absolute_error_tokens'])} "
             f"abs_error_p95={number(stats['p95_absolute_error_tokens'])} "
             f"abs_relative_error_p50={number(stats['p50_absolute_relative_error'])} "
@@ -629,7 +633,7 @@ def iter_text(report):
             f"relative_quantiles_approximate={stats['relative_quantiles']['approximate']}"
         )
 
-    yield "Offline prompt-cache shadow analysis (schema=1/2, process state; no calibration)"
+    yield "Offline prompt-cache shadow analysis (schema=1/2/3, process state; no calibration)"
     yield "counts=" + json.dumps(report["counts"], sort_keys=True)
     logging = report["logging"]
     yield (f"logging: known={logging['known']} lost_events={number(logging['lost_events'])} "

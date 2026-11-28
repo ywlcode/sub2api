@@ -215,6 +215,20 @@ it('disables unavailable legacy switches while allowing other fields to save wit
  w.unmount()
 })
 
+it('remembers observed backend support when search results become empty', async () => {
+ const w = mount(UpstreamChannelManager, { props: { expanded: true } })
+ await flushPromises()
+ vi.mocked(listUpstreamChannels).mockResolvedValueOnce({ items: [], total: 0 })
+ await w.get('input[placeholder="upstreamEntities.search"]').setValue('no-match')
+ await w.findAll('button').find(b => b.text() === 'upstreamEntities.load')!.trigger('click')
+ await flushPromises()
+ await w.get('[data-testid="new-upstream-channel"]').trigger('click')
+ expect(w.get<HTMLInputElement>('[data-testid="channel-shadow-enabled"]').element.disabled).toBe(false)
+ expect(w.get<HTMLInputElement>('[data-testid="channel-shadow-enabled"]').element.checked).toBe(false)
+ expect(w.find('[data-testid="channel-shadow-unavailable"]').exists()).toBe(false)
+ w.unmount()
+})
+
 it.each(['empty', 'legacy'])('keeps new channels off and omits the field when the list is %s', async capability => {
  const legacy = { ...entity }
  Reflect.deleteProperty(legacy, 'prompt_cache_shadow_enabled')

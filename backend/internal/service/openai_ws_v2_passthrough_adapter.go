@@ -1101,11 +1101,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		interTurnIdleTimeout: s.openAIWSIngressInterTurnIdleTimeout(),
 		interTurnStarted:     make(chan struct{}, 1),
 		restoreResponseModel: func(payload []byte) []byte {
-			if hooks != nil && hooks.ObserveUpstreamResponse != nil {
-				if turn := int(activeTurn.Load()); turn > 0 {
-					hooks.ObserveUpstreamResponse(turn, payload)
-				}
-			}
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			if !openAIWSEventMayContainModel(eventType) {
 				return payload
@@ -1661,6 +1656,13 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					return nil
 				}
 				eventType, _, _ := parseOpenAIWSEventEnvelope(payload)
+				// Capture terminal output before the relay calls OnTurnComplete:
+				// that callback finishes the observer and clears activeTurn.
+				if hooks != nil && hooks.ObserveUpstreamResponse != nil && !pendingUpstreamTurn.Load() && (eventType == "response.completed" || eventType == "response.done") {
+					if turn := int(activeTurn.Load()); turn > 0 {
+						hooks.ObserveUpstreamResponse(turn, payload)
+					}
+				}
 				regionalMeterObserveUsage(ctx, payload, eventType)
 				if eventType == "response.created" {
 					failureAccountSideEffectsApplied = false

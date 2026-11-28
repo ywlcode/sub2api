@@ -17,6 +17,14 @@ const stateEntrySize = 56
 const maxStateEntries = 1020000 // Prefix/anchor budget + warm/opaque diagnostic caps.
 const maxStateSize = 120 + maxStateEntries*stateEntrySize
 
+// StateRevision changes only after a successful commit, not a cache lookup.
+// Callers snapshot it before saving; commits racing the save stay dirty.
+func (e *Engine) StateRevision() uint64 {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.stateRevision
+}
+
 // Save atomically stores only keyed hashes, measured counters, timestamps and
 // the local HMAC key. The file is private and is not part of observer logs.
 func (e *Engine) Save(path string, now time.Time) error {
@@ -136,10 +144,13 @@ func (e *Engine) Load(path string, now time.Time) error {
 			expires := int64(binary.BigEndian.Uint64(read[40:48]))
 			measured := binary.BigEndian.Uint64(read[48:56])
 			read = read[56:]
-			if measured > uint64(^uint(0)>>1) || written > now.UnixNano() || written <= 0 {
+			if measured > uint64(^uint(0)>>1) || written > now.Add(time.Minute).UnixNano() || written <= 0 {
 				return errors.New("invalid cache state counter or time")
 			}
 			item.written, item.inputTokens = time.Unix(0, written), int(measured)
+			// Match the header's bounded clock-skew tolerance without extending
+			// an entry's age or configured lifetime after a wall-clock rollback.
+			item.written = minTime(item.written, now)
 			if i != 2 {
 				if expires < written {
 					return errors.New("invalid cache state expiry")
@@ -170,7 +181,7 @@ func (e *Engine) Load(path string, now time.Time) error {
 		// file contained individual opaque identities or forgotten prefixes.
 		for elem := caches[1].lru.Front(); elem != nil && len(caches[3].entries) < caches[3].limit; elem = elem.Next() {
 			item, _ := elem.Value.(entry)
-			if item.inputTokens > 0 {
+			if item.inputTokens >= e.options.MinPrefixTokens {
 				caches[3].entries[item.key] = caches[3].lru.PushBack(item)
 			}
 		}

@@ -60,7 +60,7 @@ func (s *ChannelService) PromptCacheShadowChannelForAccount(ctx context.Context,
 		generation := p.generation.Load()
 		// Only the cache refresh may wait for SQL. Diagnostic failures are
 		// negatively cached too, so an outage cannot flood the database.
-		queryCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+		queryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 250*time.Millisecond)
 		defer cancel()
 		accounts, err := r.ListPromptCacheShadowAccounts(queryCtx)
 		v := &upstreamPromptCacheShadowSnapshot{loadedAt: time.Now(), generation: generation, channelsByAccount: make(map[int64]int64, len(accounts))}

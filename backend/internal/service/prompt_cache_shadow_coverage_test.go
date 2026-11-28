@@ -75,7 +75,7 @@ func TestPromptCacheShadowCoverageUsesWireHTTPOutput(t *testing.T) {
 	capturePromptCacheShadow(ctx, shadowTestBody(), "http")
 	resp := httptest.NewRecorder().Result()
 	resp.Request = c.Request
-	capturePromptCacheShadowResponseUsage(resp, `{"type":"response.completed","response":{"output":[{"role":"assistant","content":"answer"}]}}`)
+	capturePromptCacheShadowHTTPOutput(resp, []byte(`{"type":"response.completed","response":{"output":[{"role":"assistant","content":"answer"}]}}`))
 	require.True(t, a.attempt.OutputIndexed)
 	a.finish(shadowTestResult(), nil)
 }
